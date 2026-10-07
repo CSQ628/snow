@@ -37,6 +37,7 @@
 #include "../src/presentation/pinned/screenshotpinnedhidetotopcontroller.h"
 #include "../src/presentation/pinned/screenshotpinnedcontrolspresence.h"
 #include "../src/presentation/pinned/screenshotpinnednativegeometrycontroller.h"
+#include "../src/presentation/pinned/screenshotpinnedgeometrymapping.h"
 #include "snow_shot/presentation/screenshotcanvasrenderer.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "../src/presentation/pinned/screenshotpinneddragexport.h"
@@ -669,6 +670,9 @@ class ScreenshotPinnedWindowTestAccess {
                controller->phase() == ScreenshotPinnedNativeGeometryController::Phase::Stable &&
                controller->committedGeometry() == window.currentNativeGeometry();
     }
+    static bool firstContentFramePublished(const ScreenshotPinnedWindow& window) {
+        return window.m_firstContentFramePublished;
+    }
     static QTimer* showReadout(ScreenshotPinnedWindow& window, bool opacity) {
         window.m_scalePercent = 125;
         window.m_opacityPercent = 80;
@@ -767,6 +771,30 @@ class ScreenshotPinnedWindowTestAccess {
     static bool draggableAt(const ScreenshotPinnedWindow& window, const QPoint& point) {
         return window.windowDragEnabledAt(point);
     }
+    static bool pointerMoveEligible(const ScreenshotPinnedWindow& window, const QPoint& point,
+                                    Qt::KeyboardModifiers modifiers) {
+        return window.windowMoveEligibleForPointer(point, modifiers);
+    }
+    static bool pointerMoveEnabled(const ScreenshotPinnedWindow& window, const QPoint& point,
+                                   Qt::KeyboardModifiers modifiers) {
+        return window.windowMoveEnabledForPointer(point, modifiers);
+    }
+    static void
+    attachSelection(ScreenshotPinnedWindow& window,
+                    snow_shot::presentation::PinnedWindowSelectionController& selection) {
+        window.m_selectionController = &selection;
+        window.m_firstContentFramePublished = true;
+        selection.registerWindow(&window);
+    }
+    static void detachSelection(ScreenshotPinnedWindow& window) {
+        if (window.m_selectionController) {
+            window.m_selectionController->unregisterWindow(&window);
+            window.m_selectionController = nullptr;
+        }
+    }
+    static void refreshRecognitionPresentation(ScreenshotPinnedWindow& window) {
+        window.updateOcrPresentation();
+    }
     static void editSelectionOffscreen(ScreenshotPinnedWindow& window, bool enabled) {
         window.setEditMode(enabled);
     }
@@ -864,6 +892,17 @@ class ScreenshotPinnedWindowTestAccess {
 #endif
 
 namespace {
+QList<QGraphicsItem*> ocrGlyphItems(QGraphicsView* layer) {
+    if (layer == nullptr || layer->scene() == nullptr) {
+        return {};
+    }
+    auto items = layer->scene()->items();
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [](const QGraphicsItem* item) { return item->zValue() != 0.0; }),
+                items.end());
+    return items;
+}
+
 #if defined(Q_OS_WIN) || defined(_WIN32)
 HWND toNativeHwnd(WId windowId) {
     // Qt transports the native HWND through its integer-valued WId type.
@@ -924,6 +963,39 @@ void waitForUi(int milliseconds) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
         QThread::msleep(1);
     }
+}
+
+void waitForPinnedNativeLayout(ScreenshotPinnedWindow& window, const char* message) {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const auto ready = [&] {
+        auto* canvas = window.findChild<SnowCanvasWidget*>();
+        const QRect observed = Access::observation(window);
+        const ScreenshotPinnedGeometryMapping mapping(observed, window.size(),
+                                                      window.devicePixelRatioF());
+        const QSize covering = mapping.coveringLogicalSize();
+        return window.windowHandle() != nullptr && window.windowHandle()->isExposed() &&
+               Access::geometrySettled(window) && Access::firstContentFramePublished(window) &&
+               observed.isValid() && !observed.isEmpty() && covering.isValid() &&
+               !covering.isEmpty() && canvas != nullptr &&
+               canvas->geometry().contains(window.rect()) && canvas->width() >= covering.width() &&
+               canvas->height() >= covering.height();
+    };
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!ready() && elapsed.elapsed() < 2000) {
+        waitForUi(1);
+    }
+    if (!ready()) {
+        const auto record = window.persistenceSnapshot();
+        qWarning() << "Pinned layout readiness timeout" << message << "observed"
+                   << Access::observation(window) << "committed" << Access::authority(window)
+                   << "phase" << int(Access::nativeController(window).phase()) << "logical"
+                   << window.size() << "dpr" << window.devicePixelRatioF() << "initial size"
+                   << record.initialWindowSize << "first frame"
+                   << Access::firstContentFramePublished(window) << "exposed"
+                   << (window.windowHandle() != nullptr && window.windowHandle()->isExposed());
+    }
+    require(ready(), message);
 }
 
 void releaseCloseGesture(QWidget& receiver, Qt::MouseButton button) {
@@ -1665,7 +1737,7 @@ void pinnedSelectionRendersCachedOcrInCanvasCoordinates(bool restoreFromStorage 
                 QStringLiteral("snowShotOcrTextLayer"));
             require(textLayer != nullptr && textLayer->isVisible(),
                     "cached OCR should have a visible text layer");
-            const QList<QGraphicsItem*> items = textLayer->scene()->items();
+            const QList<QGraphicsItem*> items = ocrGlyphItems(textLayer);
             require(items.size() == 1, "the pinned text layer should contain the cached line");
             QGraphicsItem* textItem = items.front();
             const QRectF renderedRect =
@@ -1730,8 +1802,14 @@ void pinnedSelectionRendersCachedOcrInCanvasCoordinates(bool restoreFromStorage 
                                       QPointF(recognitionContent->mapToGlobal(backgroundPoint)),
                                       Qt::NoButton, Qt::NoButton, Qt::NoModifier);
                     QApplication::sendEvent(recognitionContent, &hover);
+                    require(recognitionContent->cursor().shape() == Qt::ArrowCursor,
+                            "OCR background must allow box selection with or without a toolbar");
+                    QMouseEvent moveHover(QEvent::MouseMove, QPointF(backgroundPoint),
+                                          QPointF(recognitionContent->mapToGlobal(backgroundPoint)),
+                                          Qt::NoButton, Qt::NoButton, Qt::AltModifier);
+                    QApplication::sendEvent(recognitionContent, &moveHover);
                     require(recognitionContent->cursor().shape() == Qt::OpenHandCursor,
-                            "OCR background must show a drag cursor with or without a toolbar");
+                            "Alt hovering OCR background must show the window move cursor");
                     const QPoint textPoint = renderedRect.center().toPoint();
                     QMouseEvent textHover(QEvent::MouseMove, QPointF(textPoint),
                                           QPointF(recognitionContent->mapToGlobal(textPoint)),
@@ -1755,9 +1833,9 @@ void pinnedSelectionRendersCachedOcrInCanvasCoordinates(bool restoreFromStorage 
                                             MAKELPARAM(static_cast<WORD>(native.x()),
                                                        static_cast<WORD>(native.y())));
                     };
-                    require(hitTest(backgroundPoint) == HTCAPTION &&
+                    require(hitTest(backgroundPoint) == HTCLIENT &&
                                 hitTest(renderedRect.center().toPoint()) == HTCLIENT,
-                            "only OCR background must expose native caption dragging");
+                            "visible OCR text and blank background must receive selection input");
                     auto* controls =
                         window->findChild<QFrame*>(QStringLiteral("screenshotPinnedControlsPanel"));
                     if (!toolbarOpen) {
@@ -1774,7 +1852,7 @@ void pinnedSelectionRendersCachedOcrInCanvasCoordinates(bool restoreFromStorage 
                     }
                     QMouseEvent press(QEvent::MouseButtonPress, QPointF(backgroundPoint),
                                       QPointF(recognitionContent->mapToGlobal(backgroundPoint)),
-                                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                                      Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
                     QApplication::sendEvent(recognitionContent, &press);
                     // Avoid entering USER32's modal loop when testing the move handoff.
                     MSG message{};
@@ -1782,7 +1860,7 @@ void pinnedSelectionRendersCachedOcrInCanvasCoordinates(bool restoreFromStorage 
                            0) {
                     }
                     require(window->cursor().shape() == Qt::ClosedHandCursor,
-                            "pressing OCR background must start the system move");
+                            "Alt pressing OCR background must start the system move");
                     SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
 #endif
                 }
@@ -3151,7 +3229,7 @@ void pinnedTransformResetPersistsWithoutResize() {
         }
     });
     require(window->present(config), "the transform reset fixture should present");
-    waitForUi(400);
+    waitForPinnedNativeLayout(*window, "the transform fixture waits for a published settled pin");
     materializePinnedMenuTree(*window);
     auto* menu = window->findChild<adqt::widgets::AdContextMenu*>(
         QStringLiteral("screenshotPinnedProcessImageMenu"));
@@ -3175,9 +3253,11 @@ void pinnedTransformResetPersistsWithoutResize() {
             "the transform reset fixture should expose Reset transform directly below Flip "
             "vertically");
     for (QAction* operation : {flipHorizontal, rotateClockwise}) {
+        waitForPinnedNativeLayout(*window, "image transforms start from settled native geometry");
         const QRect geometry = window->currentNativeGeometry();
         operation->trigger();
         if (operation == rotateClockwise) {
+            waitForPinnedNativeLayout(*window, "the first quarter-turn settles before the second");
             operation->trigger();
         }
         QElapsedTimer persistenceWait;
@@ -3185,6 +3265,15 @@ void pinnedTransformResetPersistsWithoutResize() {
         while (lastWritten.imageTransform.isIdentity() && persistenceWait.elapsed() < 2000) {
             QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
             QThread::msleep(1);
+        }
+        if (lastWritten.imageTransform.isIdentity()) {
+            const auto actual = window->persistenceSnapshot();
+            qWarning() << "Transform persistence mismatch" << operation->objectName() << "actual"
+                       << actual.imageTransform << "written" << lastWritten.imageTransform
+                       << "quarter turns" << actual.quarterTurns << "writes" << writeCount
+                       << "observed" << window->currentNativeGeometry() << "committed"
+                       << ScreenshotPinnedWindowTestAccess::authority(*window) << "phase"
+                       << int(ScreenshotPinnedWindowTestAccess::nativeController(*window).phase());
         }
         require(!lastWritten.imageTransform.isIdentity(),
                 "the flip or half-turn must persist its transform");
@@ -3229,7 +3318,7 @@ void transformedPinnedOcrTracksCanvasViewport() {
                 content != nullptr
                     ? content->findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"))
                     : nullptr;
-            if (canvas == nullptr || layer == nullptr || layer->scene()->items().size() != 1) {
+            if (canvas == nullptr || layer == nullptr || ocrGlyphItems(layer).size() != 1) {
                 auto* session = window->findChild<ScreenshotRecognitionSessionController*>();
                 std::cerr << "shadow=" << shadowWidth
                           << " turns=" << window->persistenceSnapshot().quarterTurns
@@ -3239,7 +3328,7 @@ void transformedPinnedOcrTracksCanvasViewport() {
                           << " cached=" << (session != nullptr && session->hasTextResult())
                           << " active=" << (session != nullptr && session->active()) << '\n';
             }
-            require(canvas != nullptr && layer != nullptr && layer->scene()->items().size() == 1,
+            require(canvas != nullptr && layer != nullptr && ocrGlyphItems(layer).size() == 1,
                     "the transformed pin should retain its OCR text layer");
             const auto record = window->persistenceSnapshot();
             const QPointF sourcePoint = config.recognitionResults.text->presentation->lines.front()
@@ -3249,7 +3338,7 @@ void transformedPinnedOcrTracksCanvasViewport() {
                 record.contentCanvasRect.topLeft() +
                 record.imageTransform.map(sourcePoint - config.canvasSourceRect.topLeft());
             const QPointF expected = canvas->canvasToViewTransform().map(transformedPoint);
-            auto* item = layer->scene()->items().front();
+            auto* item = ocrGlyphItems(layer).front();
             const QPointF actual =
                 layer->viewportTransform().map(item->sceneBoundingRect().center());
             require(item->isVisible() && QLineF(actual, expected).length() < 3.0,
@@ -6372,11 +6461,11 @@ void pinnedOcrDoubleClickCopiesLocally() {
     QApplication::processEvents();
     const auto doubleClickText = [&]() {
         auto* layer = content->findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
-        require(layer != nullptr && !layer->scene()->items().isEmpty(),
+        require(layer != nullptr && !ocrGlyphItems(layer).isEmpty(),
                 "pinned text overlay has rendered blocks");
         const QPoint point = layer->viewport()->mapTo(
             content,
-            layer->mapFromScene(layer->scene()->items().front()->sceneBoundingRect().center()));
+            layer->mapFromScene(ocrGlyphItems(layer).front()->sceneBoundingRect().center()));
         require(!content->isOcrBackgroundAt(point), "pinned double-click targets recognized text");
         QWidget* receiver = content->childAt(point);
         require(receiver != nullptr, "pinned double-click reaches the actual child receiver");
@@ -6469,8 +6558,8 @@ void pinnedOcrDoubleClickUsesDragRegion(bool middleClick = false) {
         QStringLiteral("screenshotPinnedRecognitionContent"));
     require(content != nullptr && content->isVisible(), "OCR double-click surface missing");
     auto* textLayer = content->findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
-    require(textLayer != nullptr && !textLayer->scene()->items().isEmpty(), "OCR text missing");
-    const auto* item = textLayer->scene()->items().front();
+    require(textLayer != nullptr && !ocrGlyphItems(textLayer).isEmpty(), "OCR text missing");
+    const auto* item = ocrGlyphItems(textLayer).front();
     const QPoint textPoint = textLayer->viewport()->mapTo(
         content, textLayer->mapFromScene(item->sceneBoundingRect().center()));
     const QPoint background(20, content->height() - 30);
@@ -8130,7 +8219,7 @@ void pinnedNativeBordersCrossWithoutSystemSizing() {
         config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
         config.automaticTextRecognition = false;
         require(window.present(config), "native crossing pin must present");
-        waitForUi(60);
+        waitForPinnedNativeLayout(window, "native border fixture waits for settled exposed layout");
         const QRect original = window.currentNativeGeometry();
         const HWND hwnd = toNativeHwnd(window.winId());
         const QPoint pressed = original.topLeft() + QPoint(original.width(), original.height());
@@ -8149,7 +8238,19 @@ void pinnedNativeBordersCrossWithoutSystemSizing() {
         QMouseEvent release(QEvent::MouseButtonRelease, QPointF(), QPointF(QCursor::pos()),
                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         QCoreApplication::sendEvent(&window, &release);
-        waitForUi(30);
+        waitForPinnedNativeLayout(window, "native resize release waits for settled exposed layout");
+        const QRect releasedGeometry(original.topLeft() - QPoint(60, 30), QSize(60, 30));
+        if (window.currentNativeGeometry() != releasedGeometry ||
+            ScreenshotPinnedWindowTestAccess::interactionActive(window) || GetCapture() == hwnd) {
+            qWarning() << "Native release geometry mismatch" << "expected" << releasedGeometry
+                       << "observed" << window.currentNativeGeometry() << "committed"
+                       << ScreenshotPinnedWindowTestAccess::authority(window) << "phase"
+                       << int(ScreenshotPinnedWindowTestAccess::nativeController(window).phase())
+                       << "interaction"
+                       << ScreenshotPinnedWindowTestAccess::interactionActive(window) << "capture"
+                       << reinterpret_cast<quintptr>(GetCapture()) << "hwnd"
+                       << reinterpret_cast<quintptr>(hwnd);
+        }
         require(window.currentNativeGeometry() ==
                         QRect(original.topLeft() - QPoint(60, 30), QSize(60, 30)) &&
                     !ScreenshotPinnedWindowTestAccess::interactionActive(window) &&
@@ -8199,7 +8300,7 @@ void pinnedResizeWindowNativeInteractions() {
     config.screen = screen;
     config.enableEditing = true;
     require(window->present(config), "Resize window native fixture could not be presented");
-    waitForUi(80);
+    waitForPinnedNativeLayout(*window, "native tool fixture waits for settled exposed layout");
 
     const HWND hwnd = toNativeHwnd(window->winId());
     auto* canvas = window->findChild<SnowCanvasWidget*>();
@@ -8261,7 +8362,7 @@ void pinnedResizeWindowNativeInteractions() {
     SendMessage(hwnd, WM_ENTERSIZEMOVE, 0, 0);
     require(toolbarWindow->isHidden(), "WM_ENTERSIZEMOVE must hide the edit toolbar");
     SendMessage(hwnd, WM_EXITSIZEMOVE, 0, 0);
-    waitForUi(30);
+    waitForPinnedNativeLayout(*window, "native move completion waits for settled exposed layout");
     require(toolbarWindow->isVisible() && window->currentNativeGeometry() == geometry &&
                 toolbarWindow->contentPosition() != manualPosition &&
                 controller->resizeWindowToolActive(),
@@ -8291,7 +8392,8 @@ void pinnedResizeWindowNativeInteractions() {
                 !canvas->interactionEnabled(),
             "a native edge adjustment must hide the toolbar and temporarily disable drawing");
     SendMessage(hwnd, WM_CANCELMODE, 0, 0);
-    waitForUi(30);
+    waitForPinnedNativeLayout(*window,
+                              "native resize cancellation waits for settled exposed layout");
     require(toolbarWindow->isVisible() &&
                 palette->activeToolForTests() == ScreenshotToolPalette::Tool::Shape &&
                 canvas->interactionEnabled(),
@@ -8317,6 +8419,24 @@ void pinnedResizeWindowNativeInteractions() {
 
     MINMAXINFO limits{};
     SendMessage(hwnd, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&limits));
+    const QSize expectedMinimum(qRound(config.nativeGeometry.width() * 0.1),
+                                qRound(config.nativeGeometry.height() * 0.1));
+    const QSize expectedMaximum(config.nativeGeometry.width() * 5,
+                                config.nativeGeometry.height() * 5);
+    if (QSize(limits.ptMinTrackSize.x, limits.ptMinTrackSize.y) != expectedMinimum ||
+        QSize(limits.ptMaxTrackSize.x, limits.ptMaxTrackSize.y) != expectedMaximum) {
+        const auto state = window->persistenceSnapshot();
+        qWarning() << "Native tracking limits mismatch" << "minimum"
+                   << QSize(limits.ptMinTrackSize.x, limits.ptMinTrackSize.y) << "maximum"
+                   << QSize(limits.ptMaxTrackSize.x, limits.ptMaxTrackSize.y) << "expected minimum"
+                   << expectedMinimum << "expected maximum" << expectedMaximum << "initial size"
+                   << state.initialWindowSize << "quarter turns" << state.quarterTurns << "observed"
+                   << window->currentNativeGeometry() << "committed"
+                   << ScreenshotPinnedWindowTestAccess::authority(*window) << "target"
+                   << ScreenshotPinnedWindowTestAccess::nativeController(*window).targetGeometry()
+                   << "phase"
+                   << int(ScreenshotPinnedWindowTestAccess::nativeController(*window).phase());
+    }
     require(QSize(limits.ptMinTrackSize.x, limits.ptMinTrackSize.y) ==
                     QSize(qRound(config.nativeGeometry.width() * 0.1),
                           qRound(config.nativeGeometry.height() * 0.1)) &&
@@ -9859,10 +9979,9 @@ void pinnedLockPreservesRecognitionInput() {
     Access::setLock(window, true);
     const QRect geometry = window.currentNativeGeometry();
     auto* layer = content->findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
-    require(layer && !layer->scene()->items().isEmpty(), "locked recognition must render text");
+    require(layer && !ocrGlyphItems(layer).isEmpty(), "locked recognition must render text");
     const QPoint point = layer->viewport()->mapTo(
-        content,
-        layer->mapFromScene(layer->scene()->items().front()->sceneBoundingRect().center()));
+        content, layer->mapFromScene(ocrGlyphItems(layer).front()->sceneBoundingRect().center()));
     require(!content->isOcrBackgroundAt(point), "lock fixture must target recognized text");
     auto* receiver = content->childAt(point);
     require(receiver != nullptr, "recognition text must have an input receiver");
@@ -13299,6 +13418,138 @@ void pinnedCtrlHoverKeepsWindowCursorOffscreen() {
     window.close();
 }
 
+void pinnedOcrBoxSelectionNativeRouting() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    IsolatedPinnedStorage storage;
+    auto config = cachedOcrPinConfig(nullptr);
+    ScreenshotPinnedWindow window;
+    auto* session = Access::hiddenSelectionOffscreen(window, config);
+    session->activate(ScreenshotRecognitionSessionController::Mode::Text);
+    auto* content = window.findChild<ScreenshotRecognitionWindow*>();
+    require(content && content->isVisible() && content->boxSelectionEnabled(),
+            "native box-selection fixture displays recognized text");
+    BYTE originalKeys[256]{};
+    require(GetKeyboardState(originalKeys), "capture box-selection modifier state");
+    const auto restoreKeys = qScopeGuard([&] { SetKeyboardState(originalKeys); });
+    const auto hit = [&](QPoint local, Qt::KeyboardModifiers modifiers) {
+        BYTE keys[256]{};
+        keys[VK_CONTROL] = modifiers.testFlag(Qt::ControlModifier) ? 0x80 : 0;
+        keys[VK_MENU] = modifiers.testFlag(Qt::AltModifier) ? 0x80 : 0;
+        keys[VK_LBUTTON] = content->lineBoxSelectionActive() ? 0x80 : 0;
+        require(SetKeyboardState(keys), "set native box-selection modifiers");
+        const QPoint point = Access::nativePoint(window, local);
+        return SendMessageW(toNativeHwnd(window.winId()), WM_NCHITTEST, 0,
+                            MAKELPARAM(static_cast<WORD>(point.x()), static_cast<WORD>(point.y())));
+    };
+    auto* canvas = window.findChild<SnowCanvasWidget*>();
+    require(canvas, "native box-selection fixture has its image canvas");
+    const QPoint text = canvas->mapTo(
+        &window,
+        canvas->canvasToViewTransform()
+            .map(
+                config.recognitionResults.text->presentation->lines[0].quad.boundingRect().center())
+            .toPoint());
+    const QPoint blank = content->mapTo(&window, QPoint(12, 12));
+    require(hit(blank, Qt::NoModifier) == HTCLIENT && hit(text, Qt::NoModifier) == HTCLIENT,
+            "visible text and blank areas route ordinary selection input to Qt");
+    require(hit(blank, Qt::AltModifier) == HTCAPTION && hit(text, Qt::AltModifier) == HTCAPTION &&
+                hit(text, Qt::ControlModifier | Qt::AltModifier) == HTCAPTION,
+            "Alt moves the pin over visible OCR text and background");
+    require(hit(blank, Qt::ControlModifier) == HTCAPTION &&
+                hit(blank, Qt::ControlModifier | Qt::AltModifier) == HTCAPTION,
+            "visible OCR preserves existing Ctrl movement and Ctrl precedence");
+    require(hit(QPoint(1, 1), Qt::NoModifier) == HTTOPLEFT &&
+                hit(QPoint(1, 1), Qt::AltModifier) == HTTOPLEFT,
+            "OCR box selection and Alt movement preserve native resize handles");
+    Access::setLock(window, true);
+    require(hit(blank, Qt::NoModifier) == HTCLIENT && hit(blank, Qt::AltModifier) == HTCLIENT &&
+                hit(text, Qt::AltModifier) == HTCLIENT,
+            "locked pins still select visible OCR while blocking Alt movement");
+    Access::setLock(window, false);
+    window.activateWindow();
+    content->setFocus();
+    QApplication::processEvents();
+    sendShortcut(*content, Qt::Key_A, Qt::ControlModifier);
+    const QString selected = Access::displayedRecognition(window).selectedText();
+    require(selected == QStringLiteral("Saved OCR"),
+            "native interruption fixture starts with a committed full-line selection");
+    const QPoint gestureStart = content->mapFrom(&window, blank);
+    const QPoint gestureEndInCanvas =
+        canvas->canvasToViewTransform()
+            .map(config.recognitionResults.text->presentation->lines[0]
+                     .quad.boundingRect()
+                     .bottomRight())
+            .toPoint() +
+        QPoint(6, 6);
+    const QPoint gestureEnd = content->mapFrom(&window, canvas->mapTo(&window, gestureEndInCanvas));
+    const auto beginBox = [&] {
+        BYTE keys[256]{};
+        keys[VK_LBUTTON] = 0x80;
+        require(SetKeyboardState(keys), "hold the native left button for interruption checks");
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(gestureStart),
+                          QPointF(content->mapToGlobal(gestureStart)), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(content, &press);
+        QMouseEvent move(QEvent::MouseMove, QPointF(gestureEnd),
+                         QPointF(content->mapToGlobal(gestureEnd)), Qt::NoButton, Qt::LeftButton,
+                         Qt::NoModifier);
+        QApplication::sendEvent(content, &move);
+        require(content->lineBoxSelectionActive() &&
+                    Access::displayedRecognition(window).lineSelectionPreview(0) ==
+                        ScreenshotOcrLineSelectionPreview::Deselect,
+                "native interruption starts a full-line deselection preview");
+        require(hit(QPoint(1, 1), Qt::NoModifier) == HTCLIENT &&
+                    hit(QPoint(1, 1), Qt::ControlModifier | Qt::AltModifier) == HTCLIENT &&
+                    hit(blank, Qt::AltModifier) == HTCLIENT,
+                "an active OCR box keeps native input ownership across edges and modifier changes");
+    };
+    const auto nativeMessage = [&](UINT type, LPARAM target) {
+        MSG message{};
+        message.hwnd = toNativeHwnd(window.winId());
+        message.message = type;
+        message.lParam = target;
+        qintptr result = 0;
+        static_cast<void>(PinnedWindowWindowsEvents::handle(
+            window, QByteArrayLiteral("windows_generic_MSG"), &message, &result));
+    };
+    for (const UINT type : {UINT(WM_CANCELMODE), UINT(WM_CAPTURECHANGED)}) {
+        beginBox();
+        nativeMessage(type, type == WM_CAPTURECHANGED ? reinterpret_cast<LPARAM>(GetDesktopWindow())
+                                                      : LPARAM(0));
+        require(
+            !content->lineBoxSelectionActive() && QWidget::mouseGrabber() != content &&
+                Access::displayedRecognition(window).selectedText() == selected &&
+                session->active(),
+            "native cancellation removes box preview and capture while retaining committed text");
+    }
+    beginBox();
+    BYTE releasedKeys[256]{};
+    require(SetKeyboardState(releasedKeys),
+            "release the native left button before normal delivery");
+    nativeMessage(WM_CAPTURECHANGED, 0);
+    require(content->lineBoxSelectionActive(),
+            "automatic capture release must preserve the box until Qt delivers the button release");
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(gestureEnd),
+                        QPointF(content->mapToGlobal(gestureEnd)), Qt::LeftButton, Qt::NoButton,
+                        Qt::NoModifier);
+    QApplication::sendEvent(content, &release);
+    require(!content->lineBoxSelectionActive() &&
+                !Access::displayedRecognition(window).hasTextSelection(),
+            "normal native button release commits the previewed full-line deselection");
+    const snow_shot::storage::PinToScreenSettings settings;
+    require(settings.setTextSelectionOnRecognitionResults(QStringLiteral("always")),
+            "enable the existing hidden selection mode");
+    session->deactivate();
+    require(Access::hiddenSelection(window) && !content->boxSelectionEnabled(),
+            "hidden text selection does not activate box selection");
+    require(hit(blank, Qt::NoModifier) == HTCAPTION && hit(blank, Qt::AltModifier) == HTCAPTION &&
+                hit(blank, Qt::ControlModifier) == HTCLIENT &&
+                hit(text, Qt::NoModifier) == HTCLIENT && hit(text, Qt::AltModifier) == HTCAPTION &&
+                hit(text, Qt::ControlModifier | Qt::AltModifier) == HTCAPTION,
+            "hidden text selection preserves ordinary routing and allows Alt movement over text");
+    window.close();
+}
+
 void pinnedDragExportNativeHitTest() {
     using Access = ScreenshotPinnedWindowTestAccess;
     IsolatedPinnedStorage storage;
@@ -13306,7 +13557,24 @@ void pinnedDragExportNativeHitTest() {
     ScreenshotPinnedWindow window;
     Access::restoreOffscreen(window, config);
     window.show();
-    waitForUi(20);
+    auto* canvas = window.findChild<SnowCanvasWidget*>();
+    const auto nativeLayoutReady = [&] {
+        const QRect observed = Access::observation(window);
+        const ScreenshotPinnedGeometryMapping mapping(observed, window.size(),
+                                                      window.devicePixelRatioF());
+        const QSize coveringSize = mapping.coveringLogicalSize();
+        return window.windowHandle() != nullptr && window.windowHandle()->isExposed() &&
+               Access::geometrySettled(window) && observed.isValid() && !observed.isEmpty() &&
+               canvas != nullptr && coveringSize.isValid() &&
+               canvas->geometry().contains(window.rect()) &&
+               canvas->width() >= coveringSize.width() && canvas->height() >= coveringSize.height();
+    };
+    QElapsedTimer readiness;
+    readiness.start();
+    while (!nativeLayoutReady() && readiness.elapsed() < 2000) {
+        waitForUi(1);
+    }
+    require(nativeLayoutReady(), "native export fixture reaches exposed, settled client layout");
     BYTE originalKeys[256]{};
     require(GetKeyboardState(originalKeys), "capture thread keyboard state");
     const auto restoreKeys = qScopeGuard([&] { SetKeyboardState(originalKeys); });
@@ -13321,7 +13589,22 @@ void pinnedDragExportNativeHitTest() {
     const QPoint imagePoint(12, 12);
     require(Access::exportEligible(window, imagePoint),
             "native fixture targets the image interior");
-    require(hit(imagePoint, false) == HTCAPTION, "ordinary image drag uses native caption");
+    const LRESULT ordinaryHit = hit(imagePoint, false);
+    if (ordinaryHit != HTCAPTION) {
+        qWarning() << "Native export caption mismatch" << "hit" << ordinaryHit << "observed"
+                   << Access::observation(window) << "committed" << Access::authority(window)
+                   << "logical" << window.size() << "canvas" << canvas->geometry() << "dpr"
+                   << window.devicePixelRatioF() << "exposed" << window.windowHandle()->isExposed()
+                   << "settled" << Access::geometrySettled(window) << "native point"
+                   << Access::nativePoint(window, imagePoint) << "move eligible"
+                   << Access::pointerMoveEligible(window, imagePoint, Qt::NoModifier)
+                   << "move enabled"
+                   << Access::pointerMoveEnabled(window, imagePoint, Qt::NoModifier)
+                   << "export eligible" << Access::exportEligible(window, imagePoint) << "ctrl"
+                   << bool(GetKeyState(VK_CONTROL) & 0x8000) << "alt"
+                   << bool(GetKeyState(VK_MENU) & 0x8000);
+    }
+    require(ordinaryHit == HTCAPTION, "ordinary image drag uses native caption");
     require(hit(imagePoint, true) == HTCLIENT, "Ctrl image drag is delivered to Qt");
     require(hit(QPoint(1, 1), true) == HTTOPLEFT, "Ctrl leaves resize borders native");
     const snow_shot::storage::PinToScreenSettings settings;
@@ -13332,7 +13615,6 @@ void pinnedDragExportNativeHitTest() {
         QStringLiteral("screenshotPinnedRecognitionContent"));
     require(content && content->isVisible() && Access::hiddenSelection(window),
             "native drag fixture has an input-bearing hidden selection overlay");
-    auto* canvas = window.findChild<SnowCanvasWidget*>();
     require(canvas, "native drag fixture has an image canvas");
     const QPoint text = canvas->mapTo(
         &window,
@@ -13353,6 +13635,241 @@ void pinnedDragExportNativeHitTest() {
     window.close();
 }
 #endif
+
+void pinnedOcrBoxSelectionOffscreen() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    IsolatedPinnedStorage storage;
+#ifdef Q_OS_WIN
+    require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
+            "load offscreen pinned box-selection font");
+    QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+#endif
+    auto config = cachedOcrPinConfig(nullptr);
+    auto& source = *config.recognitionResults.text->presentation;
+    source.lines.append(ScreenshotOcrLine{
+        QStringLiteral("Middle line"), 0.95,
+        QPolygonF{QPointF(680, 452), QPointF(860, 452), QPointF(860, 472), QPointF(680, 472)}});
+    source.lines.append(ScreenshotOcrLine{
+        QStringLiteral("Last line"), 0.95,
+        QPolygonF{QPointF(680, 490), QPointF(860, 490), QPointF(860, 510), QPointF(680, 510)}});
+    source.prepareForRendering();
+    config.recognitionResults.translatedText = std::make_shared<ScreenshotOcrPresentation>(source);
+    config.recognitionResults.translatedText->setLineText(0, QStringLiteral("Translated first"));
+    config.recognitionResults.translatedText->setLineText(2, QStringLiteral("Translated last"));
+    ScreenshotPinnedWindow window;
+    auto* session = Access::hiddenSelectionOffscreen(window, config);
+    session->activate(ScreenshotRecognitionSessionController::Mode::Text);
+    auto* content = window.findChild<ScreenshotRecognitionWindow*>();
+    require(content && content->isVisible() && content->boxSelectionEnabled(),
+            "pinned box selection uses the real visible recognition surface");
+    window.activateWindow();
+    content->setFocus();
+    QApplication::processEvents();
+    const QPoint blank(24, 28);
+    const QPoint windowBlank = content->mapTo(&window, blank);
+    require(
+        !Access::pointerMoveEligible(window, windowBlank, Qt::NoModifier) &&
+            Access::pointerMoveEnabled(window, windowBlank, Qt::AltModifier) &&
+            Access::pointerMoveEnabled(window, windowBlank, Qt::ControlModifier) &&
+            Access::pointerMoveEnabled(window, windowBlank, Qt::ControlModifier | Qt::AltModifier),
+        "visible OCR reserves ordinary blank drags for selection and preserves Alt/Ctrl moves");
+    const auto pointer = [&](QEvent::Type type, QPoint point, Qt::KeyboardModifiers modifiers,
+                             bool actualChild = false) {
+        QWidget* receiver = actualChild ? content->childAt(point) : content;
+        require(receiver, "pinned box gesture has an input receiver");
+        const QPoint local = receiver->mapFrom(content, point);
+        QMouseEvent event(type, QPointF(local), QPointF(content->mapToGlobal(point)),
+                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                          modifiers);
+        QApplication::sendEvent(receiver, &event);
+    };
+    const auto selectFirst = [&] {
+        pointer(QEvent::MouseButtonPress, blank, Qt::NoModifier, true);
+        require(content->lineBoxSelectionActive(),
+                "blank child press begins a pending box gesture");
+        require(!Access::pointerMoveEligible(window, windowBlank, Qt::AltModifier),
+                "an active OCR gesture prevents a competing move");
+        pointer(QEvent::MouseMove, QPoint(240, 80), Qt::NoModifier);
+        pointer(QEvent::MouseButtonRelease, QPoint(240, 80), Qt::NoModifier);
+        require(!content->lineBoxSelectionActive() &&
+                    Access::displayedRecognition(window).selectedText() == source.lines[0].text,
+                "ordinary blank dragging selects the first complete OCR line");
+    };
+    selectFirst();
+    pointer(QEvent::MouseButtonPress, QPoint(24, 120), Qt::NoModifier, true);
+    pointer(QEvent::MouseMove, QPoint(240, 155), Qt::NoModifier);
+    pointer(QEvent::MouseButtonRelease, QPoint(240, 155), Qt::NoModifier);
+    const QString sparseText = source.lines[0].text + QLatin1Char('\n') + source.lines[2].text;
+    require(Access::displayedRecognition(window).selectedText() == sparseText &&
+                !Access::displayedRecognition(window).lineSelected(1),
+            "pinned box selection keeps disjoint lines without selecting their intervening line");
+    Access::refreshRecognitionPresentation(window);
+    require(Access::displayedRecognition(window).selectedText() == sparseText &&
+                !content->lineBoxSelectionActive(),
+            "rebuilding the pinned presentation copies sparse committed selection only");
+
+    snow_shot::presentation::PinnedWindowSelectionController selection;
+    Access::attachSelection(window, selection);
+    selection.toggleSelection(&window);
+    require(selection.isSelected(&window), "the OCR fixture participates in pin selection");
+    content->setFocus();
+    for (const Qt::KeyboardModifiers modifiers :
+         {Qt::KeyboardModifiers(Qt::NoModifier), Qt::KeyboardModifiers(Qt::AltModifier),
+          Qt::KeyboardModifiers(Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier |
+                                Qt::MetaModifier)}) {
+        pointer(QEvent::MouseButtonPress, blank, Qt::NoModifier, true);
+        pointer(QEvent::MouseMove, QPoint(240, 155), modifiers);
+        require(content->lineBoxSelectionActive() && !selection.cancelPointerInteraction(&window),
+                "selected pins must leave ordinary OCR gestures out of pending group geometry");
+        sendShortcut(*content, Qt::Key_Escape, modifiers);
+        sendShortcut(*content, Qt::Key_Escape, modifiers, true);
+        PhysicalKeyEvent escapeRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(content, &escapeRelease);
+        require(
+            window.isVisible() && session->active() && !content->lineBoxSelectionActive() &&
+                Access::displayedRecognition(window).selectedText() == sparseText,
+            "Escape repeats and release cancel the box despite modifier changes on selected pins");
+        pointer(QEvent::MouseButtonRelease, QPoint(240, 155), Qt::NoModifier);
+    }
+    pointer(QEvent::MouseButtonPress, blank, Qt::NoModifier, true);
+    pointer(QEvent::MouseMove, QPoint(240, 80), Qt::NoModifier);
+    sendShortcut(*content, Qt::Key_A, Qt::ControlModifier);
+    require(!content->lineBoxSelectionActive() && QWidget::mouseGrabber() != content &&
+                Access::displayedRecognition(window).selectedText() ==
+                    source.lines[0].text + QLatin1Char('\n') + source.lines[1].text +
+                        QLatin1Char('\n') + source.lines[2].text,
+            "pinned Select All must end box preview ownership and select every complete line");
+    pointer(QEvent::MouseButtonRelease, QPoint(240, 80), Qt::NoModifier);
+    selection.clearSelection();
+    Access::detachSelection(window);
+
+    Access::setLock(window, true);
+    content->clearOcrSelection();
+    require(!Access::pointerMoveEnabled(window, windowBlank, Qt::AltModifier),
+            "locking a pin blocks Alt movement");
+    selectFirst();
+    Access::setLock(window, false);
+    Access::installFailingPlatform(window);
+    content->clearOcrSelection();
+    selectFirst();
+    const QString selectedLineText = source.lines[0].text;
+    source.setLineText(0, QString{});
+    content->updateOcrText(0, QString{});
+    require(Access::displayedRecognition(window).hasTextSelection() &&
+                Access::displayedRecognition(window).selectedText().isEmpty(),
+            "an empty streamed block retains its committed full-line selection");
+    Access::refreshRecognitionPresentation(window);
+    source.setLineText(0, selectedLineText);
+    content->updateOcrText(0, selectedLineText);
+    require(Access::displayedRecognition(window).selectedText() == selectedLineText &&
+                !content->lineBoxSelectionActive(),
+            "compatible pinned refresh preserves empty full-line selections for later text growth");
+    source.lines[0].paragraph = true;
+    Access::refreshRecognitionPresentation(window);
+    require(Access::displayedRecognition(window).lines[0].paragraph &&
+                !Access::displayedRecognition(window).hasTextSelection(),
+            "pinned paragraph layout changes do not inherit an incompatible committed selection");
+    source.lines[0].paragraph = false;
+    Access::refreshRecognitionPresentation(window);
+    selectFirst();
+    const QPoint boxEdge =
+        content->mapFrom(&window, QPoint(window.width() - 1, window.height() - 1));
+    pointer(QEvent::MouseButtonPress, blank, Qt::NoModifier, true);
+    pointer(QEvent::MouseMove, boxEdge, Qt::ControlModifier | Qt::AltModifier);
+    require(content->lineBoxSelectionActive() && !Access::interactionActive(window) &&
+                Access::displayedRecognition(window).lineSelectionPreview(2) ==
+                    ScreenshotOcrLineSelectionPreview::Select &&
+                content->cursor().shape() == Qt::CrossCursor,
+            "controlled OCR boxes reach resize edges and retain ownership after modifier changes");
+    pointer(QEvent::MouseButtonRelease, boxEdge, Qt::ControlModifier | Qt::AltModifier);
+    require(!content->lineBoxSelectionActive() && !Access::interactionActive(window) &&
+                Access::displayedRecognition(window).selectedText() ==
+                    source.lines[1].text + QLatin1Char('\n') + source.lines[2].text,
+            "controlled box release commits the final edge rectangle");
+    const QPoint resizeEdge = content->mapFrom(&window, QPoint(1, 1));
+    pointer(QEvent::MouseButtonPress, resizeEdge, Qt::NoModifier);
+    require(Access::interactionActive(window) && !content->lineBoxSelectionActive(),
+            "an initial edge press keeps controlled window resizing precedence");
+    pointer(QEvent::MouseButtonRelease, resizeEdge, Qt::NoModifier);
+    const QPoint moveOrigin = window.currentNativeGeometry().topLeft();
+    pointer(QEvent::MouseButtonPress, blank, Qt::AltModifier, true);
+    require(Access::interactionActive(window) && !content->lineBoxSelectionActive(),
+            "Alt blank dragging must begin the existing controlled window move");
+    pointer(QEvent::MouseMove, blank + QPoint(19, 13), Qt::NoModifier);
+    pointer(QEvent::MouseButtonRelease, blank + QPoint(19, 13), Qt::NoModifier);
+    require(!Access::interactionActive(window) && !content->lineBoxSelectionActive() &&
+                window.currentNativeGeometry().topLeft() != moveOrigin,
+            "controlled Alt dragging moves the pin and keeps ownership after Alt is released");
+    require(session->activateCachedTextTranslation(), "show the fixture's cached translation");
+    content->clearOcrSelection();
+    pointer(QEvent::MouseButtonPress, blank, Qt::NoModifier, true);
+    pointer(QEvent::MouseMove, QPoint(240, 80), Qt::NoModifier);
+    pointer(QEvent::MouseButtonRelease, QPoint(240, 80), Qt::NoModifier);
+    require(Access::displayedRecognition(window).selectedText() ==
+                    QStringLiteral("Translated first") &&
+                session->cachedRecognitionResults().text->presentation->lines[0].text ==
+                    QStringLiteral("Saved OCR"),
+            "pinned box selection operates on displayed translation while retaining source OCR");
+    auto* canvas = window.findChild<SnowCanvasWidget*>();
+    require(canvas, "Alt text dragging requires the pinned image canvas");
+    const snow_shot::storage::PinToScreenSettings settings;
+    require(settings.setTextSelectionOnRecognitionResults(QStringLiteral("always")),
+            "enable hidden text selection for Alt dragging checks");
+    for (bool hidden : {false, true}) {
+        if (hidden) {
+            session->deactivate();
+            require(Access::hiddenSelection(window) && !content->boxSelectionEnabled(),
+                    "Alt dragging also covers the hidden recognized-text layer");
+        }
+        const QPoint text = content->mapFrom(
+            &window, canvas->mapTo(&window, canvas->canvasToViewTransform()
+                                                .map(source.lines[0].quad.boundingRect().center())
+                                                .toPoint()));
+        const QPoint windowText = content->mapTo(&window, text);
+        require(!content->isOcrBackgroundAt(text) &&
+                    !Access::pointerMoveEnabled(window, windowText, Qt::NoModifier) &&
+                    !Access::pointerMoveEnabled(window, windowText, Qt::ControlModifier),
+                "recognized text retains ordinary text-selection input");
+        Access::setLock(window, true);
+        require(!Access::pointerMoveEnabled(window, windowText, Qt::AltModifier),
+                "Alt over recognized text respects the pinned window lock");
+        Access::setLock(window, false);
+        for (const auto modifiers :
+             {Qt::KeyboardModifiers(Qt::AltModifier), Qt::ControlModifier | Qt::AltModifier}) {
+            content->clearOcrSelection();
+            Access::selectHiddenText(window);
+            const QRect before = window.currentNativeGeometry();
+            const QPointF origin = content->mapToGlobal(text);
+            QMouseEvent hover(QEvent::MouseMove, QPointF(text), origin, Qt::NoButton, Qt::NoButton,
+                              modifiers);
+            QApplication::sendEvent(content, &hover);
+            require(content->cursor().shape() == Qt::OpenHandCursor,
+                    "Alt hovering recognized text displays the window move cursor");
+            pointer(QEvent::MouseButtonPress, text, modifiers, true);
+            require(Access::interactionActive(window) && !content->lineBoxSelectionActive() &&
+                        !Access::displayedRecognition(window).hasTextSelection() &&
+                        !Access::displayedRecognition(window).textSelectionActive(),
+                    "Alt text press starts window dragging and clears OCR selection");
+            const QPointF destination = origin + QPointF(19, 13);
+            for (const auto type : {QEvent::MouseMove, QEvent::MouseButtonRelease}) {
+                QMouseEvent event(
+                    type, QPointF(content->mapFromGlobal(destination.toPoint())), destination,
+                    type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                    type == QEvent::MouseMove ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(content, &event);
+            }
+            require(!Access::interactionActive(window) &&
+                        window.currentNativeGeometry().topLeft() != before.topLeft() &&
+                        window.currentNativeGeometry().size() == before.size() &&
+                        !Access::displayedRecognition(window).hasTextSelection() &&
+                        !Access::displayedRecognition(window).textSelectionActive() &&
+                        !content->lineBoxSelectionActive(),
+                    "Alt drags over text move the pin without selecting text after Alt release");
+        }
+    }
+    window.close();
+}
 
 void pinnedSharedImageExportOffscreen() {
     using Access = ScreenshotPinnedWindowTestAccess;
@@ -18967,6 +19484,10 @@ int main(int argc, char* argv[]) {
                 qFuzzyCompare(QGuiApplication::primaryScreen()->devicePixelRatio(), expectedDpr),
                 "pixel fixture must run at the registered DPR, independently of monitor settings");
 #ifdef Q_OS_WIN
+        if (app.arguments().contains(QStringLiteral("--ocr-box-selection-native-only"))) {
+            pinnedOcrBoxSelectionNativeRouting();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--ctrl-hover-only"))) {
             pinnedCtrlHoverKeepsWindowCursorOffscreen();
             return 0;
@@ -18976,6 +19497,10 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 #endif
+        if (app.arguments().contains(QStringLiteral("--ocr-box-selection-only"))) {
+            pinnedOcrBoxSelectionOffscreen();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--drag-export-only"))) {
             pinnedHiddenTextSelectionDragExportOffscreen();
             pinnedDragFileRetention();

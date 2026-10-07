@@ -450,11 +450,16 @@ class ScreenshotPinnedWindow final : public QWidget {
     void finishWindowMove();
     bool windowDragEnabled() const;
     bool windowDragEligible() const;
-    bool windowDragEligibleAt(const QPoint& position) const;
+    bool windowDragEligibleAt(const QPoint& position,
+                              Qt::KeyboardModifiers modifiers = Qt::NoModifier) const;
     bool windowDragEnabledAt(const QPoint& position) const;
+    bool windowMoveEligibleForPointer(const QPoint& position,
+                                      Qt::KeyboardModifiers modifiers) const;
+    bool windowMoveEnabledForPointer(const QPoint& position, Qt::KeyboardModifiers modifiers) const;
     bool handleDoubleClick(const QPoint& position);
     bool handleMiddleClick(const QPoint& position);
     void updateWindowDragCursor(const QPoint& position);
+    void updateWindowDragCursor(const QPoint& position, Qt::KeyboardModifiers modifiers);
     void setWindowDragCursor(Qt::CursorShape shape);
     void clearWindowDragCursor();
     bool nativeTrackSizeConstraintsEnabled() const;
@@ -468,7 +473,8 @@ class ScreenshotPinnedWindow final : public QWidget {
     bool handleControlledPointer(QObject* watched, QEvent* event);
     bool handleLockedPointer(QObject* watched, QEvent* event);
     bool handleExportDrag(QObject* watched, QEvent* event);
-    bool exportDragEnabledAt(const QPoint& position) const;
+    bool exportDragEnabledAt(const QPoint& position,
+                             Qt::KeyboardModifiers modifiers = Qt::NoModifier) const;
     void beginExportDrag();
     void cancelExportDrag();
     std::unique_ptr<ScreenshotPinnedDragExport> m_dragExport;

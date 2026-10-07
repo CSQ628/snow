@@ -118,6 +118,19 @@ bool focusInside(const QWidget* container, const QWidget* focus) {
     return container != nullptr && focus != nullptr &&
            (container == focus || container->isAncestorOf(focus));
 }
+
+bool compatibleOcrSelection(const ScreenshotOcrPresentation& source,
+                            const ScreenshotOcrPresentation& replacement) {
+    return source.selection == replacement.selection &&
+           source.lines.size() == replacement.lines.size() &&
+           std::equal(source.lines.cbegin(), source.lines.cend(), replacement.lines.cbegin(),
+                      [](const ScreenshotOcrLine& oldLine, const ScreenshotOcrLine& newLine) {
+                          return oldLine.text == newLine.text && oldLine.quad == newLine.quad &&
+                                 oldLine.sourceLineQuads == newLine.sourceLineQuads &&
+                                 oldLine.direction == newLine.direction &&
+                                 oldLine.paragraph == newLine.paragraph;
+                      });
+}
 } // namespace
 
 class ScreenshotFormattedTextItem final : public QGraphicsTextItem {
@@ -304,6 +317,7 @@ ScreenshotRecognitionWindow::ScreenshotRecognitionWindow(
 }
 
 ScreenshotRecognitionWindow::~ScreenshotRecognitionWindow() {
+    cancelLineBoxSelection();
     delete m_originalImagePreview.data();
     clearFormattedText();
     if (m_textEditor != nullptr) {
@@ -340,6 +354,7 @@ bool ScreenshotRecognitionWindow::present(const Config& config) {
         return false;
     }
 
+    cancelLineBoxSelection();
     m_canvasSelection = config.canvasSelection.normalized();
     m_originalImagePreviewTransientOwner = config.transientOwner;
     m_formattedTextDevicePixelRatio = config.formattedTextDevicePixelRatio;
@@ -375,6 +390,9 @@ bool ScreenshotRecognitionWindow::present(const Config& config) {
     }
     synchronizeTextLayer();
     installSelectionResizeEventFilters(this);
+    if (window() != this) {
+        window()->installEventFilter(this);
+    }
     refreshOriginalImagePreview();
     return true;
 }
@@ -384,6 +402,9 @@ bool ScreenshotRecognitionWindow::updateSelectionGeometry(const QRect& geometry,
     if (!geometry.isValid() || geometry.isEmpty() || !canvasSelection.isValid() ||
         canvasSelection.isEmpty()) {
         return false;
+    }
+    if (geometry != this->geometry() || canvasSelection.normalized() != m_canvasSelection) {
+        cancelLineBoxSelection();
     }
     m_canvasSelection = canvasSelection.normalized();
     if (m_presentationMode == PresentationMode::TopLevelWindow) {
@@ -701,6 +722,9 @@ QImage ScreenshotRecognitionWindow::printViewportSnapshot(QImage background,
 }
 
 void ScreenshotRecognitionWindow::setShowOriginalImage(bool show) {
+    if (show) {
+        cancelLineBoxSelection();
+    }
     m_showOriginalImage = show;
     m_contentContainer->setVisible(!show);
     if (show) {
@@ -716,12 +740,28 @@ void ScreenshotRecognitionWindow::setOcrCopyDefaultsEnabled(bool enabled) {
 void ScreenshotRecognitionWindow::setOcrPresentation(
     std::shared_ptr<ScreenshotOcrPresentation> presentation,
     ScreenshotOcrTextLayer::RenderingMode mode, bool takeFocus) {
+    cancelLineBoxSelection();
+    if (m_ocrPresentation != nullptr) {
+        m_ocrPresentation->finishTextSelection();
+    }
+    if (presentation != nullptr) {
+        presentation->cancelLineBoxSelection();
+        presentation->finishTextSelection();
+        presentation->prepareForRendering();
+    }
+    const bool selectionOnly = mode == ScreenshotOcrTextLayer::RenderingMode::SelectionOnly;
+    if (m_ocrPresentation != nullptr && presentation != nullptr &&
+        m_ocrPresentation != presentation && m_selectionOnly == selectionOnly &&
+        m_ocrPresentation->hasTextSelection() && !presentation->hasTextSelection() &&
+        compatibleOcrSelection(*m_ocrPresentation, *presentation)) {
+        presentation->copyCommittedSelectionFrom(*m_ocrPresentation);
+    }
     clearImageConversion();
     hideTextEditor();
     clearFormattedText();
     clearTableSession();
     clearQrContents();
-    m_selectionOnly = mode == ScreenshotOcrTextLayer::RenderingMode::SelectionOnly;
+    m_selectionOnly = selectionOnly;
     m_ocrPresentation = std::move(presentation);
     m_textLayer->setPresentation(m_ocrPresentation, mode);
     m_stack->setCurrentWidget(m_textLayer);
@@ -736,6 +776,7 @@ void ScreenshotRecognitionWindow::updateOcrSelection() {
 }
 
 void ScreenshotRecognitionWindow::clearOcrSelection() {
+    cancelLineBoxSelection();
     if (m_ocrPresentation != nullptr) {
         m_ocrPresentation->clearTextSelection();
         m_textLayer->updateSelection();
@@ -751,6 +792,10 @@ void ScreenshotRecognitionWindow::updateOcrText(int lineIndex, const QString& te
 }
 
 void ScreenshotRecognitionWindow::clearOcrPresentation() {
+    cancelLineBoxSelection();
+    if (m_ocrPresentation != nullptr) {
+        m_ocrPresentation->finishTextSelection();
+    }
     m_selectionOnly = false;
     m_ocrPresentation.reset();
     m_textLayer->clearPresentation();
@@ -962,6 +1007,23 @@ void ScreenshotRecognitionWindow::showTextEditor(QTextDocument* document, bool r
 void ScreenshotRecognitionWindow::registerWindowShortcuts() {
     using ShortcutManager = snow_shot::presentation::WindowShortcutManager;
 
+    ShortcutManager::Binding cancelBox;
+    cancelBox.id = QStringLiteral("recognition.cancel_box_selection");
+    cancelBox.keyCombinations = {QKeyCombination(Qt::NoModifier, Qt::Key_Escape)};
+    cancelBox.allowedAdditionalModifiers =
+        Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier;
+    cancelBox.priority = ShortcutManager::StandardPriority::WindowCommand + 2;
+    cancelBox.canActivate = [this](const ShortcutManager::ActivationContext& context) {
+        return context.scopeWindow == window() && isVisible() && lineBoxSelectionActive();
+    };
+    cancelBox.activate = [this](const auto&) {
+        cancelLineBoxSelection();
+        return true;
+    };
+    cancelBox.release = [](const auto&) { return true; };
+    cancelBox.cancel = [this]() { cancelLineBoxSelection(); };
+    static_cast<void>(m_shortcutManager->addBinding(this, std::move(cancelBox)));
+
     ShortcutManager::Binding cancel;
     cancel.id = QStringLiteral("recognition.cancel");
     cancel.keyCombinations = {QKeyCombination(Qt::NoModifier, Qt::Key_Escape)};
@@ -1066,6 +1128,7 @@ void ScreenshotRecognitionWindow::registerWindowShortcuts() {
         if (m_ocrPresentation == nullptr) {
             return false;
         }
+        cancelLineBoxSelection();
         const quint64 previousRevision = m_ocrPresentation->selectionRevision();
         m_ocrPresentation->selectAll();
         if (m_ocrPresentation->selectionRevision() != previousRevision) {
@@ -1443,6 +1506,7 @@ void ScreenshotRecognitionWindow::showTextEditorContextMenu(const QPoint& global
 }
 
 void ScreenshotRecognitionWindow::focusOutEvent(QFocusEvent* event) {
+    cancelLineBoxSelection();
     if (m_ocrPresentation != nullptr && event->reason() != Qt::PopupFocusReason) {
         const quint64 previousRevision = m_ocrPresentation->selectionRevision();
         m_ocrPresentation->clearTextSelection();
@@ -1498,6 +1562,9 @@ void ScreenshotRecognitionWindow::updateSelectionResizeCursor(const QPointF& loc
 }
 
 bool ScreenshotRecognitionWindow::handleSelectionResizeEvent(QObject* watched, QEvent* event) {
+    if (lineBoxSelectionActive()) {
+        return false;
+    }
     if (event == nullptr ||
         (event->type() != QEvent::MouseButtonPress && event->type() != QEvent::MouseMove &&
          event->type() != QEvent::MouseButtonRelease)) {
@@ -1564,6 +1631,22 @@ bool ScreenshotRecognitionWindow::handleSelectionResizeEvent(QObject* watched, Q
 }
 
 bool ScreenshotRecognitionWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (event != nullptr &&
+        (watched == this || watched == window() || watched == m_originalImagePreviewHost ||
+         watched == m_originalImagePreviewHostHandle)) {
+        switch (event->type()) {
+        case QEvent::Hide:
+        case QEvent::Close:
+        case QEvent::WindowDeactivate:
+        case QEvent::UngrabMouse:
+        case QEvent::ScreenChangeInternal:
+        case QEvent::DevicePixelRatioChange:
+            cancelLineBoxSelection();
+            break;
+        default:
+            break;
+        }
+    }
     if (watched == m_originalImagePreview) {
         return QWidget::eventFilter(watched, event);
     }
@@ -1600,6 +1683,7 @@ bool ScreenshotRecognitionWindow::eventFilter(QObject* watched, QEvent* event) {
         m_presentationMode == PresentationMode::EmbeddedChild &&
         !activeContentOwnsContextMenu(watched)) {
         auto* contextMenuEvent = static_cast<QContextMenuEvent*>(event);
+        cancelLineBoxSelection();
         emit embeddedContextMenuRequested(contextMenuEvent->globalPos());
         contextMenuEvent->accept();
         return true;
@@ -1614,6 +1698,7 @@ void ScreenshotRecognitionWindow::contextMenuEvent(QContextMenuEvent* event) {
     if (event == nullptr) {
         return;
     }
+    cancelLineBoxSelection();
     if (!m_showOriginalImage && m_ocrPresentation != nullptr) {
         showOcrContextMenu(event->globalPos());
         event->accept();
@@ -1634,9 +1719,21 @@ void ScreenshotRecognitionWindow::mousePressEvent(QMouseEvent* event) {
     if (event != nullptr && event->button() == Qt::LeftButton && !m_showOriginalImage &&
         m_ocrPresentation != nullptr) {
         setFocus(Qt::MouseFocusReason);
+        const QPointF canvasPosition = canvasPositionForLocalPoint(event->position());
+        const ScreenshotOcrTextPosition textPosition =
+            m_textLayer->textPositionAt(canvasPosition, false);
+        if (boxSelectionEnabled() && event->modifiers() == Qt::NoModifier &&
+            !textPosition.valid()) {
+            cancelLineBoxSelection();
+            m_lineBoxPressPosition = event->position();
+            m_lineBoxThresholdReached = false;
+            m_ocrPresentation->beginLineBoxSelection(canvasPosition);
+            grabMouse();
+            event->accept();
+            return;
+        }
         const quint64 previousRevision = m_ocrPresentation->selectionRevision();
-        m_ocrPresentation->beginTextSelection(
-            m_textLayer->textPositionAt(canvasPositionForLocalPoint(event->position()), false));
+        m_ocrPresentation->beginTextSelection(textPosition);
         if (m_ocrPresentation->selectionRevision() != previousRevision) {
             m_textLayer->updateSelection();
         }
@@ -1688,7 +1785,61 @@ bool ScreenshotRecognitionWindow::isOcrBackgroundAt(const QPointF& localPosition
            !m_textLayer->textPositionAt(canvasPositionForLocalPoint(localPosition), false).valid();
 }
 
+bool ScreenshotRecognitionWindow::boxSelectionEnabled() const {
+    return isVisible() && !m_showOriginalImage && !m_selectionOnly &&
+           m_ocrPresentation != nullptr && m_stack->currentWidget() == m_textLayer;
+}
+
+bool ScreenshotRecognitionWindow::lineBoxSelectionActive() const {
+    return m_lineBoxPressPosition.has_value() ||
+           (m_ocrPresentation != nullptr && m_ocrPresentation->lineBoxSelectionActive());
+}
+
+void ScreenshotRecognitionWindow::cancelLineBoxSelection() {
+    const bool active = lineBoxSelectionActive();
+    m_lineBoxPressPosition.reset();
+    m_lineBoxThresholdReached = false;
+    if (m_ocrPresentation != nullptr) {
+        m_ocrPresentation->cancelLineBoxSelection();
+        if (active) {
+            m_textLayer->updateSelection();
+        }
+    }
+    // Clear ownership before releaseMouse sends UngrabMouse back through the event filter.
+    if (active && QWidget::mouseGrabber() == this && !m_selectionResizeActive) {
+        releaseMouse();
+    }
+    if (active) {
+        unsetCursor();
+    }
+}
+
+void ScreenshotRecognitionWindow::updateLineBoxSelection(const QPointF& localPosition) {
+    if (!m_lineBoxPressPosition || m_ocrPresentation == nullptr) {
+        return;
+    }
+    const QPointF delta = localPosition - *m_lineBoxPressPosition;
+    if (!m_lineBoxThresholdReached && delta.x() * delta.x() + delta.y() * delta.y() < 16.0) {
+        return;
+    }
+    m_lineBoxThresholdReached = true;
+    const QRectF rectangle(canvasPositionForLocalPoint(*m_lineBoxPressPosition),
+                           canvasPositionForLocalPoint(localPosition));
+    m_ocrPresentation->updateLineBoxSelection(rectangle.normalized());
+    m_textLayer->updateSelection();
+}
+
 void ScreenshotRecognitionWindow::mouseMoveEvent(QMouseEvent* event) {
+    if (event != nullptr && m_lineBoxPressPosition) {
+        if (!event->buttons().testFlag(Qt::LeftButton)) {
+            cancelLineBoxSelection();
+        } else {
+            updateLineBoxSelection(event->position());
+            setCursor(Qt::CrossCursor);
+            event->accept();
+            return;
+        }
+    }
     if (handleSelectionResizeEvent(this, event)) {
         return;
     }
@@ -1713,6 +1864,24 @@ void ScreenshotRecognitionWindow::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ScreenshotRecognitionWindow::mouseReleaseEvent(QMouseEvent* event) {
+    if (event != nullptr && event->button() == Qt::LeftButton && m_lineBoxPressPosition) {
+        updateLineBoxSelection(event->position());
+        const bool boxDragged = m_lineBoxThresholdReached;
+        m_lineBoxPressPosition.reset();
+        m_lineBoxThresholdReached = false;
+        if (boxDragged) {
+            m_ocrPresentation->finishLineBoxSelection();
+        } else {
+            m_ocrPresentation->clearTextSelection();
+        }
+        m_textLayer->updateSelection();
+        if (QWidget::mouseGrabber() == this) {
+            releaseMouse();
+        }
+        updateSelectionResizeCursor(event->position());
+        event->accept();
+        return;
+    }
     if (handleSelectionResizeEvent(this, event)) {
         return;
     }
@@ -1743,6 +1912,7 @@ void ScreenshotRecognitionWindow::paintEvent(QPaintEvent* event) {
 }
 
 void ScreenshotRecognitionWindow::resizeEvent(QResizeEvent* event) {
+    cancelLineBoxSelection();
     QWidget::resizeEvent(event);
     synchronizeTextLayer();
     updateTextEditorSpinGeometry();

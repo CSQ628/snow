@@ -158,6 +158,9 @@ class ScreenshotRecognitionWindow final : public QWidget {
 
     [[nodiscard]] bool copyVisibleContentToClipboard();
     [[nodiscard]] bool isOcrBackgroundAt(const QPointF& localPosition) const;
+    [[nodiscard]] bool boxSelectionEnabled() const;
+    [[nodiscard]] bool lineBoxSelectionActive() const;
+    void cancelLineBoxSelection();
 
   signals:
     void embeddedContextMenuRequested(const QPoint& globalPosition);
@@ -193,6 +196,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
     selectionResizeDragModeAtLocalPoint(const QPointF& localPosition) const;
     [[nodiscard]] bool handleSelectionResizeEvent(QObject* watched, QEvent* event);
     void updateSelectionResizeCursor(const QPointF& localPosition);
+    void updateLineBoxSelection(const QPointF& localPosition);
     [[nodiscard]] static Qt::CursorShape
     cursorForSelectionResize(ScreenshotSelectionDragMode dragMode);
 
@@ -244,6 +248,8 @@ class ScreenshotRecognitionWindow final : public QWidget {
     PresentationMode m_presentationMode = PresentationMode::TopLevelWindow;
     bool m_selectionResizeActive = false;
     bool m_selectionOnly = false;
+    std::optional<QPointF> m_lineBoxPressPosition;
+    bool m_lineBoxThresholdReached = false;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTRECOGNITIONWINDOW_H

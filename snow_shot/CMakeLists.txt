@@ -4698,6 +4698,19 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests --recognition-shortcut-only -platform offscreen)
     add_test(NAME snow-shot-pinned-recognition-context-menu-tests
         COMMAND snow-shot-pinned-window-tests --recognition-context-menu-only -platform offscreen)
+    add_test(NAME snow-shot-pinned-ocr-box-selection-tests
+        COMMAND snow-shot-pinned-window-tests --ocr-box-selection-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-ocr-box-selection-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 90
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(WIN32)
+        add_test(NAME snow-shot-pinned-ocr-box-selection-native-routing-tests
+            COMMAND snow-shot-pinned-window-tests --ocr-box-selection-native-only -platform windows)
+        set_tests_properties(snow-shot-pinned-ocr-box-selection-native-routing-tests PROPERTIES
+            LABELS "unit;windows" RUN_SERIAL TRUE TIMEOUT 90
+            ENVIRONMENT "QT_QPA_PLATFORM=windows"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     set_tests_properties(snow-shot-pinned-recognition-context-menu-tests PROPERTIES
         LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-pinned-transformed-ocr-tests
@@ -6806,6 +6819,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-recognition-double-click-tests
         COMMAND snow-shot-recognition-window-tests --ocr-double-click-only -platform offscreen)
+    add_test(NAME snow-shot-recognition-box-selection-tests
+        COMMAND snow-shot-recognition-window-tests --ocr-box-selection-only -platform offscreen)
+    set_tests_properties(snow-shot-recognition-box-selection-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 90
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-recognition-double-click-tests PROPERTIES
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -7507,6 +7525,25 @@ if(SNOW_SHOT_BUILD_BENCHMARKS)
     snow_shot_import_offscreen_platform(snow-shot-recognition-image-performance-benchmark)
     qt_import_plugins(snow-shot-recognition-image-performance-benchmark
         NO_DEFAULT INCLUDE Qt6::QOffscreenIntegrationPlugin)
+
+    add_executable(snow-shot-ocr-selection-performance-benchmark
+        tests/screenshot_ocr_selection_performance_benchmark.cpp
+        src/presentation/ocr/screenshotocrpresentation.cpp
+        src/presentation/ocr/screenshotocrtextlayout.cpp
+        src/presentation/overlay/screenshotcanvasrenderer.cpp
+        src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
+    target_include_directories(snow-shot-ocr-selection-performance-benchmark PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_compile_definitions(snow-shot-ocr-selection-performance-benchmark PRIVATE
+        SNOW_SHOT_BENCH_INTERNALS=1)
+    target_link_libraries(snow-shot-ocr-selection-performance-benchmark PRIVATE
+        ant_design_qt Qt6::Widgets snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-shot-ocr-selection-performance-benchmark)
+    add_test(NAME snow-shot-ocr-selection-performance-benchmark
+        COMMAND snow-shot-ocr-selection-performance-benchmark -platform offscreen)
+    set_tests_properties(snow-shot-ocr-selection-performance-benchmark PROPERTIES
+        LABELS "benchmark" RUN_SERIAL TRUE TIMEOUT 600
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
     add_executable(snow-shot-memory-performance-benchmark
         tests/screenshot_memory_performance_benchmark.cpp

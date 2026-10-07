@@ -91,6 +91,18 @@ QPolygonF ocrQuad(const QRectF& rect) {
     return {rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()};
 }
 
+QList<QGraphicsItem*> ocrGlyphItems(QGraphicsView* layer) {
+    QList<QGraphicsItem*> items;
+    if (layer != nullptr && layer->scene() != nullptr) {
+        for (auto* item : layer->scene()->items()) {
+            if (item->zValue() == 0) {
+                items.push_back(item);
+            }
+        }
+    }
+    return items;
+}
+
 bool doubleClickWidget(QWidget& receiver, const QPoint& point,
                        Qt::MouseButton button = Qt::LeftButton) {
     bool accepted = false;
@@ -417,6 +429,184 @@ void ocrHoverUpdatesCursorWithoutClicking() {
     }
 }
 
+void ocrBoxSelectionUsesCurrentRectangleAndCommitsOnRelease() {
+    using Mode = ScreenshotRecognitionWindow::PresentationMode;
+    for (const auto mode : {Mode::TopLevelWindow, Mode::EmbeddedChild}) {
+        QWidget host;
+        host.resize(320, 200);
+        host.show();
+        ScreenshotRecognitionWindow recognition({}, &host, mode);
+        const QRectF canvas(100, 80, 640, 400);
+        require(recognition.present(
+                    {QGuiApplication::primaryScreen(), &host, host.rect(), canvas, mode}),
+                "box selection fixture presents in both window modes");
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        presentation->selection = canvas.toRect();
+        for (int index = 0; index < 3; ++index) {
+            ScreenshotOcrLine line;
+            line.text = QStringLiteral("block %1").arg(index);
+            line.quad = ocrQuad(QRectF(180, 140 + index * 100, 360, 60));
+            presentation->lines.push_back(line);
+        }
+        recognition.setOcrPresentation(presentation);
+        recognition.setOcrCopyDefaultsEnabled(false);
+        QApplication::processEvents();
+        const auto send = [&](QEvent::Type type, const QPointF& local,
+                              Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            QWidget* receiver = type == QEvent::MouseButtonPress
+                                    ? recognition.childAt(local.toPoint())
+                                    : &recognition;
+            require(receiver != nullptr, "blank OCR press has a real child event receiver");
+            const QPointF receiverPosition =
+                receiver == &recognition ? local
+                                         : local - QPointF(receiver->mapTo(&recognition, QPoint()));
+            QMouseEvent event(
+                type, receiverPosition, QPointF(recognition.mapToGlobal(local.toPoint())),
+                type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
+            QApplication::sendEvent(receiver, &event);
+        };
+        const auto selectBlock = [&](int index) {
+            const QPointF start(10, 15 + index * 50);
+            const QPointF end(240, 65 + index * 50);
+            send(QEvent::MouseButtonPress, start);
+            send(QEvent::MouseMove, end);
+            send(QEvent::MouseButtonRelease, end);
+        };
+        selectBlock(0);
+        selectBlock(2);
+        require(presentation->selectedText() == QStringLiteral("block 0\nblock 2"),
+                "separate rectangles retain independent blocks in reading order");
+        send(QEvent::MouseButtonPress, QPointF(10, 10));
+        require(recognition.lineBoxSelectionActive() &&
+                    presentation->selectedText() == QStringLiteral("block 0\nblock 2"),
+                "blank press preserves committed selections until release");
+        send(QEvent::MouseMove, QPointF(12, 12));
+        require(presentation->lineBoxSelectionRect().isEmpty(),
+                "sub-threshold motion does not paint a box");
+        send(QEvent::MouseMove, QPointF(240, 180));
+        require(presentation->lineSelectionPreview(0) ==
+                        ScreenshotOcrLineSelectionPreview::Deselect &&
+                    presentation->lineSelectionPreview(1) ==
+                        ScreenshotOcrLineSelectionPreview::Select &&
+                    presentation->lineSelectionPreview(2) ==
+                        ScreenshotOcrLineSelectionPreview::Deselect &&
+                    presentation->selectedText() == QStringLiteral("block 0\nblock 2"),
+                "mixed green/red previews retain committed clipboard contents");
+        send(QEvent::MouseMove, QPointF(240, 70), Qt::AltModifier);
+        require(
+            presentation->lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::None &&
+                presentation->lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::None,
+            "shrinking the current rectangle removes excluded previews despite modifier changes");
+        send(QEvent::MouseButtonRelease, QPointF(240, 70), Qt::AltModifier);
+        require(!recognition.lineBoxSelectionActive() &&
+                    presentation->selectedText() == QStringLiteral("block 2") &&
+                    QWidget::mouseGrabber() != &recognition,
+                "release applies only the final candidates and relinquishes capture");
+        require(recognition.copyVisibleContentToClipboard() &&
+                    QApplication::clipboard()->text() == QStringLiteral("block 2"),
+                "clipboard uses committed separate-block selection");
+        send(QEvent::MouseButtonPress, QPointF(10, 10));
+        send(QEvent::MouseButtonRelease, QPointF(10, 10));
+        require(!presentation->hasTextSelection(), "a plain blank click still clears selection");
+    }
+}
+
+void ocrBoxSelectionCancelsWithoutTriggeringWindowCommands() {
+    using Mode = ScreenshotRecognitionWindow::PresentationMode;
+    for (const auto mode : {Mode::TopLevelWindow, Mode::EmbeddedChild}) {
+        QWidget host;
+        host.resize(240, 120);
+        host.show();
+        int cancelCommands = 0;
+        ScreenshotRecognitionWindowActions actions;
+        actions.handleCancel = [&]() { ++cancelCommands; };
+        snow_shot::presentation::WindowShortcutManager shortcuts;
+        ScreenshotRecognitionWindow recognition(actions, &host, mode, &shortcuts);
+        require(recognition.present({QGuiApplication::primaryScreen(), &host, host.rect(),
+                                     QRectF(host.rect()), mode}),
+                "cancellation fixture presents");
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        ScreenshotOcrLine line;
+        line.text = QStringLiteral("baseline");
+        line.quad = ocrQuad(QRectF(40, 30, 150, 40));
+        presentation->lines.push_back(line);
+        recognition.setOcrPresentation(presentation);
+        QApplication::processEvents();
+        const auto begin = [&]() {
+            presentation->selectAll();
+            recognition.updateOcrSelection();
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(10, 10), QPointF(10, 10),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&recognition, &press);
+            QMouseEvent move(QEvent::MouseMove, QPointF(210, 80), QPointF(210, 80), Qt::NoButton,
+                             Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&recognition, &move);
+            require(recognition.lineBoxSelectionActive(), "cancel fixture starts a box gesture");
+        };
+        for (const Qt::KeyboardModifiers modifiers :
+             {Qt::KeyboardModifiers(Qt::NoModifier), Qt::KeyboardModifiers(Qt::AltModifier),
+              Qt::KeyboardModifiers(Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier |
+                                    Qt::MetaModifier)}) {
+            begin();
+            PhysicalKeyEvent escapePress(QEvent::KeyPress, Qt::Key_Escape, modifiers);
+            PhysicalKeyEvent escapeRepeat(QEvent::KeyPress, Qt::Key_Escape, modifiers, QString(),
+                                          true);
+            PhysicalKeyEvent escapeRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(&recognition, &escapePress);
+            QApplication::sendEvent(&recognition, &escapeRepeat);
+            QApplication::sendEvent(&recognition, &escapeRelease);
+            require(!recognition.lineBoxSelectionActive() && cancelCommands == 0 &&
+                        presentation->selectedText() == QStringLiteral("baseline"),
+                    "Escape cancels and consumes repeats and release despite changed modifiers");
+        }
+        for (const auto eventType : {QEvent::UngrabMouse, QEvent::WindowDeactivate}) {
+            begin();
+            QEvent event(eventType);
+            QApplication::sendEvent(&recognition, &event);
+            require(!recognition.lineBoxSelectionActive() &&
+                        presentation->selectedText() == QStringLiteral("baseline"),
+                    "capture loss and owner deactivation cancel only the uncommitted preview");
+        }
+        begin();
+        QMouseEvent lostButton(QEvent::MouseMove, QPointF(200, 70), QPointF(200, 70), Qt::NoButton,
+                               Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&recognition, &lostButton);
+        require(!recognition.lineBoxSelectionActive(), "lost left-button state ends the gesture");
+        begin();
+        QMouseEvent outsideRelease(QEvent::MouseButtonRelease, QPointF(280, 160), QPointF(280, 160),
+                                   Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&recognition, &outsideRelease);
+        require(!recognition.lineBoxSelectionActive() && !presentation->hasTextSelection() &&
+                    QWidget::mouseGrabber() != &recognition,
+                "release beyond the viewport commits final candidates and releases capture");
+        begin();
+        QFocusEvent focusOut(QEvent::FocusOut, Qt::OtherFocusReason);
+        QApplication::sendEvent(&recognition, &focusOut);
+        require(!recognition.lineBoxSelectionActive() && !presentation->hasTextSelection(),
+                "focus loss cancels preview before applying ordinary selection clearing");
+        begin();
+        recognition.hide();
+        require(!recognition.lineBoxSelectionActive(),
+                "hiding recognition cancels pending capture");
+        recognition.show();
+        begin();
+        recognition.setShowOriginalImage(true);
+        require(!recognition.lineBoxSelectionActive() && !recognition.boxSelectionEnabled(),
+                "showing the original image removes gesture state immediately");
+        recognition.setShowOriginalImage(false);
+        begin();
+        require(
+            recognition.updateSelectionGeometry(recognition.geometry(), QRectF(0, 0, 480, 240)) &&
+                !recognition.lineBoxSelectionActive(),
+            "a changed view transform cancels the old canvas-space rectangle");
+        begin();
+        recognition.setOcrPresentation(std::make_shared<ScreenshotOcrPresentation>());
+        require(!recognition.lineBoxSelectionActive() && !presentation->lineBoxSelectionActive(),
+                "replacing content cancels the retired presentation's preview");
+    }
+}
+
 void ocrDoubleClickCopiesOnlyTheClickedBlock() {
 #ifdef Q_OS_WIN
     if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
@@ -468,7 +658,7 @@ void ocrDoubleClickCopiesOnlyTheClickedBlock() {
             QApplication::processEvents();
             auto* layer = window.findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
             require(layer != nullptr, "double-click fixture has a text layer");
-            const auto items = layer->scene()->items();
+            const auto items = ocrGlyphItems(layer);
             require(std::count_if(items.cbegin(), items.cend(),
                                   [](const auto* item) { return item->isVisible(); }) == 2,
                     "double-click fixtures render both nonempty text blocks");
@@ -851,7 +1041,7 @@ void recognitionWindowUsesOrdinaryQtWindowBehavior() {
     QApplication::processEvents();
     auto* textLayer = window.findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
     require(textLayer != nullptr && textLayer->isVisible() && textLayer->scene() != nullptr &&
-                textLayer->scene()->items().size() == 1,
+                ocrGlyphItems(textLayer).size() == 1,
             "selectable OCR text should be hosted directly by the transparent window");
     require(textLayer->testAttribute(Qt::WA_TransparentForMouseEvents) &&
                 textLayer->viewport()->testAttribute(Qt::WA_TransparentForMouseEvents),
@@ -1290,7 +1480,7 @@ void shortRecognitionWindowPreservesExactSelectionGeometryAcrossModes() {
     require(window.geometry() == selectionGeometry && textLayer != nullptr &&
                 textLayer->geometry() == window.rect(),
             "OCR display mode must not enlarge a short screenshot selection");
-    const QList<QGraphicsItem*> textItems = textLayer->scene()->items();
+    const QList<QGraphicsItem*> textItems = ocrGlyphItems(textLayer);
     require(textItems.size() == 1 &&
                 std::abs(textItems.constFirst()->sceneBoundingRect().center().y() -
                          selectionHeight / 2.0) < 0.5,
@@ -1834,6 +2024,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
     ScreenshotRecognitionWindowActions actions;
     actions.handleCopy = [&copyCommandCalls]() { ++copyCommandCalls; };
     ScreenshotRecognitionWindow window(std::move(actions));
+    window.setOcrCopyDefaultsEnabled(false);
     require(window.present(
                 {screen, nullptr,
                  QRect(screen->availableGeometry().center() - QPoint(180, 120), QSize(360, 240)),
@@ -2492,6 +2683,17 @@ void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    if (application.arguments().contains(QStringLiteral("--ocr-box-selection-only"))) {
+#ifdef Q_OS_WIN
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load offscreen box-selection font");
+        QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+#endif
+        ocrBoxSelectionUsesCurrentRectangleAndCommitsOnRelease();
+        ocrBoxSelectionCancelsWithoutTriggeringWindowCommands();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--preview-window-only"))) {
         originalImagePreviewPreservesSelectionAndOwnerLifecycle();
         return 0;

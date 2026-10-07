@@ -688,7 +688,17 @@ bool PinnedWindowSelectionController::handlePointer(ScreenshotPinnedWindow* wind
     const auto handle = selectable && window->interactiveResizingEnabled() && !controls
                             ? selectionResizeHandle(local, window->size())
                             : std::optional<int>{};
-    const bool move = selectable && !controls && window->windowDragEligibleAt(local.toPoint());
+    const bool move = selectable && !controls &&
+                      window->windowMoveEligibleForPointer(local.toPoint(), mouse->modifiers());
+    if (!command && !handle && !move && window->m_recognitionContent != nullptr &&
+        window->m_recognitionContent->isVisible() &&
+        window->m_recognitionContent->boxSelectionEnabled() &&
+        (widget == window->m_recognitionContent ||
+         window->m_recognitionContent->isAncestorOf(widget))) {
+        // Recognition owns its text and box gestures. A pending group press would
+        // otherwise intercept Escape while leaving the recognition gesture alive.
+        return false;
+    }
     state = std::make_shared<GeometryState>();
     state->owner = window;
     GeometryState::Press press;
@@ -702,7 +712,7 @@ bool PinnedWindowSelectionController::handlePointer(ScreenshotPinnedWindow* wind
     press.command = command;
     press.consume = command || handle.has_value() || move;
     press.move = move;
-    press.exportEligible = window->exportDragEnabledAt(local.toPoint());
+    press.exportEligible = window->exportDragEnabledAt(local.toPoint(), mouse->modifiers());
     press.spontaneous = mouse->spontaneous();
     press.modifiers = mouse->modifiers();
     press.timestamp = mouse->timestamp();
