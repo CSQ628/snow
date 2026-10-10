@@ -6481,6 +6481,7 @@ void overlayMagnifierWheelPreservesCreationStyle() {
     ScreenshotOverlayInputHandler handler(
         {capture, interaction, selection, intelligent, geometry, displays, actions});
     NoopOverlayEventSink sink;
+    sink.consumeWheel = true;
     SnowCanvasRuntime runtime;
     ScreenshotOverlayWindow overlay(sink, new SnowCanvasWidget(runtime));
     overlay.resize(400, 300);
@@ -6496,6 +6497,7 @@ void overlayMagnifierWheelPreservesCreationStyle() {
             "activate the screenshot magnifier wheel fixture");
     interaction.setCanvasTool(ScreenshotActiveTool::Magnifier);
     bool creationDefaults = false;
+    int committedEdits = 0;
     QObject::connect(canvas, &SnowCanvasWidget::styleEditCommitted, &overlay,
                      [&](const SnowCanvasStyleEdit& edit) {
                          const auto* patch = std::get_if<SnowCanvasMagnifierEdit>(&edit);
@@ -6503,14 +6505,54 @@ void overlayMagnifierWheelPreservesCreationStyle() {
                                      patch->properties == SnowCanvasMagnifierStylePropertyFactor,
                                  "overlay wheels must commit only the magnifier factor");
                          creationDefaults = patch->creationDefaults;
+                         ++committedEdits;
                      });
-    const auto wheel = [&] {
-        QWheelEvent event(QPointF(30, 30), canvas->mapToGlobal(QPoint(30, 30)), QPoint(),
-                          QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
-        return handler.handleWheel(&overlay, event);
+    sink.wheelReceived = [&](const QWheelEvent& event) {
+        require(handler.handleWheel(&overlay, event),
+                "the magnifier handler must consume overlay wheel gestures");
     };
-    require(wheel() && creationDefaults && canvas->canvasMagnifierStyle().factor == 2.1,
-            "an unselected overlay magnifier wheel must adjust creation defaults");
+    const auto wheel = [&](int pixelDelta, int angleDelta) {
+        QWheelEvent event(QPointF(30, 30), canvas->mapToGlobal(QPoint(30, 30)),
+                          QPoint(0, pixelDelta), QPoint(0, angleDelta), Qt::NoButton,
+                          Qt::NoModifier, Qt::ScrollUpdate, false);
+        const int previousCalls = sink.wheelCalls;
+        QApplication::sendEvent(canvas, &event);
+        require(sink.wheelCalls == previousCalls + 1 && event.isAccepted(),
+                "canvas wheel events must pass through the overlay event filter exactly once");
+    };
+    const auto factorIs = [&](double expected) {
+        return std::abs(canvas->canvasMagnifierStyle().factor - expected) < 1e-10;
+    };
+    for (int index = 0; index < 9; ++index)
+        wheel(10, 120);
+    require(factorIs(2.0) && committedEdits == 0 && !runtime.canUndo(),
+            "partial pixel gestures must prefer pixel deltas and leave preferences untouched");
+    wheel(10, 120);
+    require(factorIs(2.1) && committedEdits == 1 && creationDefaults && !runtime.canUndo(),
+            "ten precise pixel events must produce one creation-default factor step");
+    for (int index = 0; index < 5; ++index)
+        wheel(0, 20);
+    require(factorIs(2.1) && committedEdits == 1,
+            "partial angle gestures must not publish incomplete factor edits");
+    wheel(0, 20);
+    require(factorIs(2.2) && committedEdits == 2 && creationDefaults,
+            "six small angle events must produce one creation-default factor step");
+    wheel(250, 0);
+    require(factorIs(2.4) && committedEdits == 3,
+            "large pixel gestures must apply every completed factor step in one edit");
+    wheel(40, 0);
+    require(factorIs(2.4) && committedEdits == 3,
+            "pixel gesture remainders must remain pending without publishing edits");
+    wheel(10, 0);
+    require(factorIs(2.5) && committedEdits == 4,
+            "subsequent pixel input must complete the retained gesture remainder");
+    wheel(0, 300);
+    require(factorIs(2.7) && committedEdits == 5,
+            "large angle gestures must apply every completed factor step in one edit");
+    wheel(0, 60);
+    require(factorIs(2.8) && committedEdits == 6,
+            "subsequent angle input must complete the retained gesture remainder");
+    wheel(30, 0);
     const auto drag = [&](const QPointF& start, const QPointF& end) {
         for (const auto& [type, point, button, buttons] :
              {std::tuple{QEvent::MouseButtonPress, start, Qt::LeftButton,
@@ -6527,10 +6569,35 @@ void overlayMagnifierWheelPreservesCreationStyle() {
     require(canvas->canvasStyleToolbarState().source ==
                 SnowCanvasStyleToolbarSource::SelectedMagnifier,
             "source-region selection must expose the magnifier style");
-    require(wheel() && !creationDefaults && canvas->canvasMagnifierStyle().factor == 2.2,
-            "a selected overlay magnifier wheel must adjust the selected element");
+    const auto magnifier = [&] {
+        const auto elementSlots = QJsonDocument::fromJson(runtime.serializeDocumentSession())
+                                      .object()
+                                      .value(QStringLiteral("document"))
+                                      .toObject()
+                                      .value(QStringLiteral("slots"))
+                                      .toArray();
+        for (const auto& slot : elementSlots) {
+            const auto data = slot.toObject().value(QStringLiteral("data")).toObject();
+            if (data.contains(QStringLiteral("Magnifier")))
+                return data.value(QStringLiteral("Magnifier")).toObject();
+        }
+        require(false, "the overlay wheel fixture must retain its magnifier annotation");
+        return QJsonObject();
+    };
+    const auto original = magnifier();
+    wheel(70, 0);
+    require(factorIs(2.8) && committedEdits == 6 && magnifier() == original,
+            "selecting a magnifier must discard the creation-default gesture remainder");
+    wheel(30, 0);
+    require(factorIs(2.9) && committedEdits == 7 && !creationDefaults,
+            "a selected overlay magnifier wheel must edit the element after a complete step");
+    const auto edited = magnifier();
+    require(edited != original && canvas->undo() && magnifier() == original,
+            "a completed selected factor gesture must remain one undoable history entry");
+    require(canvas->redo() && magnifier() == edited,
+            "redo must restore the selected magnifier factor gesture");
     require(canvas->resetEditingState() && canvas->setCanvasTool(SnowCanvasTool::Magnifier) &&
-                canvas->canvasMagnifierStyle().factor == 2.1,
+                factorIs(2.8),
             "selected overlay wheel edits must preserve the future magnifier factor");
 }
 

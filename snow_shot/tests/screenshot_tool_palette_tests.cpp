@@ -11772,6 +11772,86 @@ void magnifierStylesPersistAndIgnoreSelectedEdits() {
         "saved magnifier values must clamp numeric ranges and retain defaults for invalid fields");
 }
 
+void magnifierStyleWheelsPersistCompletedSteps() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = original;
+    defaults.magnifier.factor = 2;
+    require(persistScreenshotCanvasToolStyles(defaults), "prepare magnifier wheel preferences");
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.styleDefaults = defaults;
+    ScreenshotToolPalette palette(options);
+    SnowCanvasWidget canvas;
+    canvas.resize(400, 300);
+    canvas.show();
+    QApplication::processEvents();
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    require(canvas.setViewportCamera(200, 150, 1) &&
+                canvas.setCanvasTool(SnowCanvasTool::Magnifier),
+            "activate the pinned-style magnifier wheel fixture");
+    canvas.setWheelZoomEnabled(false);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
+    palette.setStyleToolbarState(canvas.canvasStyleToolbarState());
+    int commits = 0;
+    QObject::connect(&canvas, &SnowCanvasWidget::styleEditCommitted, &palette,
+                     [&](const SnowCanvasStyleEdit& edit) {
+                         const auto* patch = std::get_if<SnowCanvasMagnifierEdit>(&edit);
+                         require(patch &&
+                                     patch->properties == SnowCanvasMagnifierStylePropertyFactor,
+                                 "style wheel commits must patch only the magnifier factor");
+                         ++commits;
+                     });
+    WheelStepAccumulator accumulator;
+    const auto wheel = [&](int pixels, int angle) {
+        QWheelEvent event(QPointF(40, 35), canvas.mapToGlobal(QPoint(40, 35)), QPoint(0, pixels),
+                          QPoint(0, angle), Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false);
+        require(handleScreenshotStyleWheel(palette, canvas, event, accumulator),
+                "pinned style wheels must route magnifier input even with camera zoom disabled");
+    };
+    const auto camera = canvas.canvasToViewTransform();
+    for (int index = 0; index < 9; ++index)
+        wheel(10, 120);
+    require(commits == 0 && !binding.lastSaveSucceeded().has_value() &&
+                screenshotCanvasToolStyleDefaults().magnifier == defaults.magnifier,
+            "incomplete precise gestures must not save magnifier preferences");
+    wheel(10, 120);
+    require(commits == 1 && binding.lastSaveSucceeded() == true &&
+                canvas.canvasMagnifierStyle().factor == 2.1 &&
+                screenshotCanvasToolStyleDefaults().magnifier.factor == 2.1 &&
+                palette.creationStyleDefaults().magnifier.factor == 2.1,
+            "completed precise gestures must save and remember the actual engine factor");
+    wheel(0, 360);
+    require(commits == 2 && canvas.canvasMagnifierStyle().factor == 2.4 &&
+                screenshotCanvasToolStyleDefaults().magnifier.factor == 2.4 &&
+                canvas.canvasToViewTransform() == camera,
+            "coalesced wheel input must save one completed edit and preserve the camera");
+    const auto saved = screenshotCanvasToolStyleDefaults();
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, point, point, button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    mouse(QEvent::MouseButtonPress, {20, 20}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, {60, 50}, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {60, 50}, Qt::LeftButton, Qt::NoButton);
+    mouse(QEvent::MouseButtonPress, {40, 35}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {40, 35}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedMagnifier,
+            "select the magnifier before editing its factor through pinned style wheels");
+    wheel(100, 0);
+    require(commits == 3 && canvas.canvasMagnifierStyle().factor == 2.5 &&
+                screenshotCanvasToolStyleDefaults() == saved &&
+                palette.creationStyleDefaults().magnifier == saved.magnifier,
+            "selected magnifier wheel edits must preserve saved creation preferences");
+}
+
 void magnifierControlsRetranslateAndRenderPreviews() {
     using namespace snow_shot::presentation;
     auto& language = LanguageManager::instance();
@@ -17713,6 +17793,7 @@ int main(int argc, char** argv) {
         magnifierLayoutMigrationPreservesCustomization();
         magnifierControlsPatchIndependentProperties();
         magnifierStylesPersistAndIgnoreSelectedEdits();
+        magnifierStyleWheelsPersistCompletedSteps();
         magnifierControlsRetranslateAndRenderPreviews();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
@@ -18052,6 +18133,7 @@ int main(int argc, char** argv) {
     magnifierLayoutMigrationPreservesCustomization();
     magnifierControlsPatchIndependentProperties();
     magnifierStylesPersistAndIgnoreSelectedEdits();
+    magnifierStyleWheelsPersistCompletedSteps();
     magnifierControlsRetranslateAndRenderPreviews();
     angleSettingsAndWheelPreserveIndependentProperties();
     distanceActualValueUpdatesTheCanvasAndUndo();

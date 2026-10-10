@@ -164,16 +164,21 @@ def check_magnifier_contracts(matrix):
         assert reviewed["canvas_style_sources"]["members"].count(source) == 1
     for path in ("include/snow_shot/app/mcp/mcpstylepatch.h", "src/app/mcp/mcpdocumentservice.cpp"):
         assert re.search(r'\{QStringLiteral\("magnifier"\),\s*SnowCanvasTool::Magnifier\}', read(path))
-    fields = {name for name in re.findall(r"^\s*([a-z_]+)\s*:",
-        block(schemas, r"struct MagnifierStylePatch\s*\{(.*?)\}"), re.M)}
-    expected = {"shape", "stroke", "stroke_width", "factor", "show_leader", "leader_arrowhead",
-                "corner_radius", "corner_radii"}
-    assert fields == expected
+    style = block(schemas, r"struct MagnifierStylePatch\s*\{(.*?)\}")
+    fields = {name: re.sub(r"\s", "", kind) for name, kind in
+              re.findall(r"^\s*([a-z_]+)\s*:\s*([^\n,]+),", style, re.M)}
+    expected = {"shape": "Option<ShapeVariant>", "stroke": "Option<[u8;4]>",
+                "stroke_width": "Option<MagnifierStrokeWidth>", "factor": "Option<MagnifierFactor>",
+                "show_leader": "Option<bool>", "leader_arrowhead": "Option<Arrowhead>",
+                "arrow_ratio": "Option<ArrowRatio>", "corner_radius": "Option<CornerRadius>",
+                "corner_radii": "Option<[CornerRadius;4]>"}
+    assert fields == expected, f"Magnifier style fields changed: {fields}"
     allowed = block(read("include/snow_shot/app/mcp/mcpstylepatch.h"),
         r'else if \(target == QStringLiteral\("magnifier"\)\)\s*allowed = \{(.*?)\};')
-    assert set(re.findall(r'QStringLiteral\("([a-z_]+)"\)', allowed)) == expected
+    assert set(re.findall(r'QStringLiteral\("([a-z_]+)"\)', allowed)) == set(expected)
     assert re.search(r'bounded_style_number!\(MagnifierFactor,\s*f64,\s*"number",\s*1\.0,\s*10\.0\)', schemas)
     assert re.search(r'bounded_style_number!\(MagnifierStrokeWidth,\s*f64,\s*"number",\s*0\.0,\s*72\.0\)', schemas)
+    assert re.search(r'bounded_style_number!\(ArrowRatio,\s*f64,\s*"number",\s*0\.5,\s*3\.0\)', schemas)
     assert enum_members(schemas, "MagnifierTarget") == {"Magnifier"}
     for source, name, kind in ((schemas, "ToolStyle", "MagnifierToolStyle"),
                                (schemas, "ScreenshotToolStyleMutation", "Mutation<MagnifierToolStyle>"),

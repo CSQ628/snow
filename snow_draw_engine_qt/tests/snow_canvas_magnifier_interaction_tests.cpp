@@ -3,17 +3,21 @@
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 
 #include <QApplication>
+#include <QFocusEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QWheelEvent>
 #include <QtMath>
 
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -36,22 +40,25 @@ void drag(SnowCanvasWidget& canvas, QPointF start, QPointF end) {
     mouse(canvas, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
 }
 
-QJsonObject magnifier(const SnowCanvasRuntime& runtime) {
+QJsonArray magnifiers(const SnowCanvasRuntime& runtime) {
     const auto document = QJsonDocument::fromJson(runtime.serializeDocumentSession())
                               .object()
                               .value(QStringLiteral("document"))
                               .toObject();
-    QJsonObject result;
-    int count = 0;
+    QJsonArray result;
     for (const auto& slot : document.value(QStringLiteral("slots")).toArray()) {
         const auto data = slot.toObject().value(QStringLiteral("data")).toObject();
         if (data.contains(QStringLiteral("Magnifier"))) {
-            result = data.value(QStringLiteral("Magnifier")).toObject();
-            ++count;
+            result.append(data.value(QStringLiteral("Magnifier")));
         }
     }
-    require(count == 1, "a drag creates one compound magnifier annotation");
     return result;
+}
+
+QJsonObject magnifier(const SnowCanvasRuntime& runtime) {
+    const auto values = magnifiers(runtime);
+    require(values.size() == 1, "a drag creates one compound magnifier annotation");
+    return values.first().toObject();
 }
 
 QPointF center(const QJsonObject& value, const QString& field) {
@@ -69,6 +76,236 @@ void prepare(SnowCanvasWidget& canvas) {
     canvas.show();
     QApplication::processEvents();
     require(canvas.setCanvasTool(SnowCanvasTool::Magnifier), "activate Magnifier");
+}
+
+bool wheel(SnowCanvasWidget& canvas, int pixels, int angle = 0,
+           Qt::KeyboardModifiers modifiers = Qt::NoModifier, bool native = false,
+           Qt::MouseEventSource source = Qt::MouseEventSynthesizedBySystem) {
+    QWheelEvent event(QPointF(260, 190), canvas.mapToGlobal(QPoint(260, 190)), QPoint(0, pixels),
+                      QPoint(0, angle), Qt::NoButton, modifiers, Qt::NoScrollPhase, false, source);
+    if (!native)
+        return canvas.adjustMagnifierFromWheel(event);
+    event.ignore();
+    QApplication::sendEvent(&canvas, &event);
+    return event.isAccepted();
+}
+
+void observeWheelCommits(SnowCanvasWidget& canvas, std::vector<SnowCanvasMagnifierEdit>& commits) {
+    QObject::connect(&canvas, &SnowCanvasWidget::styleEditCommitted, &canvas,
+                     [&commits](const SnowCanvasStyleEdit& edit) {
+                         const auto* patch = std::get_if<SnowCanvasMagnifierEdit>(&edit);
+                         require(patch != nullptr &&
+                                     patch->properties == SnowCanvasMagnifierStylePropertyFactor,
+                                 "wheel commits publish only the magnifier factor");
+                         commits.push_back(*patch);
+                     });
+}
+
+void selectMagnifier(SnowCanvasWidget& canvas) {
+    mouse(canvas, QEvent::MouseButtonPress, {260, 190}, Qt::LeftButton, Qt::LeftButton);
+    mouse(canvas, QEvent::MouseButtonRelease, {260, 190}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedMagnifier,
+            "source selection exposes the magnifier style");
+}
+
+void wheelAccumulationPublishesCompletedCreationEdits() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    prepare(canvas);
+    canvas.setWheelZoomEnabled(false);
+    const auto camera = canvas.canvasToViewTransform();
+    const auto initial = canvas.canvasMagnifierStyle();
+    std::vector<SnowCanvasMagnifierEdit> commits;
+    observeWheelCommits(canvas, commits);
+    for (int i = 0; i < 9; ++i)
+        require(wheel(canvas, 10, 0, Qt::NoModifier, true), "precise native wheels are consumed");
+    require(canvas.canvasMagnifierStyle() == initial && commits.empty(),
+            "partial precise input neither changes defaults nor publishes a user edit");
+    require(wheel(canvas, 10, 0, Qt::NoModifier, true) &&
+                canvas.canvasMagnifierStyle().factor == 2.1 && commits.size() == 1 &&
+                commits.back().creationDefaults,
+            "one hundred precise pixels commit one creation factor step with zoom disabled");
+    require(wheel(canvas, 250) && canvas.canvasMagnifierStyle().factor == 2.3 &&
+                wheel(canvas, 50) && canvas.canvasMagnifierStyle().factor == 2.4 &&
+                commits.size() == 3,
+            "large input keeps its remainder across completed factor commits");
+    auto expected = initial;
+    expected.factor = 2.4;
+    require(canvas.canvasMagnifierStyle() == expected && canvas.canvasToViewTransform() == camera &&
+                !canvas.canvasHistoryState().canUndo,
+            "creation factor wheels preserve other properties, camera and document history");
+
+    require(canvas.setCanvasMagnifierStyle(initial, SnowCanvasMagnifierStylePropertyFactor),
+            "restore creation factor for fractional-angle input");
+    const auto commitCount = commits.size();
+    for (int i = 0; i < 5; ++i)
+        require(wheel(canvas, 0, 20), "fractional angle wheels are consumed");
+    require(canvas.canvasMagnifierStyle().factor == 2.0 && commits.size() == commitCount,
+            "fractional angle input waits for a complete notch");
+    require(wheel(canvas, 0, 20) && canvas.canvasMagnifierStyle().factor == 2.1 &&
+                commits.size() == commitCount + 1,
+            "one hundred twenty angle units commit one factor step");
+}
+
+void selectedWheelEditsPreserveDefaultsAndPublishUndoableFactors() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    prepare(canvas);
+    drag(canvas, {220, 160}, {300, 220});
+    selectMagnifier(canvas);
+    canvas.setWheelZoomEnabled(false);
+    const auto original = magnifier(runtime);
+    const auto camera = canvas.canvasToViewTransform();
+    std::vector<SnowCanvasMagnifierEdit> commits;
+    observeWheelCommits(canvas, commits);
+    for (int i = 0; i < 10; ++i)
+        require(wheel(canvas, 10, 0, Qt::NoModifier, true), "selected precise wheel is consumed");
+    require(commits.size() == 1 && !commits.back().creationDefaults &&
+                commits.back().style.factor == 2.1 &&
+                magnifier(runtime).value(QStringLiteral("factor")).toDouble() == 2.1 &&
+                canvas.canvasToViewTransform() == camera,
+            "completed selected wheels publish selected factor edits without moving the camera");
+    require(canvas.undo() && magnifier(runtime) == original && canvas.redo() &&
+                canvas.canvasMagnifierStyle().factor == 2.1,
+            "the completed selected factor step is independently undoable and redoable");
+    require(canvas.resetEditingState() && canvas.setCanvasTool(SnowCanvasTool::Magnifier) &&
+                canvas.canvasMagnifierStyle().factor == 2.0,
+            "selected factor wheels preserve future magnifier defaults");
+}
+
+void wheelPublishesHomogenizedSelectionAtTheFactorLimit() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    prepare(canvas);
+    drag(canvas, {220, 160}, {300, 220});
+    drag(canvas, {500, 160}, {580, 220});
+    selectMagnifier(canvas);
+    auto style = canvas.canvasMagnifierStyle();
+    style.factor = 10;
+    require(canvas.setCanvasMagnifierStyle(style, SnowCanvasMagnifierStylePropertyFactor) &&
+                canvas.setCanvasTool(SnowCanvasTool::Select),
+            "give the first magnifier a saturated factor before selecting both");
+    drag(canvas, {750, 20}, {20, 550});
+    const auto before = canvas.canvasStyleToolbarState();
+    const auto magnifiersBefore = magnifiers(runtime);
+    require(before.source == SnowCanvasStyleToolbarSource::SelectedMagnifier &&
+                before.magnifierStyle.factor == 10 &&
+                (before.magnifierStyleMixed & SnowCanvasMagnifierStylePropertyFactor) != 0,
+            "the first selected factor is saturated while the second selected factor differs");
+    std::vector<SnowCanvasMagnifierEdit> commits;
+    observeWheelCommits(canvas, commits);
+    require(
+        wheel(canvas, 0, 120, Qt::NoModifier, true) && canvas.canvasMagnifierStyle().factor == 10 &&
+            (canvas.canvasStyleToolbarState().magnifierStyleMixed &
+             SnowCanvasMagnifierStylePropertyFactor) == 0 &&
+            commits.size() == 1 && !commits.back().creationDefaults &&
+            commits.back().style.factor == 10,
+        "homogenizing other selected factors publishes a user edit at the first factor's limit");
+    require(canvas.undo() && magnifiers(runtime) == magnifiersBefore &&
+                (canvas.canvasStyleToolbarState().magnifierStyleMixed &
+                 SnowCanvasMagnifierStylePropertyFactor) != 0,
+            "undo restores every selected factor and its mixed toolbar state");
+    require(canvas.resetEditingState() && canvas.setCanvasTool(SnowCanvasTool::Magnifier) &&
+                canvas.canvasMagnifierStyle().factor == 2,
+            "homogenizing selected factors preserves future magnifier defaults");
+}
+
+void wheelRemaindersResetAtInputAndEditingBoundaries() {
+    for (int transition = 0; transition < 7; ++transition) {
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        prepare(canvas);
+        drag(canvas, {220, 160}, {300, 220});
+        selectMagnifier(canvas);
+        canvas.setWheelZoomEnabled(false);
+        require(wheel(canvas, 40), "start an incomplete factor wheel");
+        const auto camera = canvas.canvasToViewTransform();
+        switch (transition) {
+        case 0: {
+            QFocusEvent event(QEvent::FocusOut);
+            QApplication::sendEvent(&canvas, &event);
+            break;
+        }
+        case 1:
+            require(canvas.setCanvasTool(SnowCanvasTool::Watermark) &&
+                        canvas.setCanvasTool(SnowCanvasTool::Magnifier),
+                    "switch away from and back to magnifier");
+            break;
+        case 2: {
+            auto style = canvas.canvasMagnifierStyle();
+            style.strokeWidth = 4;
+            require(canvas.setCanvasMagnifierStyle(style,
+                                                   SnowCanvasMagnifierStylePropertyStrokeWidth) &&
+                        canvas.undo() && canvas.redo(),
+                    "undo and redo an unrelated magnifier property");
+            break;
+        }
+        case 3:
+            require(canvas.resetEditingState() && canvas.setCanvasTool(SnowCanvasTool::Magnifier),
+                    "reset selection before restoring the magnifier target");
+            selectMagnifier(canvas);
+            break;
+        case 4:
+            require(canvas.setCanvasMagnifierStyle(canvas.canvasMagnifierStyle(),
+                                                   SnowCanvasMagnifierStylePropertyFactor),
+                    "an explicit factor patch resets incomplete input even without a value change");
+            break;
+        case 5:
+            for (auto modifier : {Qt::ControlModifier, Qt::AltModifier, Qt::MetaModifier})
+                require(!wheel(canvas, 10, 0, modifier),
+                        "modified factor wheels remain available for normal host routing");
+            require(canvas.canvasToViewTransform() == camera,
+                    "resetting modified factor input cannot move the camera");
+            break;
+        case 6:
+            require(wheel(canvas, 0, 60), "changing delta kind resets incomplete pixel input");
+            require(canvas.canvasMagnifierStyle().factor == 2.0,
+                    "different wheel units cannot complete each other's factor step");
+            break;
+        }
+        require(wheel(canvas, 60) && canvas.canvasMagnifierStyle().factor == 2.0,
+                "editing and input boundaries discard previous incomplete factor input");
+        require(wheel(canvas, 40) && canvas.canvasMagnifierStyle().factor == 2.1,
+                "fresh input completes exactly one factor step after a reset");
+    }
+}
+
+void wheelDirectionLimitsAndCocoaMouseClassification() {
+    SnowCanvasWidget canvas;
+    prepare(canvas);
+    require(wheel(canvas, 40) && wheel(canvas, -60) &&
+                canvas.canvasMagnifierStyle().factor == 2.0 && wheel(canvas, -40) &&
+                canvas.canvasMagnifierStyle().factor == 1.9,
+            "direction reversal discards incomplete movement in the previous direction");
+    std::vector<SnowCanvasMagnifierEdit> commits;
+    observeWheelCommits(canvas, commits);
+    for (const auto [factor, direction] : {std::pair{10.0, 1}, std::pair{1.0, -1}}) {
+        auto style = canvas.canvasMagnifierStyle();
+        style.factor = factor;
+        require(canvas.setCanvasMagnifierStyle(style, SnowCanvasMagnifierStylePropertyFactor),
+                "set a factor boundary");
+        const auto commitCount = commits.size();
+        require(wheel(canvas, direction * 250) && wheel(canvas, direction * 50) &&
+                    canvas.canvasMagnifierStyle().factor == factor && commits.size() == commitCount,
+                "saturated input neither accumulates hidden movement nor publishes empty edits");
+        require(wheel(canvas, -direction * 60) && canvas.canvasMagnifierStyle().factor == factor &&
+                    wheel(canvas, -direction * 40) &&
+                    canvas.canvasMagnifierStyle().factor == factor - direction * 0.1,
+                "one complete inward step responds immediately after saturation");
+    }
+#ifdef Q_OS_MACOS
+    auto style = canvas.canvasMagnifierStyle();
+    style.factor = 2.0;
+    require(canvas.setCanvasMagnifierStyle(style, SnowCanvasMagnifierStylePropertyFactor),
+            "restore creation factor for Cocoa wheel classification");
+    require(wheel(canvas, 2, 120, Qt::NoModifier, true, Qt::MouseEventNotSynthesized) &&
+                canvas.canvasMagnifierStyle().factor == 2.1,
+            "ordinary Cocoa mouse notches use angle input rather than accelerated pixel estimates");
+    require(wheel(canvas, 10, 120, Qt::NoModifier, true) &&
+                canvas.canvasMagnifierStyle().factor == 2.1,
+            "system-synthesized precise Cocoa scrolling keeps its actual pixel delta");
+#endif
 }
 
 void compoundDraggingAndDefaultIsolation() {
@@ -379,6 +616,13 @@ void sourcePixelSupportSurvivesZoomAndSourceReplacement() {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
     QApplication app(argc, argv);
+    wheelAccumulationPublishesCompletedCreationEdits();
+    selectedWheelEditsPreserveDefaultsAndPublishUndoableFactors();
+    wheelPublishesHomogenizedSelectionAtTheFactorLimit();
+    wheelRemaindersResetAtInputAndEditingBoundaries();
+    wheelDirectionLimitsAndCocoaMouseClassification();
+    if (app.arguments().contains(QStringLiteral("--magnifier-wheel-only")))
+        return EXIT_SUCCESS;
     compoundDraggingAndDefaultIsolation();
     coincidentOneTimesLensGrip();
     originalDamageClosesThroughLaterFilterPasses();

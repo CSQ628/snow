@@ -428,6 +428,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool setCanvasMagnifierStyle(const SnowCanvasMagnifierStyle& style, quint32 properties,
                                  bool creationDefaults);
     bool adjustAngleValue(double deltaRadians);
+    bool adjustMagnifierFromWheel(const QWheelEvent& event);
     snow_canvas_wheel::StepAccumulator angleWheelSteps;
     std::uint64_t angleAdjustmentTarget = 0;
     Qt::KeyboardModifiers angleWheelModifiers = Qt::NoModifier;
@@ -1062,6 +1063,48 @@ SnowCanvasDistanceStyle SnowCanvasWidget::canvasDistanceStyle() const {
 
 SnowCanvasMagnifierStyle SnowCanvasWidget::canvasMagnifierStyle() const {
     return canvasStyleToolbarState().magnifierStyle;
+}
+
+bool SnowCanvasWidget::adjustMagnifierFromWheel(const QWheelEvent& event) {
+    return m_impl->adjustMagnifierFromWheel(event);
+}
+
+bool SnowCanvasWidget::Impl::adjustMagnifierFromWheel(const QWheelEvent& event) {
+    if (!interactionEnabled() || textInteraction.isActive())
+        return false;
+    const auto before = canvasStyleToolbarState();
+    if (canvasTool() == SnowCanvasTool::Angle ||
+        before.source == SnowCanvasStyleToolbarSource::SelectedAngle ||
+        (canvasTool() != SnowCanvasTool::Magnifier &&
+         before.source != SnowCanvasStyleToolbarSource::SelectedMagnifier))
+        return false;
+
+    auto input = snow_canvas_input::makeWheelInput(event);
+    if (!snow_canvas_wheel::usesPreciseDelta(event)) {
+        input.wheel.delta_x = event.angleDelta().x();
+        input.wheel.delta_y = event.angleDelta().y();
+        input.wheel.delta_kind = SNOW_WHEEL_DELTA_ANGLE;
+    }
+    if ((event.modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) !=
+        Qt::NoModifier) {
+        // Modified input ends the factor adjustment without enabling camera zoom
+        // when the host has disabled it. Leave the original event for normal routing.
+        input.wheel.delta_x = 0;
+        input.wheel.delta_y = 0;
+        static_cast<void>(processInput(input));
+        return false;
+    }
+    if (!dispatchInput(nullptr, input))
+        return false;
+    const auto after = canvasStyleToolbarState();
+    if (before.magnifierStyle.factor != after.magnifierStyle.factor ||
+        ((before.magnifierStyleMixed ^ after.magnifierStyleMixed) &
+         SnowCanvasMagnifierStylePropertyFactor) != 0) {
+        emit widget.styleEditCommitted(SnowCanvasMagnifierEdit{
+            after.magnifierStyle, SnowCanvasMagnifierStylePropertyFactor,
+            before.source != SnowCanvasStyleToolbarSource::SelectedMagnifier});
+    }
+    return true;
 }
 
 bool SnowCanvasWidget::setCanvasMagnifierStyle(const SnowCanvasMagnifierStyle& style,
@@ -3126,6 +3169,11 @@ bool SnowCanvasWidget::Impl::handleWheel(QWheelEvent* event) {
         return true;
     }
     angleWheelSteps.reset();
+
+    if (adjustMagnifierFromWheel(*event)) {
+        event->accept();
+        return true;
+    }
 
     const snow_canvas_text_editor_input::FontSizeWheelPlan plan =
         snow_canvas_text_editor_input::planFontSizeWheel(
