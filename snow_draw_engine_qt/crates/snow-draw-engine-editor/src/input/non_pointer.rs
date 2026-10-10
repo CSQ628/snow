@@ -7,7 +7,19 @@ impl Editor {
         event: WheelEvent,
     ) -> Result<InteractionOutput, ErrorCode> {
         if self.surface_size().width == 0 || self.surface_size().height == 0 {
+            self.magnifier_wheel = None;
             return Ok(InteractionOutput::default());
+        }
+
+        let adjusts_magnifier = !event.modifiers.ctrl
+            && !event.modifiers.alt
+            && !event.modifiers.meta
+            && self.state.active_tool != ActiveTool::Angle
+            && !self.has_homogeneous_angle_selection(document)
+            && (self.state.active_tool == ActiveTool::Magnifier
+                || self.has_homogeneous_magnifier_selection(document));
+        if !adjusts_magnifier {
+            self.magnifier_wheel = None;
         }
 
         if !event.modifiers.ctrl
@@ -35,34 +47,8 @@ impl Editor {
             });
         }
 
-        if !event.modifiers.ctrl
-            && !event.modifiers.alt
-            && !event.modifiers.meta
-            && (self.state.active_tool == ActiveTool::Magnifier
-                || self.has_homogeneous_magnifier_selection(document))
-        {
-            let steps = match event.delta_kind {
-                WheelDeltaKind::Angle => event.delta.y / 120.0,
-                WheelDeltaKind::Pixel => event.delta.y / 100.0,
-            };
-            let mut style = self.magnifier_style(document);
-            style.factor = ((style.factor + steps * 0.1) * 10.0)
-                .round()
-                .clamp(10.0, 100.0)
-                / 10.0;
-            if let Some(command) = self.set_magnifier_style_patch(
-                document,
-                style,
-                crate::MAGNIFIER_STYLE_PROPERTY_FACTOR,
-                !self.has_homogeneous_magnifier_selection(document),
-            )? {
-                self.queue_command(command);
-            }
-            return Ok(InteractionOutput {
-                consumed: true,
-                capture: PointerCaptureCommand::NoChange,
-                cursor: CursorCommand::NoChange,
-            });
+        if adjusts_magnifier {
+            return self.process_magnifier_wheel_event(document, event);
         }
 
         let delta_y = match event.delta_kind {

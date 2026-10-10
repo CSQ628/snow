@@ -57,6 +57,7 @@ void magnifierStylePatchesAndSynchronization() {
     style.factor = 7.3;
     style.showLeader = false;
     style.leaderArrowhead = SnowCanvasArrowhead::CrowfootOneOrMany;
+    style.arrowRatio = 2.3;
     style.cornerRadii = {3, 6, 9, 12};
     require(snow_canvas_types::toCanvasMagnifierStyle(
                 snow_canvas_types::toEngineMagnifierStyle(style)) == style,
@@ -71,6 +72,10 @@ void magnifierStylePatchesAndSynchronization() {
     after.styleToolbarState.magnifier_style.corner_radii.bottom_right = 15;
     require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
             "magnifier corner changes synchronize the toolbar independently");
+    before = after;
+    after.styleToolbarState.magnifier_style.arrow_ratio = 0.5;
+    require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
+            "magnifier arrow proportions synchronize the toolbar independently");
     before = after;
     after.styleToolbarState.magnifier_style_mixed = SnowCanvasMagnifierStylePropertyFactor;
     require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
@@ -97,6 +102,18 @@ void magnifierStylePatchesAndSynchronization() {
     expected.cornerRadii = style.cornerRadii;
     require(editor.canvasStyleToolbarState().magnifierStyle == expected,
             "corner patches preserve unrelated magnifier properties");
+    require(editor.setMagnifierStyleFromToolbar(style, SnowCanvasMagnifierStylePropertyArrowRatio),
+            "magnifier arrow proportion patch succeeds");
+    expected.arrowRatio = style.arrowRatio;
+    require(editor.canvasStyleToolbarState().magnifierStyle == expected,
+            "arrow proportion patches preserve unrelated magnifier properties");
+    for (double ratio : {0.4, 3.1, std::numeric_limits<double>::quiet_NaN()}) {
+        auto invalid = style;
+        invalid.arrowRatio = ratio;
+        require(!editor.setMagnifierStyleFromToolbar(invalid,
+                                                     SnowCanvasMagnifierStylePropertyArrowRatio),
+                "invalid arrow proportions leave magnifier defaults intact");
+    }
     style.factor = std::numeric_limits<double>::infinity();
     require(!editor.setMagnifierStyleFromToolbar(style, SnowCanvasMagnifierStylePropertyFactor),
             "nonfinite magnification is rejected");

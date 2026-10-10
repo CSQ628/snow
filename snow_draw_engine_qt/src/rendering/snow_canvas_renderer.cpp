@@ -724,11 +724,7 @@ void drawRectItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
     if (item.rect_shape == SNOW_DISPLAY_RECT_SHAPE_ELLIPSE) {
         fillPath.addEllipse(localRect);
     } else if (item.rect_shape == SNOW_DISPLAY_RECT_SHAPE_DIAMOND) {
-        fillPath.moveTo(localRect.center().x(), localRect.top());
-        fillPath.lineTo(localRect.right(), localRect.center().y());
-        fillPath.lineTo(localRect.center().x(), localRect.bottom());
-        fillPath.lineTo(localRect.left(), localRect.center().y());
-        fillPath.closeSubpath();
+        fillPath = snow_canvas_render_geometry::roundedDiamondPath(localRect, item.corner_radii);
     } else {
         fillPath = roundedRectPath(localRect, radii);
     }
@@ -855,12 +851,12 @@ void drawOwnedPathChunks(QPainter& painter, const ArrowRenderProjection& project
 }
 
 void drawArrowItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
-                   const SnowCanvasSceneItem& item) {
+                   const SnowCanvasSceneItem& item, double inheritedOpacity = 1.0) {
     painter.save();
     if (item.blend_mode == SNOW_BLEND_MODE_MULTIPLY) {
         painter.setCompositionMode(QPainter::CompositionMode_Multiply);
     }
-    painter.setOpacity(qBound(0.0, item.opacity, 1.0));
+    painter.setOpacity(inheritedOpacity * qBound(0.0, item.opacity, 1.0));
     const ArrowRenderProjection projection = arrowProjectionForScene(displayInfo);
     if (item.has_bound_text_element != 0 && item.arrow_text_overlay == 0 &&
         item.needsArrowTextClip(
@@ -1079,7 +1075,7 @@ void drawSceneItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
         break;
     case SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER:
         if (item.arrow_point_count >= 2)
-            drawArrowItem(painter, displayInfo, item);
+            drawArrowItem(painter, displayInfo, item, painter.opacity());
         snow_canvas_magnifier_renderer::render(painter, displayInfo, item, baseImageSources);
         break;
     default:
@@ -1105,20 +1101,17 @@ bool drawMagnifierMoveHandle(QPainter& painter, const OverlayDisplayInfo& displa
     const double diameter = qMin(width, height);
     const double unit = diameter / 14.0;
     const QRectF bounds(-diameter / 2.0, -diameter / 2.0, diameter, diameter);
-    // Keep the shadow and rim within the existing overlay and hit-test bounds.
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(15, 35, 65, 45));
-    painter.drawEllipse(bounds);
-    painter.setPen(QPen(toQColor(item.fill), 1.1 * unit));
-    painter.setBrush(toQColor(item.stroke));
-    painter.drawEllipse(bounds.adjusted(unit, 0.75 * unit, -unit, -1.25 * unit));
-
-    // A quiet six-dot grip remains recognizable at the handle's small screen size.
-    painter.setPen(Qt::NoPen);
+    painter.setPen(QPen(toQColor(item.stroke), item.stroke_width * projection.cameraZoom));
     painter.setBrush(toQColor(item.fill));
+    painter.drawEllipse(bounds);
+
+    // A compact drag grip stays legible without crowding the small circular control.
+    painter.scale(unit, unit);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(toQColor(item.stroke));
     for (const double x : {-1.5, 1.5}) {
-        for (const double y : {-3.0, 0.0, 3.0}) {
-            painter.drawEllipse(QPointF(x * unit, (y - 0.25) * unit), 0.8 * unit, 0.8 * unit);
+        for (const double y : {-2.5, 0.0, 2.5}) {
+            painter.drawEllipse(QPointF(x, y), 0.65, 0.65);
         }
     }
     painter.restore();

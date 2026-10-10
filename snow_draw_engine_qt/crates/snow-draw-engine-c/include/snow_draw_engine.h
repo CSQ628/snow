@@ -667,6 +667,7 @@ typedef struct SnowMagnifierStyle {
     uint8_t reserved[3];
     SnowArrowhead leader_arrowhead;
     SnowCornerRadii corner_radii;
+    double arrow_ratio;
 } SnowMagnifierStyle;
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_SHAPE (1u << 0)
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE (1u << 1)
@@ -675,7 +676,8 @@ typedef struct SnowMagnifierStyle {
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_SHOW_LEADER (1u << 4)
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD (1u << 5)
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_CORNER_RADII (1u << 6)
-#define SNOW_MAGNIFIER_STYLE_PROPERTY_ALL ((1u << 7) - 1u)
+#define SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO (1u << 7)
+#define SNOW_MAGNIFIER_STYLE_PROPERTY_ALL ((1u << 8) - 1u)
 
 typedef struct SnowStyleToolbarState {
     SnowStyleToolbarSource source;

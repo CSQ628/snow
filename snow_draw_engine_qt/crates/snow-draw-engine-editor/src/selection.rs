@@ -123,6 +123,9 @@ impl Editor {
             arrows: next_arrows,
         };
         if self.state.selection != next {
+            if self.state.selection.ids != next.ids {
+                self.magnifier_wheel = None;
+            }
             if !matches!(&self.state.interaction, InteractionState::Idle) {
                 self.cancel_interaction();
             }
@@ -201,6 +204,9 @@ impl Editor {
         let current_arrows = Self::selection_arrows_from_ids(document, &filtered_ids);
         let selection_changed = previous_selection.ids != filtered_ids
             || previous_selection.primary != filtered_primary;
+        if selection_changed {
+            self.magnifier_wheel = None;
+        }
         let selection_members_changed = previous_selection.elements != current_elements
             || previous_selection.arrows != current_arrows;
         let next_elements = current_elements;

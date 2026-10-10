@@ -794,6 +794,7 @@ struct MagnifierStylePatch {
     factor: Option<MagnifierFactor>,
     show_leader: Option<bool>,
     leader_arrowhead: Option<Arrowhead>,
+    arrow_ratio: Option<ArrowRatio>,
     corner_radius: Option<CornerRadius>,
     /// Per-corner radii in top-left, top-right, bottom-right, bottom-left order.
     /// Mutually exclusive with corner_radius; enforced by the application.
@@ -1363,7 +1364,7 @@ mod tests {
                             Some(json!({owner:"owned", "expected_revision":1,
                         "target":"magnifier", "style":{"shape":shape, "factor":factor,
                         "stroke_width":0.0, "stroke":[245,34,45,255], "show_leader":false,
-                        "leader_arrowhead":"indented_triangle", "corner_radii":[3,6,9,12]}}))
+                        "leader_arrowhead":"indented_triangle", "arrow_ratio":0.5, "corner_radii":[3,6,9,12]}}))
                         )
                         .is_ok(),
                         "{name}"
@@ -1377,6 +1378,8 @@ mod tests {
                 json!({"show_leader":1}),
                 json!({"fill":[0,0,0,255]}),
                 json!({"leader_arrowhead":"unsupported"}),
+                json!({"arrow_ratio":0.4}),
+                json!({"arrow_ratio":3.1}),
                 json!({"corner_radius":-1.0}),
                 json!({"corner_radii":[1,2,3]}),
             ] {

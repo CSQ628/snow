@@ -234,6 +234,7 @@ pub(crate) struct EditSelectionState {
     pub(crate) preview_arrows: Vec<SelectionArrowState>,
     pub(crate) original_bounds: SelectionBounds,
     pub(crate) preview_bounds: SelectionBounds,
+    pub(crate) preview_transform: crate::geometry::SelectionTransform,
     pub(crate) mode: SelectionEditMode,
 }
 
@@ -455,6 +456,7 @@ pub(crate) enum InteractionState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct EditMagnifierState {
     pub pointer_id: u32,
+    pub button: PointerButton,
     pub id: ElementId,
     pub original: snow_draw_engine_document::MagnifierData,
     pub preview: snow_draw_engine_document::MagnifierData,

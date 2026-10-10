@@ -187,6 +187,8 @@ QJsonObject magnifierValue(const SnowCanvasMagnifierStyle& style) {
     putDouble(&value, QStringLiteral("factor"), style.factor);
     value.insert(QStringLiteral("show_leader"), style.showLeader);
     putEnum(&value, QStringLiteral("leader_arrowhead"), style.leaderArrowhead);
+    putDouble(&value, QStringLiteral("arrow_ratio"),
+              snowCanvasNormalizeArrowRatio(style.arrowRatio));
     value.insert(QStringLiteral("corner_radii"), cornerRadiiValue(style.cornerRadii));
     return value;
 }
@@ -207,6 +209,8 @@ void readMagnifierValue(const QJsonObject& object, SnowCanvasMagnifierStyle* sty
              static_cast<int>(SnowCanvasArrowhead::IndentedTriangle), &style->leaderArrowhead);
     style->strokeWidth = bounded(style->strokeWidth, 0.0, 72.0);
     style->factor = bounded(style->factor, 1.0, 10.0);
+    readDouble(object, QStringLiteral("arrow_ratio"), &style->arrowRatio);
+    style->arrowRatio = std::clamp(snowCanvasNormalizeArrowRatio(style->arrowRatio), 0.5, 3.0);
     readCornerRadii(object, &style->cornerRadii);
     style->cornerRadii.topLeft = bounded(style->cornerRadii.topLeft, 0.0, 83.0);
     style->cornerRadii.topRight = bounded(style->cornerRadii.topRight, 0.0, 83.0);

@@ -97,6 +97,7 @@ bool styleToolbarStatesEqual(const SnowStyleToolbarState& lhs, const SnowStyleTo
            lhs.magnifier_style.factor == rhs.magnifier_style.factor &&
            lhs.magnifier_style.show_leader == rhs.magnifier_style.show_leader &&
            lhs.magnifier_style.leader_arrowhead == rhs.magnifier_style.leader_arrowhead &&
+           lhs.magnifier_style.arrow_ratio == rhs.magnifier_style.arrow_ratio &&
            cornerRadiiEqual(lhs.magnifier_style.corner_radii, rhs.magnifier_style.corner_radii) &&
            lhs.magnifier_style_mixed == rhs.magnifier_style_mixed;
 }

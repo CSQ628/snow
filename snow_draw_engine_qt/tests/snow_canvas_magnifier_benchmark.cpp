@@ -98,8 +98,13 @@ bool benchmark(const std::string& scenario, int iterations) {
         }
     }
     const auto firstLens = items.size();
-    for (int index = 0; index < count; ++index)
-        items.push_back(lens(index));
+    const bool layeredOpacity = scenario == "layered_opacity";
+    for (int index = 0; index < count; ++index) {
+        auto item = lens(index);
+        if (layeredOpacity)
+            item.opacity = 0.5;
+        items.push_back(item);
+    }
     std::vector<SnowCanvasOverlayItem> guides;
     if (scenario == "creation" || scenario == "selected") {
         for (const auto& item : items)
@@ -112,7 +117,13 @@ bool benchmark(const std::string& scenario, int iterations) {
             row[x] = qRgb(x % 256, y % 256, (x + y) % 256);
     }
     const auto originalKey = original.cacheKey();
-    const QList<SnowCanvasBaseImageSource> sources{{original, QRectF(0, 0, 1920, 1080), {}}};
+    QList<SnowCanvasBaseImageSource> sources{{original, QRectF(0, 0, 1920, 1080), {}}};
+    if (layeredOpacity) {
+        QImage patch(300, 40, QImage::Format_ARGB32_Premultiplied);
+        patch.fill(QColor(255, 230, 40, 220));
+        sources.append({patch, QRectF(480, 480, 300, 40), {}});
+    }
+    const auto patchKey = layeredOpacity ? sources.back().image.cacheKey() : 0;
     QImage output(original.size(), QImage::Format_ARGB32_Premultiplied);
     SceneDisplayInfo info{};
     info.surface_width = 1920;
@@ -157,22 +168,31 @@ bool benchmark(const std::string& scenario, int iterations) {
                                                  static_cast<std::uint32_t>(guides.size()),
                                                  request.exposedRegion);
         painter.end();
-        const double milliseconds = timer.nsecsElapsed() / 1000000.0;
+        const double milliseconds = static_cast<double>(timer.nsecsElapsed()) / 1000000.0;
         if (frame >= 0)
             samples.push_back(milliseconds);
         const auto diagnostics = snow_canvas_magnifier_renderer::diagnosticsForCurrentThread();
         sourceDraws = diagnostics.sourceLayerDrawCount;
         const auto effects = snow_canvas_renderer::filterRenderDiagnosticsForCurrentThread();
+        const auto expectedDraws =
+            layeredOpacity ? diagnostics.compositedTileCount * 2u : static_cast<std::size_t>(count);
+        const bool validCompositing =
+            layeredOpacity ? diagnostics.compositedTileCount >= static_cast<std::size_t>(count) &&
+                                 diagnostics.peakCompositingPixelCount <= 256u * 256u
+                           : diagnostics.compositedTileCount == 0;
         if (effects.usedFilterPath || effects.replayedItemCount != 0 ||
-            original.cacheKey() != originalKey || sourceDraws != static_cast<std::size_t>(count)) {
+            original.cacheKey() != originalKey || sourceDraws != expectedDraws ||
+            !validCompositing || (layeredOpacity && sources.back().image.cacheKey() != patchKey)) {
             std::cerr << "magnifier benchmark unexpectedly replayed/copied source content\n";
             return false;
         }
     }
     std::sort(samples.begin(), samples.end());
-    const double mean = std::accumulate(samples.begin(), samples.end(), 0.0) / samples.size();
+    const double mean =
+        std::accumulate(samples.begin(), samples.end(), 0.0) / static_cast<double>(samples.size());
     const auto percentile = [&](double fraction) {
-        return samples[static_cast<std::size_t>((samples.size() - 1) * fraction)];
+        return samples[static_cast<std::size_t>(static_cast<double>(samples.size() - 1) *
+                                                fraction)];
     };
     std::cout << scenario << "," << count << "," << iterations << "," << std::fixed
               << std::setprecision(3) << mean << "," << percentile(0.5) << "," << percentile(0.95)
@@ -203,12 +223,14 @@ int main(int argc, char** argv) {
         } else {
             std::cerr
                 << "usage: snow-canvas-magnifier-benchmark [--iterations N] "
-                   "[--scenario single|many|lens_drag|source_drag|annotations|creation|selected]\n";
+                   "[--scenario single|many|lens_drag|source_drag|annotations|creation|selected|"
+                   "layered_opacity]\n";
             return 2;
         }
     }
-    const std::vector<std::string> scenarios{"single",      "many",     "lens_drag", "source_drag",
-                                             "annotations", "creation", "selected"};
+    const std::vector<std::string> scenarios{"single",      "many",           "lens_drag",
+                                             "source_drag", "annotations",    "creation",
+                                             "selected",    "layered_opacity"};
     if (!scenario.empty() &&
         std::find(scenarios.begin(), scenarios.end(), scenario) == scenarios.end())
         return 2;

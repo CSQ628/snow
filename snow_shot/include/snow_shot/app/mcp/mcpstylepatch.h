@@ -180,10 +180,11 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         allowed = {QStringLiteral("stroke"), QStringLiteral("stroke_width"), QStringLiteral("unit"),
                    QStringLiteral("decimal_places")};
     else if (target == QStringLiteral("magnifier"))
-        allowed = {QStringLiteral("shape"),         QStringLiteral("stroke"),
-                   QStringLiteral("stroke_width"),  QStringLiteral("factor"),
-                   QStringLiteral("show_leader"),   QStringLiteral("leader_arrowhead"),
-                   QStringLiteral("corner_radius"), QStringLiteral("corner_radii")};
+        allowed = {QStringLiteral("shape"),        QStringLiteral("stroke"),
+                   QStringLiteral("stroke_width"), QStringLiteral("factor"),
+                   QStringLiteral("show_leader"),  QStringLiteral("leader_arrowhead"),
+                   QStringLiteral("arrow_ratio"),  QStringLiteral("corner_radius"),
+                   QStringLiteral("corner_radii")};
     else if (target == QStringLiteral("arrow"))
         allowed = {QStringLiteral("stroke"),           QStringLiteral("stroke_width"),
                    QStringLiteral("stroke_style"),     QStringLiteral("start_arrowhead"),
@@ -318,13 +319,15 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         style.showLeader = patch.value(QStringLiteral("show_leader")).toBool(style.showLeader);
         style.leaderArrowhead = static_cast<SnowCanvasArrowhead>(
             enumeration("leader_arrowhead", static_cast<int>(style.leaderArrowhead)));
+        style.arrowRatio = number("arrow_ratio", style.arrowRatio);
         const QHash<QString, quint32> properties{
             {QStringLiteral("shape"), SnowCanvasMagnifierStylePropertyShape},
             {QStringLiteral("stroke"), SnowCanvasMagnifierStylePropertyStrokeColor},
             {QStringLiteral("stroke_width"), SnowCanvasMagnifierStylePropertyStrokeWidth},
             {QStringLiteral("factor"), SnowCanvasMagnifierStylePropertyFactor},
             {QStringLiteral("show_leader"), SnowCanvasMagnifierStylePropertyShowLeader},
-            {QStringLiteral("leader_arrowhead"), SnowCanvasMagnifierStylePropertyLeaderArrowhead}};
+            {QStringLiteral("leader_arrowhead"), SnowCanvasMagnifierStylePropertyLeaderArrowhead},
+            {QStringLiteral("arrow_ratio"), SnowCanvasMagnifierStylePropertyArrowRatio}};
         const quint32 cornerProperties = patch.contains(QStringLiteral("corner_radius")) ||
                                                  patch.contains(QStringLiteral("corner_radii"))
                                              ? SnowCanvasMagnifierStylePropertyCornerRadius

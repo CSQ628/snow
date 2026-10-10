@@ -20,6 +20,11 @@ pub struct MagnifierData {
     pub factor: f64,
     pub show_leader: bool,
     pub leader_arrowhead: Option<Arrowhead>,
+    #[serde(
+        default = "snow_draw_engine_core::arrow::default_arrow_ratio",
+        deserialize_with = "snow_draw_engine_core::arrow::deserialize_arrow_ratio"
+    )]
+    pub arrow_ratio: f64,
     #[serde(default = "default_corner_radii")]
     pub corner_radii: CornerRadii,
     pub opacity: f64,
@@ -48,6 +53,7 @@ impl Default for MagnifierData {
             factor: 2.0,
             show_leader: true,
             leader_arrowhead: None,
+            arrow_ratio: 1.0,
             corner_radii: default_corner_radii(),
             opacity: 1.0,
         }
@@ -74,7 +80,12 @@ impl MagnifierData {
             stroke: self.stroke,
             stroke_width: 0.0,
             stroke_style: StrokeStyle::Solid,
-            corner_radii: crate::normalize_corner_radii(self.width, self.height, self.corner_radii),
+            corner_radii: crate::normalize_shape_corner_radii(
+                self.shape,
+                self.width,
+                self.height,
+                self.corner_radii,
+            ),
             opacity: self.opacity,
         }
     }
@@ -84,7 +95,8 @@ impl MagnifierData {
             width: self.width * self.factor,
             height: self.height * self.factor,
             stroke_width: self.stroke_width,
-            corner_radii: crate::normalize_corner_radii(
+            corner_radii: crate::normalize_shape_corner_radii(
+                self.shape,
                 self.width * self.factor,
                 self.height * self.factor,
                 self.corner_radii,
@@ -135,7 +147,7 @@ impl MagnifierData {
             return None;
         }
         // Rounded corners can intersect the ray before the bounding rectangle.
-        let mut low = if self.shape == HighlightShape::Rectangle {
+        let mut low = if self.shape != HighlightShape::Ellipse {
             0.0
         } else {
             length / metric
@@ -179,6 +191,8 @@ impl MagnifierData {
             self.leader_arrowhead,
         )
         .map(|mut arrow| {
+            arrow.arrow_ratio =
+                snow_draw_engine_core::arrow::normalize_arrow_ratio(self.arrow_ratio);
             arrow.opacity = self.opacity;
             arrow
         })
@@ -196,6 +210,7 @@ pub fn validate_magnifier(value: &MagnifierData) -> Result<(), ErrorCode> {
         value.rotation,
         value.stroke_width,
         value.factor,
+        value.arrow_ratio,
         value.opacity,
         value.corner_radii.top_left,
         value.corner_radii.top_right,
@@ -216,6 +231,7 @@ pub fn validate_magnifier(value: &MagnifierData) -> Result<(), ErrorCode> {
         .any(|radius| *radius < 0.0)
         || !(0.0..=72.0).contains(&value.stroke_width)
         || !(1.0..=10.0).contains(&value.factor)
+        || !(0.5..=3.0).contains(&value.arrow_ratio)
         || !(0.0..=1.0).contains(&value.opacity)
         || !(value.width * value.factor).is_finite()
         || !(value.height * value.factor).is_finite()
@@ -283,6 +299,10 @@ fn contour_distance(
     x: f64,
     y: f64,
 ) -> f64 {
+    if shape == HighlightShape::Diamond {
+        return crate::RoundedDiamond::new(a * 2.0, b * 2.0, radii)
+            .exterior_distance(Point::new(x, y));
+    }
     if shape == HighlightShape::Rectangle {
         let mut distance = (x.abs() - a).max(0.0).hypot((y.abs() - b).max(0.0));
         for (sx, sy, radius) in [
@@ -303,22 +323,7 @@ fn contour_distance(
     let y = y.abs();
     match shape {
         HighlightShape::Rectangle => unreachable!(),
-        HighlightShape::Diamond => {
-            if x / a + y / b <= 1.0 {
-                return 0.0;
-            }
-            let ax = a;
-            let ay = 0.0;
-            let bx = 0.0;
-            let by = b;
-            let scale = a.max(b).max(x).max(y).max(1.0);
-            let dx = (bx - ax) / scale;
-            let dy = (by - ay) / scale;
-            let px = (x - ax) / scale;
-            let py = (y - ay) / scale;
-            let t = ((px * dx + py * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
-            (px - dx * t).hypot(py - dy * t) * scale
-        }
+        HighlightShape::Diamond => unreachable!(),
         HighlightShape::Ellipse => {
             if (x / a).hypot(y / b) <= 1.0 {
                 return 0.0;
@@ -349,6 +354,138 @@ fn contour_distance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn magnifier_leader_proportions_match_arrow_tool_geometry() {
+        use snow_draw_engine_core::arrow::ArrowEndpointPosition;
+        for head in [
+            Arrowhead::Arrow,
+            Arrowhead::Bar,
+            Arrowhead::Dot,
+            Arrowhead::Circle,
+            Arrowhead::CircleOutline,
+            Arrowhead::Triangle,
+            Arrowhead::TriangleOutline,
+            Arrowhead::Diamond,
+            Arrowhead::DiamondOutline,
+            Arrowhead::CrowfootOne,
+            Arrowhead::CrowfootMany,
+            Arrowhead::CrowfootOneOrMany,
+            Arrowhead::IndentedTriangle,
+        ] {
+            let value = MagnifierData {
+                source_center: Point::new(300.0, 0.0),
+                width: 40.0,
+                height: 40.0,
+                leader_arrowhead: Some(head),
+                ..Default::default()
+            };
+            let mut expected = value.leader().unwrap();
+            let baseline =
+                crate::arrowhead_render_primitives(&expected, ArrowEndpointPosition::End);
+            for ratio in [0.5, 1.0, 1.7, 3.0] {
+                let scaled = MagnifierData {
+                    arrow_ratio: ratio,
+                    ..value
+                };
+                validate_magnifier(&scaled).unwrap();
+                let leader = scaled.leader().unwrap();
+                expected.arrow_ratio = ratio;
+                let primitives =
+                    crate::arrowhead_render_primitives(&leader, ArrowEndpointPosition::End);
+                assert_eq!(
+                    primitives,
+                    crate::arrowhead_render_primitives(&expected, ArrowEndpointPosition::End)
+                );
+                assert_eq!(leader.stroke_width, value.stroke_width);
+                if ratio != 1.0 {
+                    assert_ne!(primitives, baseline);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn magnifier_arrow_ratio_serialization_defaults_and_validation() {
+        let mut json = serde_json::to_value(MagnifierData::default()).unwrap();
+        json.as_object_mut().unwrap().remove("arrow_ratio");
+        assert_eq!(
+            serde_json::from_value::<MagnifierData>(json)
+                .unwrap()
+                .arrow_ratio,
+            1.0
+        );
+        for ratio in [0.5, 1.7, 3.0] {
+            let value = MagnifierData {
+                arrow_ratio: ratio,
+                ..Default::default()
+            };
+            assert_eq!(
+                serde_json::from_slice::<MagnifierData>(&serde_json::to_vec(&value).unwrap())
+                    .unwrap(),
+                value
+            );
+        }
+        for ratio in [f64::NAN, f64::INFINITY, -1.0, 0.0, 0.4, 3.1] {
+            assert_eq!(
+                validate_magnifier(&MagnifierData {
+                    arrow_ratio: ratio,
+                    ..Default::default()
+                }),
+                Err(ErrorCode::InvalidArgument)
+            );
+        }
+    }
+
+    #[test]
+    fn rounded_diamond_leader_follows_each_actual_tip_and_rotation() {
+        for index in 0..4 {
+            for rotation in [0.0, 0.7] {
+                let direction = [
+                    Point::new(0.0, -1.0),
+                    Point::new(1.0, 0.0),
+                    Point::new(0.0, 1.0),
+                    Point::new(-1.0, 0.0),
+                ][index];
+                let radii = CornerRadii {
+                    top_left: 8.0,
+                    top_right: 12.0,
+                    bottom_right: 16.0,
+                    bottom_left: 20.0,
+                };
+                let (sin, cos) = f64::sin_cos(rotation);
+                let source = Point::new(
+                    200.0 * (direction.x * cos - direction.y * sin),
+                    200.0 * (direction.x * sin + direction.y * cos),
+                );
+                let value = MagnifierData {
+                    width: 40.0,
+                    height: 40.0,
+                    shape: HighlightShape::Diamond,
+                    source_center: source,
+                    corner_radii: radii,
+                    rotation,
+                    ..Default::default()
+                };
+                let start = value.leader().unwrap().global_points()[0];
+                let radius = [8.0, 12.0, 16.0, 20.0][index];
+                let expected = 40.0 - radius * (2.0_f64.sqrt() - 1.0)
+                    + value.stroke_width
+                    + SHAPE_CONNECTOR_GAP;
+                assert!((start.x.hypot(start.y) - expected).abs() < 1e-8);
+                let sharp = MagnifierData {
+                    corner_radii: CornerRadii::default(),
+                    ..value
+                };
+                assert!(
+                    start.x.hypot(start.y)
+                        < sharp.leader().unwrap().global_points()[0]
+                            .x
+                            .hypot(sharp.leader().unwrap().global_points()[0].y)
+                );
+            }
+        }
+    }
 
     #[test]
     fn magnifier_rounded_corners_default_normalize_and_hit_test() {
@@ -507,6 +644,7 @@ mod tests {
                         magnified_center: center,
                         rotation,
                         stroke_width,
+                        corner_radii: CornerRadii::default(),
                         ..Default::default()
                     };
                     let points = value.leader().unwrap().global_points();
@@ -534,6 +672,7 @@ mod tests {
                     width: 80.0,
                     height: 50.0,
                     stroke_width,
+                    corner_radii: CornerRadii::default(),
                     ..Default::default()
                 };
                 for x in [

@@ -244,6 +244,18 @@ endif()
 
 if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     enable_testing()
+    add_executable(snow-canvas-rounded-diamond-tests tests/snow_canvas_rounded_diamond_tests.cpp)
+    target_include_directories(snow-canvas-rounded-diamond-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-rounded-diamond-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-rounded-diamond-tests)
+    add_test(NAME snow-canvas-rounded-diamond-tests COMMAND snow-canvas-rounded-diamond-tests)
+    snow_shot_offscreen_qpa_environment(_snow_canvas_diamond_qpa_environment)
+    set_tests_properties(snow-canvas-rounded-diamond-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT "${_snow_canvas_diamond_qpa_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_executable(snow-canvas-magnifier-render-tests tests/snow_canvas_magnifier_render_tests.cpp)
     target_include_directories(snow-canvas-magnifier-render-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}

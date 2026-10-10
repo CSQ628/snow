@@ -1432,6 +1432,7 @@ mod tests {
         editor.select_element(&document, text_id).unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             original_magnifiers: Vec::new(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,
@@ -1504,6 +1505,7 @@ mod tests {
         editor.select_element(&document, text_id).unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             original_magnifiers: Vec::new(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,

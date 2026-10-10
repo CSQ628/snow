@@ -519,7 +519,8 @@ bool validMagnifierStyle(const SnowCanvasMagnifierStyle& style) {
     }
     return style.stroke.isValid() && std::isfinite(style.strokeWidth) && style.strokeWidth >= 0.0 &&
            style.strokeWidth <= 72.0 && std::isfinite(style.factor) && style.factor >= 1.0 &&
-           style.factor <= 10.0 &&
+           style.factor <= 10.0 && std::isfinite(style.arrowRatio) && style.arrowRatio >= 0.5 &&
+           style.arrowRatio <= 3.0 &&
            enumInRange(style.shape, SnowCanvasRectangleShape::Rectangle,
                        SnowCanvasRectangleShape::Diamond) &&
            enumInRange(style.leaderArrowhead, SnowCanvasArrowhead::None,
@@ -533,7 +534,8 @@ SnowCanvasMagnifierStyle toCanvasMagnifierStyle(const SnowMagnifierStyle& style)
             style.factor,
             style.show_leader != 0,
             toCanvasArrowhead(style.leader_arrowhead),
-            toCanvasCornerRadii(style.corner_radii)};
+            toCanvasCornerRadii(style.corner_radii),
+            style.arrow_ratio};
 }
 
 SnowMagnifierStyle toEngineMagnifierStyle(const SnowCanvasMagnifierStyle& style) {
@@ -544,6 +546,7 @@ SnowMagnifierStyle toEngineMagnifierStyle(const SnowCanvasMagnifierStyle& style)
     result.factor = style.factor;
     result.show_leader = style.showLeader ? 1 : 0;
     result.leader_arrowhead = toEngineArrowhead(style.leaderArrowhead);
+    result.arrow_ratio = style.arrowRatio;
     result.corner_radii = toEngineCornerRadii(style.cornerRadii);
     return result;
 }

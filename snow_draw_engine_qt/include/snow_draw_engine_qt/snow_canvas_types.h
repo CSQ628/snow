@@ -216,8 +216,9 @@ enum SnowCanvasMagnifierStyleProperty : quint32 {
     SnowCanvasMagnifierStylePropertyShowLeader = 1u << 4,
     SnowCanvasMagnifierStylePropertyLeaderArrowhead = 1u << 5,
     SnowCanvasMagnifierStylePropertyCornerRadius = 1u << 6,
+    SnowCanvasMagnifierStylePropertyArrowRatio = 1u << 7,
 };
-inline constexpr quint32 SnowCanvasMagnifierStyleAllProperties = (1u << 7) - 1u;
+inline constexpr quint32 SnowCanvasMagnifierStyleAllProperties = (1u << 8) - 1u;
 
 enum class SnowCanvasFilterType {
     Mosaic,
@@ -437,13 +438,15 @@ struct SnowCanvasMagnifierStyle {
     bool showLeader = true;
     SnowCanvasArrowhead leaderArrowhead = SnowCanvasArrowhead::None;
     SnowCanvasCornerRadii cornerRadii{6.0, 6.0, 6.0, 6.0};
+    double arrowRatio = 1.0;
 };
 
 inline bool operator==(const SnowCanvasMagnifierStyle& lhs, const SnowCanvasMagnifierStyle& rhs) {
     return lhs.shape == rhs.shape && lhs.stroke == rhs.stroke &&
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
            snowCanvasExactDoubleEqual(lhs.factor, rhs.factor) && lhs.showLeader == rhs.showLeader &&
-           lhs.leaderArrowhead == rhs.leaderArrowhead && lhs.cornerRadii == rhs.cornerRadii;
+           lhs.leaderArrowhead == rhs.leaderArrowhead && lhs.cornerRadii == rhs.cornerRadii &&
+           snowCanvasExactDoubleEqual(lhs.arrowRatio, rhs.arrowRatio);
 }
 
 inline bool operator!=(const SnowCanvasMagnifierStyle& lhs, const SnowCanvasMagnifierStyle& rhs) {

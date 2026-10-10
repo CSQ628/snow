@@ -38,6 +38,8 @@ mod mutations;
 #[cfg(test)]
 mod pen_highlight_angle_tests;
 #[cfg(test)]
+mod rounded_diamond_tests;
+#[cfg(test)]
 mod spotlight_shape_tests;
 mod text_commands;
 mod viewports;
@@ -196,6 +198,7 @@ impl Engine {
             presentation_update_depth: 0,
             pending_viewports: BTreeSet::new(),
         };
+        engine.editor.reset_magnifier_wheel_input();
         engine.scene_cache.sync(&engine.model, None);
         let _ = engine.refresh_all_viewports();
         engine

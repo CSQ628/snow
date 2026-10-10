@@ -1505,7 +1505,9 @@ QRegion ScreenshotCanvasRenderer::canvasImageDamageRegion(const QRectF& canvasRe
     if (viewRect.isEmpty()) {
         return {};
     }
-    return QRegion(viewRect.intersected(m_canvas.rect()));
+    // Preserve offscreen originals until the canvas expands lens/filter dependencies.
+    // Direct QWidget updates and the final dependency region are clipped by the canvas.
+    return QRegion(viewRect);
 }
 
 void ScreenshotCanvasRenderer::setOcrFilteredImage(QImage image, const QRectF& canvasRect) {

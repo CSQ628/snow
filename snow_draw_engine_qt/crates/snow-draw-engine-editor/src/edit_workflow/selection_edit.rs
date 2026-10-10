@@ -79,6 +79,7 @@ impl Editor {
             original_arrows: request.original_arrows,
             original_bounds: request.original_bounds,
             preview_bounds: request.original_bounds,
+            preview_transform: SelectionTransform::Identity,
             mode,
         }
     }
@@ -102,7 +103,8 @@ impl Editor {
         );
         let preview_changed = next_preview.elements != state.preview_elements
             || next_preview.arrows != state.preview_arrows
-            || next_preview.bounds != state.preview_bounds;
+            || next_preview.bounds != state.preview_bounds
+            || next_preview.transform != state.preview_transform;
         let guides_changed = next_preview.snap_guides != self.state.ui.snap_guides;
         if !preview_changed && !guides_changed {
             return;
@@ -118,6 +120,7 @@ impl Editor {
             active.preview_elements = next_preview.elements.clone();
             active.preview_arrows = next_preview.arrows.clone();
             active.preview_bounds = next_preview.bounds;
+            active.preview_transform = next_preview.transform;
         }
         if preview_changed {
             self.bump_scene_state_revision();
@@ -145,7 +148,15 @@ impl Editor {
         if state.duplicate {
             self.bump_scene_state_revision();
         }
-        if state.preview_elements == state.original_elements
+        // A centred reflection can move both regions while their union proxy stays unchanged.
+        let magnifiers = self.selection_magnifier_previews(document, &state);
+        let magnifiers_changed = magnifiers.iter().any(|preview| {
+            state.original_magnifiers.iter().any(|original| {
+                preview.id == original.id && preview.magnifier != original.magnifier
+            })
+        });
+        if !magnifiers_changed
+            && state.preview_elements == state.original_elements
             && state.preview_arrows == state.original_arrows
         {
             return Ok(());
@@ -208,7 +219,6 @@ impl Editor {
         } else {
             None
         };
-        let magnifiers = self.selection_magnifier_previews(document, &state);
         for value in &magnifiers {
             snow_draw_engine_document::validate_magnifier(&value.magnifier)?;
             transaction.update_magnifier(value.id, value.magnifier);
@@ -285,6 +295,9 @@ impl Editor {
                     base_dy: delta_y,
                     modifiers,
                 });
+                let transform = SelectionTransform::Move {
+                    delta: Point::new(snapped.dx, snapped.dy),
+                };
                 SelectionEditPreview {
                     elements: state
                         .original_elements
@@ -292,10 +305,8 @@ impl Editor {
                         .map(|element| SelectionRectState {
                             id: element.id,
                             rect: RectangleData {
-                                center: Point {
-                                    x: element.rect.center.x + snapped.dx,
-                                    y: element.rect.center.y + snapped.dy,
-                                },
+                                center: transform
+                                    .map_point(&state.original_bounds, element.rect.center),
                                 ..element.rect
                             },
                         })
@@ -319,6 +330,7 @@ impl Editor {
                         ..state.original_bounds
                     },
                     snap_guides: snapped.guides,
+                    transform,
                 }
             }
             SelectionEditMode::Resize {
@@ -355,6 +367,9 @@ impl Editor {
                 } else {
                     raw_rotation_delta
                 };
+                let transform = SelectionTransform::Rotate {
+                    angle: rotation_delta,
+                };
                 SelectionEditPreview {
                     elements: state
                         .original_elements
@@ -362,11 +377,8 @@ impl Editor {
                         .map(|element| SelectionRectState {
                             id: element.id,
                             rect: RectangleData {
-                                center: rotate_point_around(
-                                    element.rect.center,
-                                    state.original_bounds.center,
-                                    rotation_delta,
-                                ),
+                                center: transform
+                                    .map_point(&state.original_bounds, element.rect.center),
                                 rotation: normalize_rotation(
                                     element.rect.rotation + rotation_delta,
                                 ),
@@ -396,6 +408,7 @@ impl Editor {
                         ..state.original_bounds
                     },
                     snap_guides: Vec::new(),
+                    transform,
                 }
             }
             SelectionEditMode::CornerRadius { corner } => SelectionEditPreview {
@@ -409,6 +422,7 @@ impl Editor {
                 arrows: state.original_arrows.clone(),
                 bounds: state.original_bounds,
                 snap_guides: Vec::new(),
+                transform: SelectionTransform::Identity,
             },
         }
     }
@@ -466,6 +480,7 @@ impl Editor {
             arrows,
             bounds,
             snap_guides,
+            transform: geometry.transform(),
         }
     }
 
@@ -989,6 +1004,7 @@ mod tests {
         };
         let state = EditSelectionState {
             original_magnifiers: Vec::new(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,
@@ -1515,6 +1531,7 @@ mod tests {
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             original_magnifiers: Vec::new(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,
@@ -1588,6 +1605,7 @@ mod tests {
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             original_magnifiers: Vec::new(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,
@@ -1667,6 +1685,7 @@ mod tests {
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             original_magnifiers: Vec::new(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,
@@ -1841,6 +1860,7 @@ mod tests {
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             original_magnifiers: Vec::new(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,

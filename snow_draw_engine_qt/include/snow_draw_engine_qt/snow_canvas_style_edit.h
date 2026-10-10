@@ -121,6 +121,8 @@ inline void snowCanvasMergeStyle(SnowCanvasMagnifierStyle& target,
         target.leaderArrowhead = value.leaderArrowhead;
     if (properties & SnowCanvasMagnifierStylePropertyCornerRadius)
         target.cornerRadii = value.cornerRadii;
+    if (properties & SnowCanvasMagnifierStylePropertyArrowRatio)
+        target.arrowRatio = value.arrowRatio;
 }
 
 inline void snowCanvasMergeStyle(SnowCanvasDistanceStyle& target,

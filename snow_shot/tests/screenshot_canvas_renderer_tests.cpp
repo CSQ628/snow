@@ -1150,6 +1150,77 @@ void originalImageDamageRepaintsDistantMagnifiers() {
     canvas.setCustomRenderer(nullptr);
 }
 
+void mixedVisibleAndOffscreenOriginalDamageRepaintsMagnifiers() {
+    SnowCanvasWidget canvas;
+    canvas.resize(200, 140);
+    canvas.show();
+    QApplication::processEvents();
+    require(canvas.setViewportCamera(100, 70, 1), "configure offscreen original damage camera");
+    ScreenshotCanvasRenderer renderer(canvas);
+    QImage localImage(200, 140, QImage::Format_ARGB32_Premultiplied);
+    localImage.fill(Qt::blue);
+    QImage samplingImage(300, 140, QImage::Format_ARGB32_Premultiplied);
+    samplingImage.fill(Qt::blue);
+    renderer.setImageSource(
+        ScreenshotImageSource::fromImage(localImage, QRectF(0, 0, 200, 140)), {},
+        ScreenshotImageSource::fromImage(samplingImage, QRectF(0, 0, 300, 140)));
+    canvas.setCustomRenderer(&renderer);
+    require(canvas.setCanvasTool(SnowCanvasTool::Magnifier), "activate offscreen source lens");
+    auto style = canvas.canvasMagnifierStyle();
+    style.factor = 2;
+    style.strokeWidth = 0;
+    style.cornerRadii = {};
+    style.showLeader = false;
+    require(canvas.setCanvasMagnifierStyle(style), "configure offscreen source lens");
+    const auto drag = [&](const QPointF& start, const QPointF& end) {
+        for (const auto& [type, point, button, buttons] :
+             {std::tuple{QEvent::MouseButtonPress, start, Qt::LeftButton,
+                         Qt::MouseButtons(Qt::LeftButton)},
+              std::tuple{QEvent::MouseMove, end, Qt::NoButton, Qt::MouseButtons(Qt::LeftButton)},
+              std::tuple{QEvent::MouseButtonRelease, end, Qt::LeftButton,
+                         Qt::MouseButtons(Qt::NoButton)}}) {
+            QMouseEvent event(type, point, point, point, button, buttons, Qt::NoModifier);
+            QApplication::sendEvent(&canvas, &event);
+        }
+    };
+    drag({220, 20}, {240, 40});
+    drag({230, 30}, {230, 30});
+    drag({230, 74}, {130, 74});
+    require(canvas.resetEditingState(), "finish offscreen source lens fixture");
+    canvas.setInteractionEnabled(false);
+    const QImage before = renderCanvas(canvas);
+    require(before.pixelColor(130, 30) == QColor(Qt::blue),
+            "the visible lens must sample the offscreen blue original");
+    QApplication::processEvents();
+    CanvasPaintRegionObserver observer;
+    canvas.installEventFilter(&observer);
+    observer.begin();
+    {
+        QPainter localPainter(&localImage);
+        localPainter.fillRect(QRect(20, 20, 20, 20), Qt::green);
+        QPainter samplingPainter(&samplingImage);
+        samplingPainter.fillRect(QRect(220, 20, 20, 20), Qt::green);
+    }
+    renderer.setImageSource(
+        ScreenshotImageSource::fromImage(localImage, QRectF(0, 0, 200, 140)),
+        QRectF(20, 20, 220, 20),
+        ScreenshotImageSource::fromImage(samplingImage, QRectF(0, 0, 300, 140)));
+    QApplication::processEvents();
+    const QRegion painted = observer.region();
+    const QImage after = renderCanvas(canvas);
+    require(after.pixelColor(130, 30) == QColor(Qt::green),
+            "the changed offscreen original must appear in the visible lens");
+    for (int y = 0; y < before.height(); ++y) {
+        for (int x = 0; x < before.width(); ++x) {
+            if (before.pixel(x, y) != after.pixel(x, y))
+                require(painted.contains(QPoint(x, y)),
+                        "mixed original damage must repaint every changed visible pixel");
+        }
+    }
+    canvas.removeEventFilter(&observer);
+    canvas.setCustomRenderer(nullptr);
+}
+
 void pinnedFiltersUseTheSourceResolution() {
     SnowCanvasRuntime runtime;
     SnowCanvasWidget canvas(runtime);
@@ -7082,6 +7153,7 @@ int main(int argc, char** argv) {
         magnifiersSampleEveryCapturedDisplayWithoutChangingLocalBackgrounds();
         materializedMagnifierBypassesPhysicalViewportPlacement();
         originalImageDamageRepaintsDistantMagnifiers();
+        mixedVisibleAndOffscreenOriginalDamageRepaintsMagnifiers();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--pointer-presentation-only"))) {

@@ -89,8 +89,8 @@ use snow_draw_engine_core::{
 use snow_draw_engine_document::{
     ArrowData, DEFAULT_ARROW_MAX_COORDINATE, ElementId, ElementKind, PenFilterData, RectangleData,
     RectangleElementKind, SerialNumberData, TextData, Transaction, arrow_bounds,
-    arrow_length as document_arrow_length, normalize_corner_radii, validate_arrow, validate_filter,
-    validate_rectangle, validate_serial_number, validate_text, validate_text_layout_size,
+    arrow_length as document_arrow_length, validate_arrow, validate_filter, validate_rectangle,
+    validate_serial_number, validate_text, validate_text_layout_size,
 };
 use snow_draw_engine_interaction::{
     CursorCommand, CursorStyle, InputEvent, InteractionOutput, KeyCode, KeyEvent, KeyEventType,
@@ -154,6 +154,7 @@ pub struct Editor {
     scene_state_revision: u64,
     overlay_state_revision: u64,
     pending_command: Option<EditorCommand>,
+    magnifier_wheel: Option<magnifier::MagnifierWheelAccumulator>,
 }
 
 impl Editor {
@@ -171,6 +172,7 @@ impl Editor {
             scene_state_revision: 0,
             overlay_state_revision: 0,
             pending_command: None,
+            magnifier_wheel: None,
         })
     }
 
@@ -325,6 +327,7 @@ impl Editor {
     }
 
     fn cancel_interaction(&mut self) {
+        self.magnifier_wheel = None;
         self.state.ui.free_draw_hover_position = None;
         self.state.pending_text_edit = None;
         self.state.pending_new_text_draft = false;

@@ -767,7 +767,7 @@ impl RectangleData {
     }
 
     pub fn supports_corner_radius(&self) -> bool {
-        !self.is_highlight() && self.highlight_shape == HighlightShape::Rectangle
+        !self.is_highlight() && self.highlight_shape != HighlightShape::Ellipse
     }
 
     pub fn element_kind(&self) -> ElementKind {

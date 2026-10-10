@@ -443,6 +443,7 @@ pub struct SnowMagnifierStyle {
     pub reserved: [u8; 3],
     pub leader_arrowhead: SnowArrowhead,
     pub corner_radii: SnowCornerRadii,
+    pub arrow_ratio: f64,
 }
 impl Default for SnowMagnifierStyle {
     fn default() -> Self {
@@ -456,7 +457,8 @@ pub const SNOW_MAGNIFIER_STYLE_PROPERTY_FACTOR: u32 = 8;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_SHOW_LEADER: u32 = 16;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD: u32 = 32;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_CORNER_RADII: u32 = 64;
-pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 127;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO: u32 = 128;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 255;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]

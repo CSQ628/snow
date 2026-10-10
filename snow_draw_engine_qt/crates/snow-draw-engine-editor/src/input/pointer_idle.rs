@@ -537,6 +537,7 @@ impl Editor {
                 }
                 self.state.interaction = InteractionState::EditingMagnifier(EditMagnifierState {
                     pointer_id: event.pointer_id,
+                    button: event.button.unwrap_or(PointerButton::Primary),
                     id,
                     original,
                     preview: original,

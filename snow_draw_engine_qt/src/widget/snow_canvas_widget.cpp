@@ -120,6 +120,63 @@ bool hasFilter(const SnowCanvasSceneItem* sceneItems, std::uint32_t sceneItemCou
     return false;
 }
 
+struct BaseImageSamplingFootprint {
+    QRectF canvasRect;
+    QRectF coverage;
+    QSize pixelSize;
+};
+
+std::vector<BaseImageSamplingFootprint>
+baseImageSamplingFootprints(const QList<SnowCanvasBaseImageSource>& sources) {
+    std::vector<BaseImageSamplingFootprint> footprints;
+    footprints.reserve(static_cast<std::size_t>(sources.size()));
+    for (const auto& source : sources) {
+        if (!source.image.isNull())
+            footprints.push_back({source.canvasRect, source.coverage, source.image.size()});
+    }
+    return footprints;
+}
+
+bool magnifierSamplesDamage(const SnowCanvasSceneItem& item,
+                            const snow_canvas_render_geometry::ViewProjection& projection,
+                            const std::vector<BaseImageSamplingFootprint>& footprints,
+                            const QRegion& damage) {
+    const auto& geometry = item.magnifier;
+    const QRectF sourceBounds = snow_canvas_render_geometry::rotatedRectBounds(
+        snow_canvas_render_geometry::canvasToView(projection, geometry.source_center_x,
+                                                  geometry.source_center_y),
+        geometry.source_width * projection.cameraZoom,
+        geometry.source_height * projection.cameraZoom, item.rotation, 0.0);
+    for (const auto& footprint : footprints) {
+        const QRectF& source = footprint.canvasRect;
+        if (!source.isValid() || !std::isfinite(source.x()) || !std::isfinite(source.y()) ||
+            !std::isfinite(source.width()) || !std::isfinite(source.height()) ||
+            !std::isfinite(footprint.coverage.x()) || !std::isfinite(footprint.coverage.y()) ||
+            !std::isfinite(footprint.coverage.width()) ||
+            !std::isfinite(footprint.coverage.height()) || footprint.pixelSize.isEmpty())
+            continue;
+        const QRectF coverage =
+            footprint.coverage.isEmpty() ? source : source.intersected(footprint.coverage);
+        const QRectF coverageBounds(
+            snow_canvas_render_geometry::canvasToView(projection, coverage.left(), coverage.top()),
+            snow_canvas_render_geometry::canvasToView(projection, coverage.right(),
+                                                      coverage.bottom()));
+        const QRectF sampledBounds = sourceBounds.intersected(coverageBounds);
+        if (sampledBounds.isEmpty())
+            continue;
+        // Bilinear enlargement can read a neighboring original pixel outside the outline.
+        // Its support scales with source density and camera zoom, independently of the lens.
+        const double pixelWidth =
+            source.width() * projection.cameraZoom / footprint.pixelSize.width();
+        const double pixelHeight =
+            source.height() * projection.cameraZoom / footprint.pixelSize.height();
+        if (damage.intersects(snow_canvas_render_geometry::alignedRectForBounds(
+                sampledBounds.adjusted(-pixelWidth, -pixelHeight, pixelWidth, pixelHeight))))
+            return true;
+    }
+    return false;
+}
+
 std::uint64_t sceneCacheContentKey(const SceneDisplayInfo& sceneInfo,
                                    const SnowCanvasCustomRenderer* customRenderer,
                                    bool clearBackgroundEnabled, double devicePixelRatio,
@@ -539,6 +596,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool suppressMouseContextMenu = false;
     SnowCanvasTool requestedCanvasTool = SnowCanvasTool::Select;
     SnowCanvasCustomRenderer* installedCustomRenderer = nullptr;
+    std::vector<BaseImageSamplingFootprint> paintedBaseImageSamplingFootprints;
     std::optional<SnowCanvasSnapGuideTargets> snapGuideTargets;
     std::optional<QRectF> configuredWatermarkRenderArea;
     std::optional<QRectF> configuredSpotlightRenderArea;
@@ -1744,6 +1802,7 @@ void SnowCanvasWidget::Impl::setCustomRenderer(SnowCanvasCustomRenderer* rendere
         return;
     }
     referenceScene.reset();
+    paintedBaseImageSamplingFootprints.clear();
     installedCustomRenderer = renderer;
     snow_canvas_filter_tile_cache::invalidateNamespace(&widget);
     widget.update();
@@ -1812,6 +1871,7 @@ void SnowCanvasWidget::Impl::clearRetainedDisplayState() {
     distanceCreationPixelScale.reset();
     snapGuideTargets.reset();
     referenceScene.reset();
+    paintedBaseImageSamplingFootprints.clear();
     if (pendingLiveStrokePreservesEverySample && hasViewport()) {
         flushLiveStrokeMoves();
     }
@@ -1857,6 +1917,7 @@ void SnowCanvasWidget::Impl::clearRenderState() {
 void SnowCanvasWidget::Impl::resetDocumentRetainedState() {
     distanceCreationPixelScale.reset();
     snapGuideTargets.reset();
+    paintedBaseImageSamplingFootprints.clear();
     displayState.resetDocumentRetainedState();
     textInteraction.resetDocumentRetainedState();
     std::vector<SnowInputEvent>().swap(pendingLiveStrokeMoves);
@@ -2516,6 +2577,7 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
         const QList<SnowCanvasBaseImageSource> baseImageSources =
             installedCustomRenderer != nullptr ? installedCustomRenderer->baseImageSources()
                                                : QList<SnowCanvasBaseImageSource>{};
+        paintedBaseImageSamplingFootprints = baseImageSamplingFootprints(baseImageSources);
         const auto reference = installedCustomRenderer != nullptr
                                    ? installedCustomRenderer->filterRenderReference()
                                    : std::nullopt;
@@ -3581,20 +3643,38 @@ void SnowCanvasWidget::Impl::updateBaseImageContent(const QRegion& damage) {
     const auto& cache = displayState.displayCache();
     const auto& info = cache.sceneInfo();
     const auto projection = snow_canvas_render_geometry::sceneProjection(info);
+    const auto currentFootprints = baseImageSamplingFootprints(
+        installedCustomRenderer != nullptr ? installedCustomRenderer->baseImageSources()
+                                           : QList<SnowCanvasBaseImageSource>{});
+    const auto& plan = cache.executionPlan(widget.devicePixelRatioF());
+    int activePass = -1;
+    QRegion entering;
     for (std::uint32_t index = 0; index < cache.sceneItemCount(); ++index) {
         const auto& item = cache.sceneItems()[index];
-        if (item.kind != SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER)
-            continue;
-        const auto& geometry = item.magnifier;
-        const QRectF sourceBounds = snow_canvas_render_geometry::rotatedRectBounds(
-            snow_canvas_render_geometry::canvasToView(projection, geometry.source_center_x,
-                                                      geometry.source_center_y),
-            geometry.source_width * projection.cameraZoom,
-            geometry.source_height * projection.cameraZoom, item.rotation, 0.0);
-        // Include the filtering guard: a source pixel just outside the outline can
-        // contribute to smooth enlargement along the magnifier's boundary.
-        if (damage.intersects(sourceBounds.toAlignedRect().adjusted(-2, -2, 2, 2)))
-            repaint += snow_canvas_render_geometry::alignedRectForBounds(item.viewBounds);
+        if (item.kind == SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER) {
+            // Lenses sample pristine originals, never another lens or an earlier filter.
+            // Keep the previous footprint for removal/replacement until the next paint.
+            if (magnifierSamplesDamage(item, projection, currentFootprints, damage) ||
+                magnifierSamplesDamage(item, projection, paintedBaseImageSamplingFootprints,
+                                       damage))
+                repaint += snow_canvas_render_geometry::alignedRectForBounds(item.viewBounds);
+        } else if (item.kind == SNOW_SCENE_DISPLAY_ITEM_FILTER && plan.passForItem[index] >= 0) {
+            const int pass = plan.passForItem[index];
+            if (pass != activePass) {
+                activePass = pass;
+                entering = repaint;
+            }
+            const auto& filter = plan.filter(index);
+            if (!filter.effective)
+                continue;
+            const QRect output =
+                snow_canvas_render_geometry::alignedRectForBounds(filter.logicalBounds);
+            const int radius = filter.logicalSamplingRadius + 1;
+            // Sibling filters share the same entering source. A subsequent source pass
+            // receives their expanded output, closing damage through chained effects.
+            for (const QRect& rect : entering)
+                repaint += rect.adjusted(-radius, -radius, radius, radius).intersected(output);
+        }
     }
     widget.update(repaint.intersected(widget.rect()));
 }

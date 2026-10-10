@@ -930,6 +930,28 @@ fn sanitize_positive(value: f64, fallback: f64) -> f64 {
 }
 
 pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance: f64) -> bool {
+    if rect.highlight_shape == crate::HighlightShape::Diamond
+        && !rect.is_highlight()
+        && [
+            rect.corner_radii.top_left,
+            rect.corner_radii.top_right,
+            rect.corner_radii.bottom_right,
+            rect.corner_radii.bottom_left,
+        ]
+        .iter()
+        .any(|radius| *radius > 0.0)
+    {
+        let local = canvas_to_rect_local(rect.center, rect.rotation, point);
+        let contour = crate::RoundedDiamond::new(rect.width, rect.height, rect.corner_radii);
+        if rect.is_spotlight() {
+            return contour.exterior_distance(local) <= hit_tolerance.max(0.0);
+        }
+        return (rect.fill.a != 0 && contour.contains(local))
+            || (rect.stroke.a != 0
+                && rect.stroke_width > 0.0
+                && contour.outline_distance(local)
+                    <= rect.stroke_width / 2.0 + hit_tolerance.max(0.0));
+    }
     if rect.is_spotlight() {
         let local = canvas_to_rect_local(rect.center, rect.rotation, point);
         let half_width = rect.width / 2.0 + hit_tolerance.max(0.0);

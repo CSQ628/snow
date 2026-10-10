@@ -192,6 +192,7 @@ constexpr char kRoleMagnifierShape[] = "magnifier-shape";
 constexpr char kRoleMagnifierFactor[] = "magnifier-factor";
 constexpr char kRoleMagnifierLeader[] = "magnifier-leader";
 constexpr char kRoleMagnifierArrowhead[] = "magnifier-arrowhead";
+constexpr char kRoleMagnifierArrowRatio[] = "magnifier-arrow-ratio";
 constexpr char kSignatureMagnifierFactor[] = "numeric:magnifier-factor";
 constexpr char kSignatureMagnifierLeader[] = "toggle:magnifier-leader";
 [[maybe_unused]] constexpr const char* kMagnifierTranslationSources[] = {
@@ -1994,6 +1995,12 @@ void ScreenshotToolPaletteStyleControls::setMagnifierCornerRadius(int radius) {
         [radii](SnowCanvasMagnifierStyle& style) { style.cornerRadii = radii; });
 }
 
+void ScreenshotToolPaletteStyleControls::setMagnifierArrowRatio(double ratio) {
+    ratio = std::clamp(snowCanvasNormalizeArrowRatio(ratio), 0.5, 3.0);
+    commitMagnifierProperty(SnowCanvasMagnifierStylePropertyArrowRatio,
+                            [ratio](SnowCanvasMagnifierStyle& style) { style.arrowRatio = ratio; });
+}
+
 void ScreenshotToolPaletteStyleControls::updateMagnifierStyleControls() {
     const auto mixed = [this](quint32 property) {
         return m_state.showingSelectedMagnifier && (m_state.magnifierStyleMixed & property) != 0;
@@ -2004,8 +2011,7 @@ void ScreenshotToolPaletteStyleControls::updateMagnifierStyleControls() {
         m_magnifierCornerRadiusEditor->setMixed(
             mixed(SnowCanvasMagnifierStylePropertyCornerRadius));
         m_magnifierCornerRadiusEditor->setVisible(mixed(SnowCanvasMagnifierStylePropertyShape) ||
-                                                  style.shape ==
-                                                      SnowCanvasRectangleShape::Rectangle);
+                                                  style.shape != SnowCanvasRectangleShape::Ellipse);
     }
     if (m_magnifierShapeGroup != nullptr) {
         const QSignalBlocker blocker(m_magnifierShapeGroup);
@@ -2021,6 +2027,12 @@ void ScreenshotToolPaletteStyleControls::updateMagnifierStyleControls() {
     if (m_magnifierFactorEditor != nullptr) {
         m_magnifierFactorEditor->setValue(style.factor);
         m_magnifierFactorEditor->setMixed(mixed(SnowCanvasMagnifierStylePropertyFactor));
+    }
+    if (m_magnifierArrowRatioEditor != nullptr) {
+        m_magnifierArrowRatioEditor->setValue(style.arrowRatio);
+        m_magnifierArrowRatioEditor->setMixed(mixed(SnowCanvasMagnifierStylePropertyArrowRatio));
+        m_magnifierArrowRatioEditor->setEnabled(style.showLeader &&
+                                                !mixed(SnowCanvasMagnifierStylePropertyShowLeader));
     }
     if (m_magnifierLeaderToggle != nullptr) {
         setScreenshotToolPaletteButtonActive(
@@ -2158,24 +2170,6 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
     if (host.addGroupSeparator)
         host.addGroupSeparator(layout);
 
-    m_magnifierCornerRadiusEditor = dynamic_cast<CornerRadiusEditorButton*>(
-        takeReusableWidget(kRoleMagnifierRadius, kSignatureCornerRadius, layout, controls));
-    if (m_magnifierCornerRadiusEditor == nullptr) {
-        m_magnifierCornerRadiusEditor = createScreenshotToolPaletteCornerRadiusEditor(
-            controls, "Corner radius (scroll to adjust)", custom_outlined_icons::SelectionRadius(),
-            qRound(m_state.magnifierStyle.cornerRadii.topLeft), metrics);
-        layout->addWidget(m_magnifierCornerRadiusEditor);
-    } else {
-        configureScreenshotToolPaletteCornerRadiusEditor(m_magnifierCornerRadiusEditor, metrics);
-    }
-    m_magnifierCornerRadiusEditor->setObjectName(
-        QStringLiteral("screenshotMagnifierCornerRadiusButton"));
-    tagWidget(m_magnifierCornerRadiusEditor, kRoleMagnifierRadius, kSignatureCornerRadius);
-    QObject::disconnect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked, nullptr,
-                        nullptr);
-    QObject::connect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setMagnifierCornerRadius(defaultCornerRadius()); });
-
     m_magnifierFactorEditor = dynamic_cast<IconNumericValuePreviewButton*>(
         takeReusableWidget(kRoleMagnifierFactor, kSignatureMagnifierFactor, layout, controls));
     if (m_magnifierFactorEditor == nullptr) {
@@ -2192,8 +2186,6 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
                         nullptr);
     QObject::connect(m_magnifierFactorEditor, &adqt::widgets::AdButton::clicked, controls,
                      [this]() { setMagnifierFactor(2.0); });
-    if (host.addGroupSeparator)
-        host.addGroupSeparator(layout);
 
     m_magnifierLeaderToggle = qobject_cast<adqt::widgets::AdButton*>(
         takeReusableWidget(kRoleMagnifierLeader, kSignatureMagnifierLeader, layout, controls));
@@ -2215,6 +2207,25 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
                 SnowCanvasMagnifierStylePropertyShowLeader,
                 [show](SnowCanvasMagnifierStyle& style) { style.showLeader = show; });
         });
+
+    m_magnifierArrowRatioEditor = dynamic_cast<IconNumericValuePreviewButton*>(
+        takeReusableWidget(kRoleMagnifierArrowRatio, kSignatureArrowRatio, layout, controls));
+    if (m_magnifierArrowRatioEditor == nullptr) {
+        m_magnifierArrowRatioEditor = createScreenshotToolPaletteIconNumericValueButton(
+            controls, "Arrow ratio (scroll to adjust)", custom_outlined_icons::ArrowRatio(), 1,
+            QStringLiteral("3.0"), metrics);
+        layout->addWidget(m_magnifierArrowRatioEditor);
+    } else {
+        configureScreenshotToolPaletteIconNumericValueButton(m_magnifierArrowRatioEditor, metrics);
+    }
+    m_magnifierArrowRatioEditor->setObjectName(
+        QStringLiteral("screenshotMagnifierArrowRatioButton"));
+    m_magnifierArrowRatioEditor->setDecimalPlaces(1);
+    tagWidget(m_magnifierArrowRatioEditor, kRoleMagnifierArrowRatio, kSignatureArrowRatio);
+    QObject::disconnect(m_magnifierArrowRatioEditor, &adqt::widgets::AdButton::clicked, nullptr,
+                        nullptr);
+    QObject::connect(m_magnifierArrowRatioEditor, &adqt::widgets::AdButton::clicked, controls,
+                     [this]() { setMagnifierArrowRatio(1.0); });
 
     ScreenshotToolPaletteIconOptionEditorConfig leaderConfig;
     leaderConfig.accessibleName = QStringLiteral("Leader line type");
@@ -2261,6 +2272,27 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
     m_magnifierLeaderEditor->rootWidget()->setObjectName(
         QStringLiteral("screenshotMagnifierLeaderTypeButton"));
     registerEditor(m_magnifierLeaderEditor.get());
+    if (host.addGroupSeparator)
+        host.addGroupSeparator(layout);
+
+    m_magnifierCornerRadiusEditor = dynamic_cast<CornerRadiusEditorButton*>(
+        takeReusableWidget(kRoleMagnifierRadius, kSignatureCornerRadius, layout, controls));
+    if (m_magnifierCornerRadiusEditor == nullptr) {
+        m_magnifierCornerRadiusEditor = createScreenshotToolPaletteCornerRadiusEditor(
+            controls, "Corner radius (scroll to adjust)", custom_outlined_icons::SelectionRadius(),
+            qRound(m_state.magnifierStyle.cornerRadii.topLeft), metrics);
+        layout->addWidget(m_magnifierCornerRadiusEditor);
+    } else {
+        configureScreenshotToolPaletteCornerRadiusEditor(m_magnifierCornerRadiusEditor, metrics);
+    }
+    m_magnifierCornerRadiusEditor->setObjectName(
+        QStringLiteral("screenshotMagnifierCornerRadiusButton"));
+    tagWidget(m_magnifierCornerRadiusEditor, kRoleMagnifierRadius, kSignatureCornerRadius);
+    QObject::disconnect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked, nullptr,
+                        nullptr);
+    QObject::connect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked, controls,
+                     [this]() { setMagnifierCornerRadius(defaultCornerRadius()); });
+
     updateMagnifierStyleControls();
     return controls;
 }
@@ -2276,6 +2308,14 @@ bool ScreenshotToolPaletteStyleControls::handleMagnifierWheel(const QPoint& glob
                                                               int direction) {
     if (direction == 0)
         return false;
+    if (m_magnifierArrowRatioEditor != nullptr && m_magnifierArrowRatioEditor->isVisible() &&
+        m_magnifierArrowRatioEditor->isEnabled() &&
+        m_magnifierArrowRatioEditor->rect().contains(
+            m_magnifierArrowRatioEditor->mapFromGlobal(globalPosition))) {
+        const int tenths = qRound(m_state.magnifierStyle.arrowRatio * 10.0);
+        setMagnifierArrowRatio(std::clamp(tenths + (direction > 0 ? 1 : -1), 5, 30) / 10.0);
+        return true;
+    }
     if (m_magnifierCornerRadiusEditor != nullptr && m_magnifierCornerRadiusEditor->isVisible() &&
         m_magnifierCornerRadiusEditor->rect().contains(
             m_magnifierCornerRadiusEditor->mapFromGlobal(globalPosition))) {
@@ -4704,6 +4744,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_magnifierLeaderEditor.reset();
     m_magnifierShapeGroup = nullptr;
     m_magnifierFactorEditor = nullptr;
+    m_magnifierArrowRatioEditor = nullptr;
     m_magnifierCornerRadiusEditor = nullptr;
     m_magnifierLeaderToggle = nullptr;
     m_angleColorEditor.reset();
@@ -4808,6 +4849,7 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     if (!keepMagnifier) {
         m_magnifierShapeGroup = nullptr;
         m_magnifierFactorEditor = nullptr;
+        m_magnifierArrowRatioEditor = nullptr;
         m_magnifierCornerRadiusEditor = nullptr;
         m_magnifierLeaderToggle = nullptr;
     }
@@ -5432,6 +5474,7 @@ void ScreenshotToolPaletteStyleControls::refreshToolbarMetrics(
     configureScreenshotToolPaletteCornerRadiusEditor(m_cornerRadiusEditor, metrics);
     configureScreenshotToolPaletteIconNumericValueButton(m_arrowRatioEditor, metrics);
     configureScreenshotToolPaletteIconNumericValueButton(m_magnifierFactorEditor, metrics);
+    configureScreenshotToolPaletteIconNumericValueButton(m_magnifierArrowRatioEditor, metrics);
     configureScreenshotToolPaletteCornerRadiusEditor(m_magnifierCornerRadiusEditor, metrics);
     if (m_magnifierLeaderToggle != nullptr)
         configureScreenshotToolPaletteStyleButton(m_magnifierLeaderToggle, "Show leader line",

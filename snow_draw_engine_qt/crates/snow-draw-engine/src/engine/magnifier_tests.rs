@@ -1,13 +1,19 @@
 use super::duplicate_drag_tests::pointer;
 use super::*;
-use snow_draw_engine_core::CornerRadii;
+use snow_draw_engine_core::{
+    CornerRadii,
+    arrow::{ArrowType, StrokeStyle},
+};
 use snow_draw_engine_display::{OverlayDisplayItem, SceneDisplayItem, UiShapeKind};
 use snow_draw_engine_document::{HighlightShape, Transaction};
 use snow_draw_engine_editor::{
-    MAGNIFIER_STYLE_PROPERTY_ALL, MAGNIFIER_STYLE_PROPERTY_CORNER_RADII,
-    MAGNIFIER_STYLE_PROPERTY_FACTOR, MagnifierStyle,
+    MAGNIFIER_STYLE_PROPERTY_ALL, MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO,
+    MAGNIFIER_STYLE_PROPERTY_CORNER_RADII, MAGNIFIER_STYLE_PROPERTY_FACTOR, MagnifierStyle,
 };
-use snow_draw_engine_interaction::{Modifiers, PointerEventType, WheelDeltaKind, WheelEvent};
+use snow_draw_engine_interaction::{
+    Modifiers, PointerButton, PointerButtons, PointerCaptureCommand, PointerDevice, PointerEvent,
+    PointerEventType, WheelDeltaKind, WheelEvent,
+};
 
 fn fixture(shape: HighlightShape, factor: f64) -> (Engine, ViewportId, ElementId) {
     let mut config = EngineConfig::default();
@@ -123,6 +129,401 @@ fn scene_magnifiers(
             _ => None,
         })
         .collect()
+}
+
+fn wheel(engine: &mut Engine, viewport: ViewportId, delta: f64, kind: WheelDeltaKind) {
+    assert!(
+        engine
+            .process_input(
+                viewport,
+                InputEvent::Wheel(WheelEvent {
+                    position: Point::new(400.0, 300.0),
+                    delta: snow_draw_engine_core::Vector2 { x: 0.0, y: delta },
+                    delta_kind: kind,
+                    modifiers: Modifiers::default(),
+                }),
+            )
+            .unwrap()
+            .consumed
+    );
+}
+
+#[test]
+fn magnifier_marquee_matches_either_region_without_matching_the_empty_gap() {
+    for shape in [
+        HighlightShape::Rectangle,
+        HighlightShape::Ellipse,
+        HighlightShape::Diamond,
+    ] {
+        for rotation in [0.0, 0.7] {
+            for direction in [-1.0, 1.0] {
+                let (mut engine, viewport, id) = fixture(shape, 2.0);
+                let mut value = *engine.model.magnifier(id).unwrap();
+                value.source_center = Point::new(-1000.0, 0.0);
+                value.rotation = rotation;
+                value.show_leader = false;
+                let mut transaction = Transaction::new("separate offscreen source");
+                transaction.update_magnifier(id, value);
+                engine.model.apply_transaction(transaction).unwrap();
+                engine
+                    .reset_editing_state_with_viewport_changes(viewport)
+                    .unwrap();
+                drag(
+                    &mut engine,
+                    viewport,
+                    Point::new(-170.0 * direction, -170.0 * direction),
+                    Point::new(170.0 * direction, 170.0 * direction),
+                );
+                assert_eq!(engine.editor.selected_ids(), vec![id]);
+                assert_eq!(
+                    engine.model.element_rect_proxy(id).unwrap(),
+                    value.source_rect()
+                );
+
+                engine
+                    .reset_editing_state_with_viewport_changes(viewport)
+                    .unwrap();
+                drag(
+                    &mut engine,
+                    viewport,
+                    Point::new(-530.0, -30.0),
+                    Point::new(-470.0, 30.0),
+                );
+                assert!(engine.editor.selected_ids().is_empty());
+
+                drag(
+                    &mut engine,
+                    viewport,
+                    Point::new(-1100.0, -100.0),
+                    Point::new(-900.0, 100.0),
+                );
+                assert_eq!(engine.editor.selected_ids(), vec![id]);
+            }
+        }
+    }
+}
+
+#[test]
+fn magnifier_wheel_accumulates_pixel_and_fractional_angle_deltas() {
+    for selected in [false, true] {
+        for (kind, delta, count) in [
+            (WheelDeltaKind::Pixel, 10.0, 10),
+            (WheelDeltaKind::Angle, 20.0, 6),
+        ] {
+            let (mut engine, viewport, id) = fixture(HighlightShape::Rectangle, 2.0);
+            if selected {
+                select(&mut engine, viewport, id);
+            }
+            let camera = engine.viewport_slot(viewport).unwrap().view;
+            for _ in 0..count {
+                wheel(&mut engine, viewport, delta, kind);
+            }
+            let style = engine.viewport_style_toolbar_state(viewport).unwrap();
+            assert_eq!(style.magnifier_style.factor, 2.1);
+            assert_eq!(engine.viewport_slot(viewport).unwrap().view, camera);
+            if selected {
+                assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.1);
+                assert!(engine.undo().unwrap());
+                assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.0);
+            } else {
+                assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn magnifier_wheel_remainder_resets_for_direction_kind_and_factor_changes() {
+    let (mut engine, viewport, id) = fixture(HighlightShape::Rectangle, 2.0);
+    select(&mut engine, viewport, id);
+    wheel(&mut engine, viewport, 40.0, WheelDeltaKind::Pixel);
+    wheel(&mut engine, viewport, -60.0, WheelDeltaKind::Pixel);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.0);
+    wheel(&mut engine, viewport, -40.0, WheelDeltaKind::Pixel);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 1.9);
+
+    wheel(&mut engine, viewport, 40.0, WheelDeltaKind::Pixel);
+    wheel(&mut engine, viewport, 60.0, WheelDeltaKind::Angle);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 1.9);
+    wheel(&mut engine, viewport, 60.0, WheelDeltaKind::Angle);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.0);
+
+    wheel(&mut engine, viewport, 40.0, WheelDeltaKind::Pixel);
+    engine
+        .set_viewport_magnifier_style_patch(
+            viewport,
+            MagnifierStyle {
+                factor: 3.0,
+                ..Default::default()
+            },
+            MAGNIFIER_STYLE_PROPERTY_FACTOR,
+            false,
+        )
+        .unwrap();
+    wheel(&mut engine, viewport, 60.0, WheelDeltaKind::Pixel);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 3.0);
+    wheel(&mut engine, viewport, 40.0, WheelDeltaKind::Pixel);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 3.1);
+}
+
+#[test]
+fn magnifier_wheel_preserves_large_delta_remainders_and_discards_saturated_input() {
+    let (mut engine, viewport, id) = fixture(HighlightShape::Rectangle, 2.0);
+    select(&mut engine, viewport, id);
+    wheel(&mut engine, viewport, 450.0, WheelDeltaKind::Pixel);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.4);
+    wheel(&mut engine, viewport, 50.0, WheelDeltaKind::Pixel);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.5);
+    for (start, outward, limit) in [(9.9, 250.0, 10.0), (1.1, -250.0, 1.0)] {
+        engine
+            .set_viewport_magnifier_style_patch(
+                viewport,
+                MagnifierStyle {
+                    factor: start,
+                    ..Default::default()
+                },
+                MAGNIFIER_STYLE_PROPERTY_FACTOR,
+                false,
+            )
+            .unwrap();
+        wheel(&mut engine, viewport, outward, WheelDeltaKind::Pixel);
+        assert_eq!(engine.model.magnifier(id).unwrap().factor, limit);
+        for _ in 0..5 {
+            wheel(
+                &mut engine,
+                viewport,
+                -outward.signum() * 20.0,
+                WheelDeltaKind::Pixel,
+            );
+        }
+        assert_eq!(engine.model.magnifier(id).unwrap().factor, start);
+    }
+}
+
+#[test]
+fn magnifier_wheel_remainder_resets_for_selection_tool_and_focus_changes() {
+    for transition in [
+        "selection",
+        "defaults",
+        "tool",
+        "focus",
+        "modified wheel",
+        "history",
+        "reset",
+    ] {
+        let (mut engine, viewport, id) = fixture(HighlightShape::Rectangle, 2.0);
+        select(&mut engine, viewport, id);
+        wheel(&mut engine, viewport, 40.0, WheelDeltaKind::Pixel);
+        match transition {
+            "selection" => {
+                let other = engine.model.peek_next_element_id();
+                let mut transaction = Transaction::new("another magnifier");
+                transaction.insert_magnifier(
+                    other,
+                    Default::default(),
+                    *engine.model.magnifier(id).unwrap(),
+                );
+                engine.model.apply_transaction(transaction).unwrap();
+                select(&mut engine, viewport, other);
+                select(&mut engine, viewport, id);
+            }
+            "defaults" => {
+                engine
+                    .set_viewport_active_tool(viewport, ActiveTool::Magnifier)
+                    .unwrap();
+            }
+            "tool" => {
+                engine
+                    .set_viewport_active_tool(viewport, ActiveTool::Watermark)
+                    .unwrap();
+                engine
+                    .set_viewport_active_tool(viewport, ActiveTool::Select)
+                    .unwrap();
+            }
+            "focus" => {
+                engine
+                    .process_input(viewport, InputEvent::FocusLost)
+                    .unwrap();
+            }
+            "modified wheel" => {
+                engine
+                    .process_input(
+                        viewport,
+                        InputEvent::Wheel(WheelEvent {
+                            position: Point::new(400.0, 300.0),
+                            delta: snow_draw_engine_core::Vector2 { x: 0.0, y: 10.0 },
+                            delta_kind: WheelDeltaKind::Pixel,
+                            modifiers: Modifiers {
+                                ctrl: true,
+                                ..Default::default()
+                            },
+                        }),
+                    )
+                    .unwrap();
+            }
+            "history" => {
+                engine
+                    .set_viewport_magnifier_style_patch(
+                        viewport,
+                        MagnifierStyle {
+                            stroke_width: 4.0,
+                            ..Default::default()
+                        },
+                        snow_draw_engine_editor::MAGNIFIER_STYLE_PROPERTY_STROKE_WIDTH,
+                        false,
+                    )
+                    .unwrap();
+                assert!(engine.undo().unwrap());
+                assert!(engine.redo().unwrap());
+            }
+            "reset" => {
+                engine
+                    .reset_editing_state_with_viewport_changes(viewport)
+                    .unwrap();
+                select(&mut engine, viewport, id);
+            }
+            _ => unreachable!(),
+        }
+        wheel(&mut engine, viewport, 60.0, WheelDeltaKind::Pixel);
+        assert_eq!(
+            engine
+                .viewport_style_toolbar_state(viewport)
+                .unwrap()
+                .magnifier_style
+                .factor,
+            2.0,
+            "{transition}"
+        );
+        wheel(&mut engine, viewport, 40.0, WheelDeltaKind::Pixel);
+        assert_eq!(
+            engine
+                .viewport_style_toolbar_state(viewport)
+                .unwrap()
+                .magnifier_style
+                .factor,
+            2.1,
+            "{transition}"
+        );
+    }
+}
+
+#[test]
+fn magnifier_wheel_remainder_is_not_snapshot_persisted_or_cloned_session_state() {
+    let (mut engine, viewport, id) = fixture(HighlightShape::Rectangle, 2.0);
+    select(&mut engine, viewport, id);
+    let snapshot = engine.editor.snapshot();
+    let serialized = engine.serialize_document_session().unwrap();
+    wheel(&mut engine, viewport, 40.0, WheelDeltaKind::Pixel);
+    assert_eq!(engine.editor.snapshot(), snapshot);
+    assert_eq!(engine.serialize_document_session().unwrap(), serialized);
+
+    let mut clone = engine.clone_document_session();
+    wheel(&mut clone, viewport, 60.0, WheelDeltaKind::Pixel);
+    assert_eq!(clone.model.magnifier(id).unwrap().factor, 2.0);
+    wheel(&mut clone, viewport, 40.0, WheelDeltaKind::Pixel);
+    assert_eq!(clone.model.magnifier(id).unwrap().factor, 2.1);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.0);
+
+    let mut restored =
+        Engine::from_serialized_document_session_with_config(&serialized, Default::default())
+            .unwrap();
+    let restored_viewport = restored.create_viewport(Default::default()).unwrap();
+    restored
+        .set_viewport_surface_size(restored_viewport, 800, 600)
+        .unwrap();
+    select(&mut restored, restored_viewport, id);
+    wheel(
+        &mut restored,
+        restored_viewport,
+        60.0,
+        WheelDeltaKind::Pixel,
+    );
+    assert_eq!(restored.model.magnifier(id).unwrap().factor, 2.0);
+    wheel(
+        &mut restored,
+        restored_viewport,
+        40.0,
+        WheelDeltaKind::Pixel,
+    );
+    assert_eq!(restored.model.magnifier(id).unwrap().factor, 2.1);
+    wheel(&mut engine, viewport, 60.0, WheelDeltaKind::Pixel);
+    assert_eq!(engine.model.magnifier(id).unwrap().factor, 2.1);
+}
+
+#[test]
+fn magnifier_lens_drag_ignores_other_button_releases() {
+    for (button, release) in [
+        (PointerButton::Secondary, Some(PointerButton::Primary)),
+        (PointerButton::Middle, Some(PointerButton::Primary)),
+        (PointerButton::Secondary, None),
+        (PointerButton::Middle, None),
+    ] {
+        let (mut engine, viewport, id) = fixture(HighlightShape::Rectangle, 2.0);
+        select(&mut engine, viewport, id);
+        let original = *engine.model.magnifier(id).unwrap();
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Down,
+            475.0,
+            300.0,
+            false,
+        );
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Move,
+            495.0,
+            300.0,
+            false,
+        );
+        let output = engine
+            .process_input(
+                viewport,
+                InputEvent::Pointer(PointerEvent {
+                    pointer_id: 1,
+                    event_type: PointerEventType::Up,
+                    device: PointerDevice::Mouse,
+                    position: Point::new(495.0, 300.0),
+                    button: Some(button),
+                    buttons: PointerButtons(PointerButtons::PRIMARY),
+                    modifiers: Modifiers::default(),
+                }),
+            )
+            .unwrap();
+        assert!(!output.consumed);
+        assert_eq!(output.capture, PointerCaptureCommand::NoChange);
+        assert_eq!(*engine.model.magnifier(id).unwrap(), original);
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Move,
+            515.0,
+            300.0,
+            false,
+        );
+        let output = engine
+            .process_input(
+                viewport,
+                InputEvent::Pointer(PointerEvent {
+                    pointer_id: 1,
+                    event_type: PointerEventType::Up,
+                    device: PointerDevice::Mouse,
+                    position: Point::new(515.0, 300.0),
+                    button: release,
+                    buttons: PointerButtons::default(),
+                    modifiers: Modifiers::default(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(output.capture, PointerCaptureCommand::Release);
+        assert_eq!(
+            engine.model.magnifier(id).unwrap().magnified_center,
+            Point::new(40.0, 0.0)
+        );
+        assert!(engine.undo().unwrap());
+        assert_eq!(*engine.model.magnifier(id).unwrap(), original);
+    }
 }
 
 #[test]
@@ -305,6 +706,98 @@ fn magnifier_mixed_corner_patch_preserves_factors_and_defaults() {
 }
 
 #[test]
+fn magnifier_mixed_arrow_ratio_patch_preserves_other_properties_and_history() {
+    let (mut engine, viewport, first_id) = fixture(HighlightShape::Rectangle, 2.0);
+    let first = *engine.model.magnifier(first_id).unwrap();
+    let second_id = engine.model.peek_next_element_id();
+    let second = snow_draw_engine_document::MagnifierData {
+        source_center: Point::new(400.0, 0.0),
+        magnified_center: Point::new(400.0, 0.0),
+        factor: 3.0,
+        arrow_ratio: 2.3,
+        ..first
+    };
+    let mut transaction = Transaction::new("second magnifier");
+    transaction.insert_magnifier(second_id, Default::default(), second);
+    engine
+        .apply_editor_command(
+            viewport,
+            EditorCommand::ApplyTransaction(ApplyTransactionCommand {
+                transaction,
+                history_undo_snapshot: None,
+            }),
+        )
+        .unwrap();
+    let snapshot = serde_json::from_value(serde_json::json!({
+        "selectedIds": [first_id, second_id], "primaryId": first_id
+    }))
+    .unwrap();
+    engine
+        .editor
+        .restore_history_selection(&engine.model, &snapshot);
+    engine.refresh_all_viewports().unwrap();
+    assert_eq!(
+        engine
+            .viewport_style_toolbar_state(viewport)
+            .unwrap()
+            .magnifier_style_mixed,
+        MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO | MAGNIFIER_STYLE_PROPERTY_FACTOR
+    );
+    engine
+        .set_viewport_magnifier_style_patch(
+            viewport,
+            MagnifierStyle {
+                arrow_ratio: 0.5,
+                factor: 9.0,
+                ..Default::default()
+            },
+            MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO,
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        *engine.model.magnifier(first_id).unwrap(),
+        snow_draw_engine_document::MagnifierData {
+            arrow_ratio: 0.5,
+            ..first
+        }
+    );
+    assert_eq!(
+        *engine.model.magnifier(second_id).unwrap(),
+        snow_draw_engine_document::MagnifierData {
+            arrow_ratio: 0.5,
+            ..second
+        }
+    );
+    assert_eq!(
+        engine
+            .viewport_style_toolbar_state(viewport)
+            .unwrap()
+            .magnifier_style_mixed,
+        MAGNIFIER_STYLE_PROPERTY_FACTOR
+    );
+    assert!(engine.history_state().can_undo);
+    engine.undo().unwrap();
+    assert_eq!(*engine.model.magnifier(first_id).unwrap(), first);
+    assert_eq!(*engine.model.magnifier(second_id).unwrap(), second);
+    assert!(engine.history_state().can_redo);
+    engine.redo().unwrap();
+    assert_eq!(engine.model.magnifier(first_id).unwrap().arrow_ratio, 0.5);
+    assert_eq!(engine.model.magnifier(second_id).unwrap().arrow_ratio, 0.5);
+    engine
+        .reset_editing_state_with_viewport_changes(viewport)
+        .unwrap();
+    assert_eq!(
+        engine
+            .viewport_style_toolbar_state(viewport)
+            .unwrap()
+            .magnifier_style
+            .arrow_ratio,
+        1.0
+    );
+}
+
+#[test]
 fn magnifier_factor_one_external_grip_can_separate_coincident_regions() {
     let (mut engine, viewport, id) = fixture(HighlightShape::Ellipse, 1.0);
     select(&mut engine, viewport, id);
@@ -432,6 +925,7 @@ fn magnifier_selected_styles_defaults_and_sessions_remain_independent() {
         show_leader: false,
         stroke_width: 0.0,
         corner_radii: CornerRadii::splat(12.0),
+        arrow_ratio: 2.3,
         ..Default::default()
     };
     engine
@@ -441,13 +935,16 @@ fn magnifier_selected_styles_defaults_and_sessions_remain_independent() {
     let defaults = MagnifierStyle {
         factor: 8.0,
         corner_radii: CornerRadii::splat(3.0),
+        arrow_ratio: 0.5,
         ..Default::default()
     };
     engine
         .set_viewport_magnifier_style_patch(
             viewport,
             defaults,
-            MAGNIFIER_STYLE_PROPERTY_FACTOR | MAGNIFIER_STYLE_PROPERTY_CORNER_RADII,
+            MAGNIFIER_STYLE_PROPERTY_FACTOR
+                | MAGNIFIER_STYLE_PROPERTY_CORNER_RADII
+                | MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO,
             true,
         )
         .unwrap();
@@ -457,6 +954,7 @@ fn magnifier_selected_styles_defaults_and_sessions_remain_independent() {
         CornerRadii::splat(12.0)
     );
     let bytes = engine.serialize_document_session().unwrap();
+    assert_eq!(engine.model.magnifier(id).unwrap().arrow_ratio, 2.3);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["schemaVersion"],
         11
@@ -472,6 +970,14 @@ fn magnifier_selected_styles_defaults_and_sessions_remain_independent() {
     restored
         .set_viewport_active_tool(rv, ActiveTool::Magnifier)
         .unwrap();
+    assert_eq!(
+        restored
+            .viewport_style_toolbar_state(rv)
+            .unwrap()
+            .magnifier_style
+            .arrow_ratio,
+        0.5
+    );
     assert_eq!(
         restored
             .viewport_style_toolbar_state(rv)
@@ -514,6 +1020,49 @@ fn magnifier_selected_styles_defaults_and_sessions_remain_independent() {
         .magnifier(engine.model.paint_order()[1])
         .unwrap();
     assert_eq!((copy.width, copy.height, copy.factor), (100.0, 80.0, 3.5));
+    assert_eq!(copy.arrow_ratio, 2.3);
+}
+
+#[test]
+fn magnifier_legacy_session_without_arrow_ratios_uses_identity_scale() {
+    fn remove_ratios(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                object.remove("arrow_ratio");
+                for value in object.values_mut() {
+                    remove_ratios(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    remove_ratios(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    let (engine, _, id) = fixture(HighlightShape::Rectangle, 2.0);
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&engine.serialize_document_session().unwrap()).unwrap();
+    remove_ratios(&mut json);
+    let mut restored = Engine::from_serialized_document_session_with_config(
+        &serde_json::to_vec(&json).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(restored.model.magnifier(id).unwrap().arrow_ratio, 1.0);
+    let viewport = restored.create_viewport(ViewportConfig::default()).unwrap();
+    restored
+        .set_viewport_active_tool(viewport, ActiveTool::Magnifier)
+        .unwrap();
+    assert_eq!(
+        restored
+            .viewport_style_toolbar_state(viewport)
+            .unwrap()
+            .magnifier_style
+            .arrow_ratio,
+        1.0
+    );
 }
 
 #[test]
@@ -627,6 +1176,470 @@ fn magnifier_mixed_selection_resizes_and_rotates_both_region_centers_coherently(
         (rotated.width, rotated.height, rotated.factor),
         (resized.width, resized.height, 2.0)
     );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ResizeCompanion {
+    Rectangle,
+    Arrow,
+    Magnifier,
+}
+
+fn magnifier_resize_fixture(
+    shape: HighlightShape,
+    companion: Option<ResizeCompanion>,
+) -> (Engine, ViewportId, Vec<ElementId>) {
+    let mut engine = Engine::default();
+    let viewport = engine.create_viewport(ViewportConfig::default()).unwrap();
+    engine
+        .set_viewport_surface_size(viewport, 800, 600)
+        .unwrap();
+    engine
+        .set_viewport_active_tool(viewport, ActiveTool::Select)
+        .unwrap();
+    let id = engine.model.peek_next_element_id();
+    let value = snow_draw_engine_document::MagnifierData {
+        source_center: Point::new(-20.0, -10.0),
+        magnified_center: Point::new(150.0, 90.0),
+        width: 80.0,
+        height: 60.0,
+        rotation: 0.4,
+        shape,
+        corner_radii: CornerRadii {
+            top_left: 4.0,
+            top_right: 8.0,
+            bottom_right: 12.0,
+            bottom_left: 16.0,
+        },
+        ..Default::default()
+    };
+    let mut transaction = Transaction::new("resize regression fixture");
+    transaction.insert_magnifier(id, Default::default(), value);
+    let mut ids = vec![id];
+    if let Some(companion) = companion {
+        let other_id = ElementId {
+            index: id.index + 1,
+            generation: id.generation,
+        };
+        match companion {
+            ResizeCompanion::Rectangle => {
+                let mut rectangle = value.source_rect();
+                rectangle.center = Point::new(300.0, 200.0);
+                rectangle.width = 40.0;
+                rectangle.height = 30.0;
+                rectangle.rotation = 0.0;
+                transaction.insert_rectangle(other_id, Default::default(), rectangle);
+            }
+            ResizeCompanion::Arrow => {
+                let arrow = snow_draw_engine_document::ArrowData::from_global_points(
+                    &[Point::new(260.0, 180.0), Point::new(310.0, 220.0)],
+                    value.stroke,
+                    2.0,
+                    StrokeStyle::Solid,
+                    ArrowType::Straight,
+                    None,
+                    None,
+                )
+                .unwrap();
+                transaction.insert_arrow(other_id, Default::default(), arrow);
+            }
+            ResizeCompanion::Magnifier => {
+                transaction.insert_magnifier(
+                    other_id,
+                    Default::default(),
+                    snow_draw_engine_document::MagnifierData {
+                        source_center: Point::new(250.0, 170.0),
+                        magnified_center: Point::new(300.0, 210.0),
+                        width: 30.0,
+                        height: 20.0,
+                        factor: 1.5,
+                        rotation: -0.2,
+                        ..value
+                    },
+                );
+            }
+        }
+        ids.push(other_id);
+    }
+    engine
+        .apply_editor_command(
+            viewport,
+            EditorCommand::ApplyTransaction(ApplyTransactionCommand {
+                transaction,
+                history_undo_snapshot: None,
+            }),
+        )
+        .unwrap();
+    let snapshot = serde_json::from_value(serde_json::json!({
+        "selectedIds": ids, "primaryId": id
+    }))
+    .unwrap();
+    engine
+        .editor
+        .restore_history_selection(&engine.model, &snapshot);
+    engine.refresh_all_viewports().unwrap();
+    (engine, viewport, ids)
+}
+
+fn resize_selection_by_scales(
+    engine: &mut Engine,
+    viewport: ViewportId,
+    sx: f64,
+    sy: f64,
+    from_center: bool,
+) -> (snow_draw_engine_editor::SelectionBounds, Point<f64>) {
+    let bounds = engine
+        .editor
+        .presentation_state(&engine.model, &engine.viewport_slot(viewport).unwrap().view)
+        .selection_bounds
+        .unwrap();
+    let local_anchor = if from_center {
+        Point::default()
+    } else {
+        Point::new(-bounds.width / 2.0, -bounds.height / 2.0)
+    };
+    let (sin, cos) = bounds.rotation.sin_cos();
+    let map = |point: Point<f64>| {
+        Point::new(
+            bounds.center.x + point.x * cos - point.y * sin,
+            bounds.center.y + point.x * sin + point.y * cos,
+        )
+    };
+    let from = map(Point::new(
+        bounds.width / 2.0 + 4.0,
+        bounds.height / 2.0 + 4.0,
+    ));
+    let reference = if from_center { 0.5 } else { 1.0 };
+    let to = map(Point::new(
+        local_anchor.x + bounds.width * reference * sx + 4.0,
+        local_anchor.y + bounds.height * reference * sy + 4.0,
+    ));
+    pointer(
+        engine,
+        viewport,
+        PointerEventType::Down,
+        from.x + 400.0,
+        from.y + 300.0,
+        from_center,
+    );
+    pointer(
+        engine,
+        viewport,
+        PointerEventType::Move,
+        to.x + 400.0,
+        to.y + 300.0,
+        from_center,
+    );
+    (bounds, to)
+}
+
+fn resized_point(
+    point: Point<f64>,
+    bounds: snow_draw_engine_editor::SelectionBounds,
+    sx: f64,
+    sy: f64,
+    from_center: bool,
+) -> Point<f64> {
+    let (sin, cos) = bounds.rotation.sin_cos();
+    let dx = point.x - bounds.center.x;
+    let dy = point.y - bounds.center.y;
+    let local = Point::new(dx * cos + dy * sin, -dx * sin + dy * cos);
+    let anchor = if from_center {
+        Point::default()
+    } else {
+        Point::new(-bounds.width / 2.0, -bounds.height / 2.0)
+    };
+    let local = Point::new(
+        anchor.x + (local.x - anchor.x) * sx,
+        anchor.y + (local.y - anchor.y) * sy,
+    );
+    Point::new(
+        bounds.center.x + local.x * cos - local.y * sin,
+        bounds.center.y + local.x * sin + local.y * cos,
+    )
+}
+
+fn reflected_radii(shape: HighlightShape, radii: CornerRadii, sx: f64, sy: f64) -> CornerRadii {
+    let mut values = [
+        radii.top_left,
+        radii.top_right,
+        radii.bottom_right,
+        radii.bottom_left,
+    ];
+    if sx < 0.0 {
+        if shape == HighlightShape::Diamond {
+            values.swap(1, 3);
+        } else {
+            values.swap(0, 1);
+            values.swap(2, 3);
+        }
+    }
+    if sy < 0.0 {
+        if shape == HighlightShape::Diamond {
+            values.swap(0, 2);
+        } else {
+            values.swap(0, 3);
+            values.swap(1, 2);
+        }
+    }
+    CornerRadii {
+        top_left: values[0],
+        top_right: values[1],
+        bottom_right: values[2],
+        bottom_left: values[3],
+    }
+}
+
+fn assert_resized_magnifier(
+    actual: snow_draw_engine_document::MagnifierData,
+    original: snow_draw_engine_document::MagnifierData,
+    bounds: snow_draw_engine_editor::SelectionBounds,
+    sx: f64,
+    sy: f64,
+    from_center: bool,
+    grouped: bool,
+) {
+    let expected_source = resized_point(original.source_center, bounds, sx, sy, from_center);
+    let expected_lens = if grouped {
+        resized_point(original.magnified_center, bounds, sx, sy, from_center)
+    } else {
+        original.magnified_center
+    };
+    for (actual, expected) in [
+        (actual.source_center.x, expected_source.x),
+        (actual.source_center.y, expected_source.y),
+        (actual.magnified_center.x, expected_lens.x),
+        (actual.magnified_center.y, expected_lens.y),
+        (actual.width, original.width * sx.abs()),
+        (actual.height, original.height * sy.abs()),
+    ] {
+        assert!((actual - expected).abs() < 1e-8, "{actual} != {expected}");
+    }
+    assert_eq!(actual.rotation, original.rotation);
+    assert_eq!(actual.factor, original.factor);
+    assert_eq!(actual.stroke_width, original.stroke_width);
+    assert_eq!(
+        actual.corner_radii,
+        reflected_radii(original.shape, original.corner_radii, sx, sy)
+    );
+}
+
+#[test]
+fn magnifier_group_resize_preserves_signed_transform_in_preview_commit_and_history() {
+    for shape in [HighlightShape::Rectangle, HighlightShape::Diamond] {
+        for companion in [
+            ResizeCompanion::Rectangle,
+            ResizeCompanion::Arrow,
+            ResizeCompanion::Magnifier,
+        ] {
+            for (sx, sy) in [(-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (1.5, 0.75)] {
+                for from_center in [false, true] {
+                    let (mut engine, viewport, ids) =
+                        magnifier_resize_fixture(shape, Some(companion));
+                    let originals: Vec<_> = ids
+                        .iter()
+                        .filter_map(|id| {
+                            engine.model.magnifier(*id).ok().map(|value| (*id, *value))
+                        })
+                        .collect();
+                    let original_arrow = engine.model.arrow(ids[1]).ok().cloned();
+                    let original_rectangle = engine.model.rectangle(ids[1]).ok().copied();
+                    let (bounds, to) =
+                        resize_selection_by_scales(&mut engine, viewport, sx, sy, from_center);
+                    let presentation = engine.editor.presentation_state(
+                        &engine.model,
+                        &engine.viewport_slot(viewport).unwrap().view,
+                    );
+                    for (id, original) in &originals {
+                        let preview = presentation
+                            .preview_magnifiers
+                            .iter()
+                            .find(|preview| preview.id == *id)
+                            .unwrap();
+                        assert_resized_magnifier(
+                            preview.magnifier,
+                            *original,
+                            bounds,
+                            sx,
+                            sy,
+                            from_center,
+                            true,
+                        );
+                    }
+                    pointer(
+                        &mut engine,
+                        viewport,
+                        PointerEventType::Up,
+                        to.x + 400.0,
+                        to.y + 300.0,
+                        from_center,
+                    );
+                    let committed: Vec<_> = originals
+                        .iter()
+                        .map(|(id, original)| {
+                            let value = *engine.model.magnifier(*id).unwrap();
+                            assert_resized_magnifier(
+                                value,
+                                *original,
+                                bounds,
+                                sx,
+                                sy,
+                                from_center,
+                                true,
+                            );
+                            (*id, value)
+                        })
+                        .collect();
+                    if let Some(original) = original_rectangle {
+                        let actual = engine.model.rectangle(ids[1]).unwrap().center;
+                        let expected = resized_point(original.center, bounds, sx, sy, from_center);
+                        assert!((actual.x - expected.x).abs() < 1e-8);
+                        assert!((actual.y - expected.y).abs() < 1e-8);
+                    }
+                    if let Some(original) = original_arrow {
+                        let actual = engine.model.arrow(ids[1]).unwrap().global_points();
+                        for (actual, original) in actual.iter().zip(original.global_points()) {
+                            let expected = resized_point(original, bounds, sx, sy, from_center);
+                            assert!((actual.x - expected.x).abs() < 1e-8);
+                            assert!((actual.y - expected.y).abs() < 1e-8);
+                        }
+                    }
+                    assert!(engine.undo().unwrap());
+                    for (id, original) in &originals {
+                        assert_eq!(engine.model.magnifier(*id).unwrap(), original);
+                    }
+                    assert!(engine.redo().unwrap());
+                    for (id, value) in &committed {
+                        assert_eq!(engine.model.magnifier(*id).unwrap(), value);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn magnifier_centered_reflection_commits_when_group_proxies_are_unchanged() {
+    let (mut engine, viewport, ids) =
+        magnifier_resize_fixture(HighlightShape::Rectangle, Some(ResizeCompanion::Magnifier));
+    let mut transaction = Transaction::new("symmetric magnifiers");
+    let values = [
+        (Point::new(-60.0, -40.0), Point::new(60.0, 40.0)),
+        (Point::new(60.0, -40.0), Point::new(-60.0, 40.0)),
+    ];
+    for (id, (source_center, magnified_center)) in ids.iter().zip(values) {
+        transaction.update_magnifier(
+            *id,
+            snow_draw_engine_document::MagnifierData {
+                source_center,
+                magnified_center,
+                width: 20.0,
+                height: 20.0,
+                factor: 1.0,
+                corner_radii: CornerRadii::default(),
+                ..Default::default()
+            },
+        );
+    }
+    engine
+        .apply_editor_command(
+            viewport,
+            EditorCommand::ApplyTransaction(ApplyTransactionCommand {
+                transaction,
+                history_undo_snapshot: None,
+            }),
+        )
+        .unwrap();
+    let original_presentation = engine
+        .editor
+        .presentation_state(&engine.model, &engine.viewport_slot(viewport).unwrap().view);
+    let originals: Vec<_> = ids
+        .iter()
+        .map(|id| (*id, *engine.model.magnifier(*id).unwrap()))
+        .collect();
+    let (bounds, to) = resize_selection_by_scales(&mut engine, viewport, -1.0, -1.0, true);
+    let preview = engine
+        .editor
+        .presentation_state(&engine.model, &engine.viewport_slot(viewport).unwrap().view);
+    assert_eq!(
+        preview.preview_elements,
+        original_presentation.selection_elements
+    );
+    assert_eq!(
+        preview.selection_bounds,
+        original_presentation.selection_bounds
+    );
+    for (id, original) in &originals {
+        let value = preview
+            .preview_magnifiers
+            .iter()
+            .find(|value| value.id == *id)
+            .unwrap();
+        assert_resized_magnifier(value.magnifier, *original, bounds, -1.0, -1.0, true, true);
+    }
+    pointer(
+        &mut engine,
+        viewport,
+        PointerEventType::Up,
+        to.x + 400.0,
+        to.y + 300.0,
+        true,
+    );
+    for (id, original) in &originals {
+        assert_resized_magnifier(
+            *engine.model.magnifier(*id).unwrap(),
+            *original,
+            bounds,
+            -1.0,
+            -1.0,
+            true,
+            true,
+        );
+    }
+    assert!(engine.undo().unwrap());
+    for (id, original) in &originals {
+        assert_eq!(engine.model.magnifier(*id).unwrap(), original);
+    }
+    assert!(engine.redo().unwrap());
+    for (id, original) in &originals {
+        assert_resized_magnifier(
+            *engine.model.magnifier(*id).unwrap(),
+            *original,
+            bounds,
+            -1.0,
+            -1.0,
+            true,
+            true,
+        );
+    }
+}
+
+#[test]
+fn magnifier_single_resize_reflects_shape_corners_with_fixed_lens_center() {
+    for shape in [HighlightShape::Rectangle, HighlightShape::Diamond] {
+        for (sx, sy) in [(-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+            let (mut engine, viewport, ids) = magnifier_resize_fixture(shape, None);
+            let original = *engine.model.magnifier(ids[0]).unwrap();
+            let (bounds, to) = resize_selection_by_scales(&mut engine, viewport, sx, sy, false);
+            pointer(
+                &mut engine,
+                viewport,
+                PointerEventType::Up,
+                to.x + 400.0,
+                to.y + 300.0,
+                false,
+            );
+            assert_resized_magnifier(
+                *engine.model.magnifier(ids[0]).unwrap(),
+                original,
+                bounds,
+                sx,
+                sy,
+                false,
+                false,
+            );
+        }
+    }
 }
 
 #[test]

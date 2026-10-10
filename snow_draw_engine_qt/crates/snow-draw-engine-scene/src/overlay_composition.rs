@@ -421,19 +421,12 @@ fn magnifier_source_outline(
                 },
             ]
         }
-        HighlightShape::Diamond => vec![
-            ArrowPathCommand::MoveTo {
-                point: map(0.0, -h),
-            },
-            ArrowPathCommand::LineTo { point: map(w, 0.0) },
-            ArrowPathCommand::LineTo { point: map(0.0, h) },
-            ArrowPathCommand::LineTo {
-                point: map(-w, 0.0),
-            },
-            ArrowPathCommand::LineTo {
-                point: map(0.0, -h),
-            },
-        ],
+        HighlightShape::Diamond => snow_draw_engine_document::RoundedDiamond::new(
+            value.width,
+            value.height,
+            value.corner_radii,
+        )
+        .path_commands(value.source_center, value.rotation),
         HighlightShape::Ellipse => {
             let k = 0.5522847498307936;
             vec![
@@ -522,6 +515,37 @@ mod tests {
         assert_eq!(end, [20.0, 20.0]);
         assert_eq!(outline.stroke_width, 0.5);
         assert_eq!(outline.stroke_style, StrokeStyle::Dashed);
+    }
+
+    #[test]
+    fn rounded_diamond_source_outline_uses_arcs_for_each_tip() {
+        let value = snow_draw_engine_document::MagnifierData {
+            width: 100.0,
+            height: 100.0,
+            shape: snow_draw_engine_document::HighlightShape::Diamond,
+            ..Default::default()
+        };
+        let outline = magnifier_source_outline(value, 1.0);
+        assert_eq!(
+            outline
+                .path_commands
+                .iter()
+                .filter(|command| matches!(command, ArrowPathCommand::CubicTo { .. }))
+                .count(),
+            4
+        );
+        let ArrowPathCommand::MoveTo { point } = outline.path_commands[0] else {
+            panic!("start at a tangent");
+        };
+        assert!(point[0] < 0.0 && point[1] > -50.0);
+        let sharp = magnifier_source_outline(
+            snow_draw_engine_document::MagnifierData {
+                corner_radii: CornerRadii::default(),
+                ..value
+            },
+            1.0,
+        );
+        assert_eq!(sharp.path_commands.len(), 5);
     }
 
     fn frame_view() -> FrameView {

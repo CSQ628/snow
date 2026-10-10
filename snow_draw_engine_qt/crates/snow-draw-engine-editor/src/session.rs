@@ -322,6 +322,11 @@ impl EditorSession {
         self.editor.reset_editing_state();
     }
 
+    /// Discard fractional input at history replay or document-session transfer boundaries.
+    pub fn reset_magnifier_wheel_input(&mut self) {
+        self.editor.magnifier_wheel = None;
+    }
+
     /// Discards measurements, numbering sequences, and transient storage from the old document.
     pub fn reset_document_retained_state(&mut self, initial_serial_number: &SerialNumberStyle) {
         self.editor.reset_editing_state();

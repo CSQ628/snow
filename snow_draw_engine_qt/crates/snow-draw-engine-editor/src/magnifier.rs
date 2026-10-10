@@ -11,7 +11,8 @@ pub const MAGNIFIER_STYLE_PROPERTY_FACTOR: u32 = 8;
 pub const MAGNIFIER_STYLE_PROPERTY_SHOW_LEADER: u32 = 16;
 pub const MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD: u32 = 32;
 pub const MAGNIFIER_STYLE_PROPERTY_CORNER_RADII: u32 = 64;
-pub const MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 127;
+pub const MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO: u32 = 128;
+pub const MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 255;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MagnifierStyle {
@@ -21,6 +22,11 @@ pub struct MagnifierStyle {
     pub factor: f64,
     pub show_leader: bool,
     pub leader_arrowhead: Option<Arrowhead>,
+    #[serde(
+        default = "snow_draw_engine_core::arrow::default_arrow_ratio",
+        deserialize_with = "snow_draw_engine_core::arrow::deserialize_arrow_ratio"
+    )]
+    pub arrow_ratio: f64,
     #[serde(default = "default_corner_radii")]
     pub corner_radii: CornerRadii,
 }
@@ -41,6 +47,7 @@ impl MagnifierStyle {
             factor: value.factor,
             show_leader: value.show_leader,
             leader_arrowhead: value.leader_arrowhead,
+            arrow_ratio: value.arrow_ratio,
             corner_radii: value.corner_radii,
         }
     }
@@ -51,6 +58,7 @@ impl MagnifierStyle {
         value.factor = self.factor;
         value.show_leader = self.show_leader;
         value.leader_arrowhead = self.leader_arrowhead;
+        value.arrow_ratio = self.arrow_ratio;
         value.corner_radii = self.corner_radii;
     }
     pub fn merged(self, next: Self, properties: u32) -> Self {
@@ -90,6 +98,11 @@ impl MagnifierStyle {
             } else {
                 self.corner_radii
             },
+            arrow_ratio: if properties & MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO != 0 {
+                next.arrow_ratio
+            } else {
+                self.arrow_ratio
+            },
         }
     }
     fn differences(self, other: Self) -> u32 {
@@ -100,6 +113,7 @@ impl MagnifierStyle {
             | (u32::from(self.show_leader != other.show_leader) << 4)
             | (u32::from(self.leader_arrowhead != other.leader_arrowhead) << 5)
             | (u32::from(self.corner_radii != other.corner_radii) << 6)
+            | (u32::from(self.arrow_ratio != other.arrow_ratio) << 7)
     }
 }
 pub fn validate_magnifier_style(style: MagnifierStyle) -> Result<(), ErrorCode> {
@@ -107,6 +121,8 @@ pub fn validate_magnifier_style(style: MagnifierStyle) -> Result<(), ErrorCode> 
         || !(0.0..=72.0).contains(&style.stroke_width)
         || !style.factor.is_finite()
         || !(1.0..=10.0).contains(&style.factor)
+        || !style.arrow_ratio.is_finite()
+        || !(0.5..=3.0).contains(&style.arrow_ratio)
         || [
             style.corner_radii.top_left,
             style.corner_radii.top_right,
@@ -127,7 +143,78 @@ pub struct SelectionMagnifierState {
     pub magnifier: MagnifierData,
 }
 
+// Input remainders are transient and do not belong to document history or persisted styles.
+#[derive(Clone, Debug)]
+pub(crate) struct MagnifierWheelAccumulator {
+    selection: Vec<ElementId>,
+    kind: WheelDeltaKind,
+    direction: f64,
+    factor: f64,
+    delta: f64,
+}
+
 impl Editor {
+    pub(crate) fn process_magnifier_wheel_event(
+        &mut self,
+        document: &DocumentModel,
+        event: WheelEvent,
+    ) -> Result<InteractionOutput, ErrorCode> {
+        if event.delta.y != 0.0 {
+            let creation_defaults = !self.has_homogeneous_magnifier_selection(document);
+            let selection = if creation_defaults {
+                Vec::new()
+            } else {
+                self.state.selection.ids.clone()
+            };
+            let mut style = self.magnifier_style(document);
+            let direction = event.delta.y.signum();
+            let pending = self.magnifier_wheel.take().filter(|pending| {
+                pending.selection == selection
+                    && pending.kind == event.delta_kind
+                    && pending.direction == direction
+                    && pending.factor == style.factor
+            });
+            let delta = pending.map_or(0.0, |pending| pending.delta) + event.delta.y;
+            let unit = match event.delta_kind {
+                WheelDeltaKind::Angle => 120.0,
+                WheelDeltaKind::Pixel => 100.0,
+            };
+            let steps = (delta / unit).trunc();
+            if steps != 0.0 {
+                style.factor = ((style.factor + steps * 0.1) * 10.0)
+                    .round()
+                    .clamp(10.0, 100.0)
+                    / 10.0;
+                if let Some(command) = self.set_magnifier_style_patch(
+                    document,
+                    style,
+                    MAGNIFIER_STYLE_PROPERTY_FACTOR,
+                    creation_defaults,
+                )? {
+                    self.queue_command(command);
+                }
+            }
+            self.magnifier_wheel = Some(MagnifierWheelAccumulator {
+                selection,
+                kind: event.delta_kind,
+                direction,
+                factor: style.factor,
+                delta: if (style.factor == 10.0 && direction > 0.0)
+                    || (style.factor == 1.0 && direction < 0.0)
+                {
+                    0.0
+                } else {
+                    delta % unit
+                },
+            });
+        }
+        Ok(InteractionOutput {
+            consumed: true,
+            capture: PointerCaptureCommand::NoChange,
+            cursor: CursorCommand::NoChange,
+        })
+    }
+
     pub(crate) fn has_homogeneous_magnifier_selection(&self, document: &DocumentModel) -> bool {
         !self.state.selection.ids.is_empty()
             && self
@@ -170,6 +257,9 @@ impl Editor {
         validate_magnifier_style(style)?;
         if !creation_defaults && !self.has_homogeneous_magnifier_selection(document) {
             return Err(ErrorCode::InvalidState);
+        }
+        if properties & MAGNIFIER_STYLE_PROPERTY_FACTOR != 0 {
+            self.magnifier_wheel = None;
         }
         let mut transaction = Transaction::new("set magnifier style");
         if !creation_defaults && self.has_homogeneous_magnifier_selection(document) {
@@ -252,48 +342,44 @@ impl Editor {
                     .iter()
                     .find(|value| value.id == preview.id)?
                     .magnifier;
-                let old_proxy = state
-                    .original_elements
-                    .iter()
-                    .find(|value| value.id == preview.id)?
-                    .rect;
                 let mut next = original;
-                if single {
-                    match state.mode {
-                        SelectionEditMode::Move { .. } => {
-                            next = original.translated(Point::new(
-                                preview.rect.center.x - old_proxy.center.x,
-                                preview.rect.center.y - old_proxy.center.y,
-                            ))
-                        }
-                        SelectionEditMode::Resize { .. } => {
-                            next.source_center = preview.rect.center;
-                            next.width = preview.rect.width;
-                            next.height = preview.rect.height;
-                        }
-                        SelectionEditMode::Rotate { .. } => next.rotation = preview.rect.rotation,
-                        SelectionEditMode::CornerRadius { .. } => {
+                match state.preview_transform {
+                    SelectionTransform::Identity => {
+                        if let SelectionEditMode::CornerRadius { .. } = state.mode {
                             next.corner_radii = preview.rect.corner_radii;
                         }
                     }
-                } else {
-                    let delta_angle = preview.rect.rotation - old_proxy.rotation;
-                    let sx = preview.rect.width / old_proxy.width.max(0.0001);
-                    let sy = preview.rect.height / old_proxy.height.max(0.0001);
-                    let map = |point: Point<f64>| {
-                        let local =
-                            canvas_to_rect_local(old_proxy.center, old_proxy.rotation, point);
-                        rect_local_to_canvas(
-                            preview.rect.center,
-                            preview.rect.rotation,
-                            Point::new(local.x * sx, local.y * sy),
-                        )
-                    };
-                    next.source_center = map(original.source_center);
-                    next.magnified_center = map(original.magnified_center);
-                    next.width *= sx;
-                    next.height *= sy;
-                    next.rotation = normalize_rotation(original.rotation + delta_angle);
+                    SelectionTransform::Move { delta } => next = original.translated(delta),
+                    transform @ SelectionTransform::Resize {
+                        scale_x, scale_y, ..
+                    } => {
+                        next.source_center =
+                            transform.map_point(&state.original_bounds, original.source_center);
+                        if single {
+                            next.width = preview.rect.width;
+                            next.height = preview.rect.height;
+                        } else {
+                            next.magnified_center = transform
+                                .map_point(&state.original_bounds, original.magnified_center);
+                            next.width *= scale_x.abs();
+                            next.height *= scale_y.abs();
+                        }
+                        next.corner_radii = flipped_corner_radii(
+                            original.shape,
+                            original.corner_radii,
+                            scale_x < -f64::EPSILON,
+                            scale_y < -f64::EPSILON,
+                        );
+                    }
+                    transform @ SelectionTransform::Rotate { angle } => {
+                        if !single {
+                            next.source_center =
+                                transform.map_point(&state.original_bounds, original.source_center);
+                            next.magnified_center = transform
+                                .map_point(&state.original_bounds, original.magnified_center);
+                        }
+                        next.rotation = normalize_rotation(original.rotation + angle);
+                    }
                 }
                 Some(SelectionMagnifierState {
                     id: preview.id,
@@ -311,6 +397,12 @@ impl Editor {
             return Ok(Default::default());
         };
         if state.pointer_id != event.pointer_id {
+            return Ok(Default::default());
+        }
+        if event.event_type == PointerEventType::Up
+            && event.button != Some(state.button)
+            && !(state.button == PointerButton::Primary && event.button.is_none())
+        {
             return Ok(Default::default());
         }
         let mut state = *state;

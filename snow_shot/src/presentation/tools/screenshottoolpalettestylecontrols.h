@@ -368,6 +368,7 @@ class ScreenshotToolPaletteStyleControls final {
     template <typename Apply> void commitMagnifierProperty(quint32 property, Apply apply);
     void updateMagnifierStyleControls();
     void setMagnifierFactor(double factor);
+    void setMagnifierArrowRatio(double ratio);
     void setMagnifierStrokeWidth(double width);
     void setMagnifierCornerRadius(int radius);
     void registerAngleEntries();
@@ -542,6 +543,7 @@ class ScreenshotToolPaletteStyleControls final {
     std::unique_ptr<ScreenshotToolPaletteIconOptionEditor> m_magnifierLeaderEditor;
     QPointer<adqt::widgets::AdRadioButtonGroup> m_magnifierShapeGroup;
     QPointer<IconNumericValuePreviewButton> m_magnifierFactorEditor;
+    QPointer<IconNumericValuePreviewButton> m_magnifierArrowRatioEditor;
     QPointer<CornerRadiusEditorButton> m_magnifierCornerRadiusEditor;
     QPointer<adqt::widgets::AdButton> m_magnifierLeaderToggle;
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_angleColorEditor;

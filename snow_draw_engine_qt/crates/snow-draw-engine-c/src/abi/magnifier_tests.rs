@@ -13,7 +13,8 @@ fn magnifier_abi_layout_tool_and_all_arrowheads_round_trip() {
     assert_eq!(SnowSceneDisplayItemKind::Magnifier as u32, 9);
     assert_eq!(SnowOverlayRectKind::MagnifierMoveHandle as u32, 15);
     assert_eq!(SnowOverlayRectKind::MagnifierSelectionFrame as u32, 16);
-    assert_eq!(std::mem::size_of::<SnowMagnifierStyle>(), 64);
+    assert_eq!(std::mem::size_of::<SnowMagnifierStyle>(), 72);
+    assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, arrow_ratio), 64);
     assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, corner_radii), 32);
     assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, stroke_width), 8);
     assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, factor), 16);
@@ -35,6 +36,7 @@ fn magnifier_abi_layout_tool_and_all_arrowheads_round_trip() {
         let style = SnowMagnifierStyle {
             leader_arrowhead: head,
             factor: 3.5,
+            arrow_ratio: 2.3,
             corner_radii: SnowCornerRadii {
                 top_left: 3.0,
                 top_right: 6.0,
@@ -69,6 +71,18 @@ fn magnifier_ffi_invalid_values_and_selected_intent_leave_defaults_unchanged() {
         .magnifier_style;
     unsafe {
         for style in [
+            SnowMagnifierStyle {
+                arrow_ratio: f64::NAN,
+                ..Default::default()
+            },
+            SnowMagnifierStyle {
+                arrow_ratio: 0.4,
+                ..Default::default()
+            },
+            SnowMagnifierStyle {
+                arrow_ratio: 3.1,
+                ..Default::default()
+            },
             SnowMagnifierStyle {
                 factor: f64::NAN,
                 ..Default::default()
@@ -254,13 +268,15 @@ fn magnifier_scene_bridge_preserves_source_and_complete_straight_leader_geometry
         let head: SnowArrowhead = unsafe { std::mem::transmute(raw) };
         let style = SnowMagnifierStyle {
             leader_arrowhead: head,
+            arrow_ratio: 0.5 + f64::from(raw % 6) * 0.5,
             ..Default::default()
         };
         runtime
             .set_viewport_magnifier_style_patch(
                 viewport,
                 style.into(),
-                SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD,
+                SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD
+                    | SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO,
                 false,
             )
             .unwrap();
@@ -297,7 +313,7 @@ fn magnifier_scene_bridge_preserves_source_and_complete_straight_leader_geometry
         );
         assert_eq!(view.arrow_type, SnowArrowType::Straight);
         assert_eq!(view.arrow_shaft_type, SnowArrowShaftType::Plain);
-        assert_eq!(view.arrow_ratio, 1.0);
+        assert_eq!(view.arrow_ratio, style.arrow_ratio);
         assert_eq!(view.arrow_start_head, SnowArrowhead::None);
         assert_eq!(view.arrow_end_head, head);
         assert_eq!(view.arrow_point_count, 2);

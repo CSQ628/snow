@@ -9,6 +9,12 @@ impl Editor {
         modifiers: Modifiers,
     ) -> PrimaryPointerIntent {
         if modifiers.shift
+            && let CanvasHit::SelectionHandle(target @ SelectionHitTarget::CornerRadius(_)) =
+                self.resolve_canvas_hit(document, policy, canvas_point, true)
+        {
+            return PrimaryPointerIntent::BeginSelectionInteraction { target };
+        }
+        if modifiers.shift
             && policy.allow_shift_toggle
             && let CanvasHit::EligibleElement(id, _) =
                 self.resolve_canvas_hit(document, policy, canvas_point, false)

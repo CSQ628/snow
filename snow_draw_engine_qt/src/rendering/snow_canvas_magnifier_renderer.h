@@ -16,6 +16,9 @@ namespace snow_canvas_magnifier_renderer {
 struct RenderDiagnostics {
     std::size_t renderedMagnifierCount = 0;
     std::size_t sourceLayerDrawCount = 0;
+    std::size_t compositedTileCount = 0;
+    std::size_t compositedPixelCount = 0;
+    std::size_t peakCompositingPixelCount = 0;
 };
 
 RenderDiagnostics diagnosticsForCurrentThread();

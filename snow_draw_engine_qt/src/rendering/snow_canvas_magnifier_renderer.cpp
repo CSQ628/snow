@@ -2,11 +2,16 @@
 
 #include "snow_canvas_render_geometry.h"
 #include "snow_canvas_renderer.h"
+#include "snow_canvas_filter_tile_cache.h"
+#include "snow_draw_engine_qt/snow_canvas_image.h"
 
 #include <QPainter>
+#include <QPaintEngine>
 #include <QTransform>
 
 #include <cmath>
+#include <limits>
+#include <utility>
 
 namespace snow_canvas_magnifier_renderer {
 namespace {
@@ -16,6 +21,151 @@ thread_local RenderDiagnostics g_magnifierDiagnostics;
 bool finiteRect(const QRectF& rect) {
     return std::isfinite(rect.x()) && std::isfinite(rect.y()) && std::isfinite(rect.width()) &&
            std::isfinite(rect.height());
+}
+
+struct SourceLayer {
+    const SnowCanvasBaseImageSource* source;
+    QPainterPath coveragePath;
+};
+
+QList<SourceLayer> sampledLayers(const QList<SnowCanvasBaseImageSource>& sources,
+                                 const QTransform& sourceToView, const QTransform& viewToDevice,
+                                 const QRectF& visible) {
+    QList<SourceLayer> layers;
+    layers.reserve(sources.size());
+    const QRectF needed = sourceToView.inverted().mapRect(visible);
+    const QRectF devicePixel =
+        (sourceToView * viewToDevice).inverted().mapRect(QRectF(0.0, 0.0, 1.0, 1.0));
+    for (const auto& source : sources) {
+        if (source.image.isNull() || !finiteRect(source.canvasRect) ||
+            !source.canvasRect.isValid() || !finiteRect(source.coverage))
+            continue;
+        const QRectF coverage = source.coverage.isEmpty()
+                                    ? source.canvasRect
+                                    : source.canvasRect.intersected(source.coverage);
+        // Keep culling conservative at interpolation and device clip boundaries.
+        const double guardX =
+            qMax(source.canvasRect.width() / source.image.width(), devicePixel.width());
+        const double guardY =
+            qMax(source.canvasRect.height() / source.image.height(), devicePixel.height());
+        if (!needed.adjusted(-guardX, -guardY, guardX, guardY).intersects(coverage))
+            continue;
+        SourceLayer layer{&source, {}};
+        if (!source.coverage.isEmpty()) {
+            QPainterPath coveragePath;
+            coveragePath.addRect(coverage);
+            layer.coveragePath = sourceToView.map(coveragePath);
+        }
+        layers.append(std::move(layer));
+    }
+    return layers;
+}
+
+void drawLayer(QPainter& painter, const SourceLayer& layer, const QTransform& sourceToView,
+               const QPainterPath* lensClip = nullptr) {
+    painter.save();
+    if (lensClip != nullptr) {
+        // Resolve geometric coverage before raster clipping so partial exposure
+        // cannot change rectangle-versus-path edge rounding.
+        const QPainterPath clip =
+            layer.coveragePath.isEmpty() ? *lensClip : lensClip->intersected(layer.coveragePath);
+        painter.setClipPath(clip, Qt::IntersectClip);
+    } else if (!layer.coveragePath.isEmpty()) {
+        painter.setClipPath(layer.coveragePath, Qt::IntersectClip);
+    }
+    // Keep the complete image-to-canvas transform. Cropping a source rectangle
+    // would clamp bilinear neighbors independently at each exposure or tile edge.
+    painter.setWorldTransform(sourceToView, true);
+    painter.drawImage(layer.source->canvasRect, layer.source->image,
+                      QRectF(layer.source->image.rect()));
+    painter.restore();
+    ++g_magnifierDiagnostics.sourceLayerDrawCount;
+}
+
+void drawCompositedLayers(QPainter& painter, const QList<SourceLayer>& layers,
+                          const QTransform& sourceToView, const QPainterPath& viewPath,
+                          const QRectF& visible) {
+    const QTransform viewToDevice = painter.deviceTransform();
+    QRectF deviceBounds = viewToDevice.mapRect(visible);
+    // Align both edges to the physical pixel grid, including export scale, DPR,
+    // and enclosing filter-tile translations. Device metrics are not uniformly
+    // physical (QWidget uses logical dimensions). A raster engine's paintDevice
+    // is its physical backing image, including redirected widget/pixmap paints.
+    const auto* engine = painter.paintEngine();
+    QRegion systemClip;
+    if (engine != nullptr && engine->type() == QPaintEngine::Raster) {
+        if (const auto* target = engine->paintDevice())
+            deviceBounds =
+                deviceBounds.intersected(QRectF(0, 0, target->width(), target->height()));
+        systemClip = engine->systemClip();
+        if (!systemClip.isEmpty())
+            deviceBounds = deviceBounds.intersected(QRectF(systemClip.boundingRect()));
+    }
+    constexpr double minCoordinate = std::numeric_limits<int>::min() + 1.0;
+    constexpr double maxCoordinate = std::numeric_limits<int>::max() - 1.0;
+    constexpr double maxExtent = std::numeric_limits<int>::max() - 2.0;
+    if (!finiteRect(deviceBounds) || deviceBounds.isEmpty() ||
+        deviceBounds.left() < minCoordinate || deviceBounds.top() < minCoordinate ||
+        deviceBounds.right() > maxCoordinate || deviceBounds.bottom() > maxCoordinate ||
+        deviceBounds.width() > maxExtent || deviceBounds.height() > maxExtent)
+        return;
+    const QRect pixels = deviceBounds.toAlignedRect();
+    QPainterPath deviceClip = viewToDevice.map(viewPath);
+    if (painter.hasClipping())
+        deviceClip = deviceClip.intersected(viewToDevice.map(painter.clipPath()));
+    if (!systemClip.isEmpty()) {
+        QPainterPath systemPath;
+        systemPath.addRegion(systemClip);
+        deviceClip = deviceClip.intersected(systemPath);
+    }
+    constexpr int stripeMaxHeight = snow_canvas_filter_tile_cache::kTilePhysicalSize;
+    constexpr int scratchPixelBudget = stripeMaxHeight * stripeMaxHeight;
+    // Qt's downsampling rasterizer uses different precision for SIMD batches
+    // and their scalar tails. Splitting a horizontal span introduces new tails
+    // and visible seams, even with the complete original source rectangle.
+    // Full-width stripes preserve each source/coverage span's actual endpoints.
+    // Bound their height by a fixed pixel budget, with one full row as the minimum.
+    const int stripeHeight =
+        qMin(pixels.height(), qMin(stripeMaxHeight, qMax(1, scratchPixelBudget / pixels.width())));
+    QImage scratch = snowCanvasAllocateImage(QSize(pixels.width(), stripeHeight),
+                                             QImage::Format_ARGB32_Premultiplied);
+    if (scratch.isNull())
+        return;
+    const auto scratchPixels =
+        static_cast<std::size_t>(scratch.width()) * static_cast<std::size_t>(scratch.height());
+    g_magnifierDiagnostics.peakCompositingPixelCount =
+        qMax(g_magnifierDiagnostics.peakCompositingPixelCount, scratchPixels);
+    for (qint64 top = pixels.top(); top <= pixels.bottom(); top += stripeHeight) {
+        const QRect tile(pixels.left(), static_cast<int>(top), pixels.width(),
+                         qMin(stripeHeight, static_cast<int>(pixels.bottom() - top + 1)));
+        if (!deviceClip.intersects(QRectF(tile).adjusted(-1, -1, 1, 1)))
+            continue;
+        scratch.fill(Qt::transparent);
+        {
+            QPainter layersPainter(&scratch);
+            snow_canvas_renderer::copyPainterFontAndHints(layersPainter, painter);
+            layersPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            layersPainter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            layersPainter.setClipRect(QRect(0, 0, tile.width(), tile.height()));
+            layersPainter.setWorldTransform(
+                viewToDevice * QTransform::fromTranslate(-static_cast<double>(pixels.left()),
+                                                         -static_cast<double>(top)));
+            for (const auto& layer : layers)
+                drawLayer(layersPainter, layer, sourceToView);
+        }
+        painter.save();
+        // The lens is a group mask. Apply it and the existing exposure clip
+        // once after composing originals at full opacity with SourceOver.
+        painter.setClipPath(viewPath, Qt::IntersectClip);
+        painter.setWorldTransform(QTransform());
+        painter.setWorldTransform(painter.deviceTransform().inverted());
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        painter.drawImage(QRectF(tile), scratch, QRectF(0, 0, tile.width(), tile.height()));
+        painter.restore();
+        ++g_magnifierDiagnostics.compositedTileCount;
+        g_magnifierDiagnostics.compositedPixelCount +=
+            static_cast<std::size_t>(tile.width()) * static_cast<std::size_t>(tile.height());
+    }
 }
 
 } // namespace
@@ -37,11 +187,7 @@ QPainterPath lensPath(const SnowSceneDisplayItem& item) {
     if (item.rect_shape == SNOW_DISPLAY_RECT_SHAPE_ELLIPSE) {
         path.addEllipse(rect);
     } else if (item.rect_shape == SNOW_DISPLAY_RECT_SHAPE_DIAMOND) {
-        path.moveTo(0.0, rect.top());
-        path.lineTo(rect.right(), 0.0);
-        path.lineTo(0.0, rect.bottom());
-        path.lineTo(rect.left(), 0.0);
-        path.closeSubpath();
+        path = snow_canvas_render_geometry::roundedDiamondPath(rect, item.corner_radii);
     } else {
         path = snow_canvas_render_geometry::roundedRectPath(
             rect, snow_canvas_render_geometry::toViewCornerRadii(item.corner_radii, 1.0, rect));
@@ -73,9 +219,12 @@ void render(QPainter& painter, const SceneDisplayInfo& displayInfo,
     // Source sampling needs the interior; the border can be exposed outside it.
     if (visible.isEmpty() && !hasStroke)
         return;
+    const double opacity = painter.opacity() * qBound(0.0, item.opacity, 1.0);
+    if (opacity == 0.0)
+        return;
     ++g_magnifierDiagnostics.renderedMagnifierCount;
     painter.save();
-    painter.setOpacity(qBound(0.0, item.opacity, 1.0));
+    painter.setOpacity(opacity);
     const auto& geometry = item.magnifier;
     const double factor = geometry.magnification_factor;
     if (!visible.isEmpty() && sources != nullptr && std::isfinite(factor) && factor >= 1.0 &&
@@ -86,30 +235,15 @@ void render(QPainter& painter, const SceneDisplayInfo& displayInfo,
         const QTransform sourceToView(scale, 0.0, 0.0, scale,
                                       destinationCenter.x() - geometry.source_center_x * scale,
                                       destinationCenter.y() - geometry.source_center_y * scale);
-        const QRectF needed = sourceToView.inverted().mapRect(visible);
         painter.save();
-        painter.setClipPath(viewPath, Qt::IntersectClip);
-        painter.setWorldTransform(sourceToView, true);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        for (const auto& source : *sources) {
-            if (source.image.isNull() || !finiteRect(source.canvasRect) ||
-                !source.canvasRect.isValid() || !finiteRect(source.coverage))
-                continue;
-            const QRectF coverage = source.coverage.isEmpty()
-                                        ? source.canvasRect
-                                        : source.canvasRect.intersected(source.coverage);
-            const QRectF drawRect = needed.intersected(coverage);
-            if (drawRect.isEmpty())
-                continue;
-            const double pixelsX = source.image.width() / source.canvasRect.width();
-            const double pixelsY = source.image.height() / source.canvasRect.height();
-            const QRectF pixels((drawRect.x() - source.canvasRect.x()) * pixelsX,
-                                (drawRect.y() - source.canvasRect.y()) * pixelsY,
-                                drawRect.width() * pixelsX, drawRect.height() * pixelsY);
-            // QPainter reads shared source storage directly. Restrict both rectangles to
-            // exposed lens pixels instead of allocating a crop or enlarging an image.
-            painter.drawImage(drawRect, source.image, pixels);
-            ++g_magnifierDiagnostics.sourceLayerDrawCount;
+        const auto layers =
+            sampledLayers(*sources, sourceToView, painter.deviceTransform(), visible);
+        if (layers.size() <= 1) {
+            for (const auto& layer : layers)
+                drawLayer(painter, layer, sourceToView, &viewPath);
+        } else {
+            drawCompositedLayers(painter, layers, sourceToView, viewPath, visible);
         }
         painter.restore();
     }

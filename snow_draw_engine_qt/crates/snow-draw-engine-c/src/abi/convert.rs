@@ -1198,6 +1198,7 @@ impl From<SnowMagnifierStyle> for snow_draw_engine::MagnifierStyle {
             factor: value.factor,
             show_leader: value.show_leader != 0,
             leader_arrowhead: snow_arrowhead_to_rust(value.leader_arrowhead),
+            arrow_ratio: value.arrow_ratio,
             corner_radii: value.corner_radii.into(),
         }
     }
@@ -1216,6 +1217,7 @@ impl From<snow_draw_engine::MagnifierStyle> for SnowMagnifierStyle {
             show_leader: u8::from(value.show_leader),
             reserved: [0; 3],
             leader_arrowhead: snow_arrowhead_from_rust(value.leader_arrowhead),
+            arrow_ratio: value.arrow_ratio,
             corner_radii: value.corner_radii.into(),
         }
     }
