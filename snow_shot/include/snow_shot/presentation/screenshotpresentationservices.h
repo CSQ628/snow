@@ -74,6 +74,9 @@ class ScreenshotPresentationServices final {
     void updateOverlayState();
     // Continuous drags mutate the model immediately and prepare presentation at the frame boundary.
     void requestSelectionDragPresentation();
+    // Pull external drag input at the presentation deadline, before preparing that frame.
+    void requestSelectionDragInput(std::function<void()> input);
+    void discardSelectionDragInput();
     void updatePointerPresentation(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
     void requestColorPickerPresentation(ScreenshotOverlayWindow* overlay,
                                         const QPointF& localPosition);

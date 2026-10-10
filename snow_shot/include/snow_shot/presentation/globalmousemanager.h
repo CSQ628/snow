@@ -6,6 +6,7 @@
 #include <QObject>
 #include <functional>
 #include <memory>
+#include <optional>
 
 namespace snow_shot::presentation {
 class GlobalMouseBackend {
@@ -45,6 +46,8 @@ class GlobalMouseManager final : public QObject {
     void setCaptureAvailable(bool available);
     void cancelGesture(quint64 id);
     void beginButtonDrag(settings::SettingsGlobalMouseAction action);
+    // Consume the latest movement on the GUI thread at the presentation frame boundary.
+    [[nodiscard]] std::optional<GlobalMouseDragEvent> takePendingUpdate(quint64 id);
     [[nodiscard]] GlobalMousePermissionState permissionState() const;
     void refreshPermission();
     void usePermissionSnapshot(bool listen, bool accessibility);
@@ -53,7 +56,10 @@ class GlobalMouseManager final : public QObject {
 
   signals:
     void permissionRefreshRequested();
+    // Begin, Finish, and Cancel retain their order and bypass presentation scheduling.
     void dragEvent(const snow_shot::presentation::GlobalMouseDragEvent& event);
+    // Further movement updates the same sample until takePendingUpdate consumes it.
+    void dragUpdateAvailable(quint64 id);
     void operationFailed(const QString& message);
     void permissionStateChanged(snow_shot::presentation::GlobalMousePermissionState state);
 

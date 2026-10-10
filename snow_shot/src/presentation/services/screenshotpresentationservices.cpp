@@ -21,6 +21,8 @@
 #include "snow_shot/storage/settingsadapters.h"
 
 #include <QElapsedTimer>
+#include <QCursor>
+#include <QGuiApplication>
 #include <QPointer>
 #include <QScreen>
 
@@ -149,6 +151,7 @@ struct ScreenshotPresentationServices::State {
     bool presentationDirty = false;
     bool semanticDirty = false;
     bool selectionDragDirty = false;
+    std::function<void()> selectionDragInput;
     bool geometryDirty = false;
     bool pointerDirty = false;
     bool pointerKnown = false;
@@ -165,7 +168,7 @@ ScreenshotPresentationServices::ScreenshotPresentationServices(
         [this] {
             const qint64 now = nowNanoseconds();
             if (!m_state->semanticDirty && !m_state->selectionDragDirty &&
-                !m_state->geometryDirty && !m_state->pointerDirty &&
+                !m_state->selectionDragInput && !m_state->geometryDirty && !m_state->pointerDirty &&
                 m_state->colorPickerSource == ColorPickerSource::None &&
                 !m_smartSelectionTransition.isRunning()) {
                 m_state->scheduler->cancelDeadline();
@@ -315,6 +318,7 @@ void ScreenshotPresentationServices::resetPresentation() {
     m_state->presentationDirty = false;
     m_state->semanticDirty = false;
     m_state->selectionDragDirty = false;
+    discardSelectionDragInput();
     m_state->geometryDirty = false;
     m_state->pointerDirty = false;
     m_state->pointerKnown = false;
@@ -351,6 +355,19 @@ void ScreenshotPresentationServices::requestSelectionDragPresentation() {
     }
     m_state->selectionDragDirty = true;
     scheduleFrame();
+}
+
+void ScreenshotPresentationServices::requestSelectionDragInput(std::function<void()> input) {
+    if (!input || !m_state->initialized || m_state->sessionId != m_context.captureState.sessionId ||
+        !m_context.interaction.manualSelecting() || !m_context.interaction.dragging() ||
+        m_context.captureState.presentationSuppressed)
+        return;
+    m_state->selectionDragInput = std::move(input);
+    scheduleFrame();
+}
+
+void ScreenshotPresentationServices::discardSelectionDragInput() {
+    m_state->selectionDragInput = {};
 }
 
 ScreenshotPresentationServices::Preparation ScreenshotPresentationServices::prepareOverlayState() {
@@ -437,7 +454,11 @@ void ScreenshotPresentationServices::updatePointerPresentation(ScreenshotOverlay
 void ScreenshotPresentationServices::scheduleFrame() {
     if (m_state->inFrame)
         return;
-    QScreen* screen = m_state->pointerOwner ? m_state->pointerOwner->screen() : nullptr;
+    // Hook input can cross monitors without a Qt pointer event updating pointerOwner.
+    QScreen* screen =
+        m_state->selectionDragInput ? QGuiApplication::screenAt(QCursor::pos()) : nullptr;
+    if (!screen)
+        screen = m_state->pointerOwner ? m_state->pointerOwner->screen() : nullptr;
     if (!screen) {
         const auto* display = m_context.geometry.displayForCanvasRect(
             m_context.displaySession, m_state->toolbar.selectionCanvas);
@@ -480,7 +501,7 @@ void ScreenshotPresentationServices::requestSelectionDragColorPickerPresentation
         m_context.displaySession.startup ? m_context.displaySession.startup->layoutGeneration : 0;
     m_state->colorPickerDragMode = dragMode;
     m_state->colorPickerSource = ColorPickerSource::SelectionDrag;
-    if (firstSample)
+    if (firstSample && !m_state->inFrame)
         flushColorPickerPresentation();
     else
         scheduleFrame();
@@ -527,12 +548,29 @@ void ScreenshotPresentationServices::flushPendingFrame() {
         resetPresentation();
         return;
     }
+    m_state->inFrame = true;
+    if (auto input = std::exchange(m_state->selectionDragInput, {})) {
+        const quint64 sessionId = m_state->sessionId;
+        if (m_context.interaction.manualSelecting() && m_context.interaction.dragging())
+            input();
+        // Input can synchronously cancel the capture or start another session.
+        if (!m_state->initialized || m_state->sessionId != sessionId ||
+            m_context.captureState.sessionId != sessionId) {
+            m_state->inFrame = false;
+            if (m_state->initialized) {
+                if (m_state->sessionId != m_context.captureState.sessionId)
+                    resetPresentation();
+                else
+                    scheduleFrame();
+            }
+            return;
+        }
+    }
     if (m_state->selectionDragDirty || m_state->hints.captureMode != m_context.interaction.mode() ||
         m_state->dragMode != m_context.interaction.dragMode() ||
         m_state->lifecycle != presentationLifecycle(m_context)) {
         (void)prepareOverlayState();
     }
-    m_state->inFrame = true;
     const qint64 now = nowNanoseconds();
     const PresentationSnapshot snapshot{m_state->toolbar, m_state->visual, m_state->hints,
                                         m_state->lifecycle, m_state->dragMode};
@@ -590,8 +628,9 @@ void ScreenshotPresentationServices::flushPendingFrame() {
     m_state->frameClock.advancePast(nowNanoseconds());
     if (m_context.interaction.inactive()) {
         m_state->scheduler->stop();
-    } else if (m_state->semanticDirty || m_state->selectionDragDirty || m_state->geometryDirty ||
-               m_state->pointerDirty || m_state->colorPickerSource != ColorPickerSource::None ||
+    } else if (m_state->semanticDirty || m_state->selectionDragDirty ||
+               m_state->selectionDragInput || m_state->geometryDirty || m_state->pointerDirty ||
+               m_state->colorPickerSource != ColorPickerSource::None ||
                m_smartSelectionTransition.isRunning()) {
         scheduleFrame();
     } else {

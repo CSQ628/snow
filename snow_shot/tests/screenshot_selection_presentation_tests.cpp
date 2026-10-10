@@ -241,6 +241,107 @@ void selectionDragBoundariesAndCommandsCommitSynchronously() {
             "synchronous drag boundaries must cancel superseded pending commits");
 }
 
+void deferredSelectionDragInputSamplesTheLatestPositionAtOneFrame() {
+    Fixture fixture(QSize(1200, 800), false);
+    fixture.displays.startup->resumeLiveInput();
+    fixture.enableColorPicker(ScreenshotColorPickerDisplayMode::AlwaysShow);
+    fixture.coordinator.setSelectionToolbarHidden(true);
+    fixture.interaction.confirmSelection();
+    require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::BottomRight),
+            "deferred input requires a real selection drag");
+    fixture.services->updateOverlayState();
+    fixture.processEvents();
+    fixture.resetCounters();
+    const QRectF initial = fixture.displayedSelection();
+    QRectF latest = initial;
+    int inputCalls = 0;
+    for (int request = 1; request <= 16; ++request) {
+        latest = initial.adjusted(0, 0, request * 4.0, request * 2.0);
+        fixture.services->requestSelectionDragInput([&] {
+            ++inputCalls;
+            fixture.selection.setDraggedSelectionRect(latest,
+                                                      ScreenshotSelectionDragMode::BottomRight);
+            fixture.services->requestSelectionDragPresentation();
+            fixture.services->requestSelectionDragColorPickerPresentation(latest.bottomRight());
+            // Explicit state updates and flushes inside input must join this frame.
+            fixture.services->updateOverlayState();
+            fixture.flushFrame();
+            require(fixture.stateNotifications == 0,
+                    "deferred input must not recursively commit presentation");
+        });
+    }
+    // The provider must be sampled at delivery, including movement after the notification.
+    latest.adjust(0, 0, 12, 6);
+    auto* picker = fixture.coordinator.colorPicker();
+    require(inputCalls == 0 && fixture.selection.normalizedSelection() == initial &&
+                fixture.displayedSelection() == initial && picker->workCounters().samples == 0,
+            "external drag input must wait for the shared presentation deadline");
+    fixture.advanceClock(17);
+    fixture.flushFrame();
+    fixture.processEvents();
+    require(
+        inputCalls == 1 && fixture.displayedSelection() == latest &&
+            fixture.stateNotifications == 1 && fixture.paintObserver.canvasPaints == 1 &&
+            picker->workCounters().samples == 1 && picker->workCounters().previews == 1,
+        "one frame must consume the latest input, prepare geometry, and sample the picker once");
+}
+
+void terminalSelectionDragInputKeepsItsExactPosition() {
+    Fixture fixture(QSize(1200, 800), false);
+    fixture.interaction.confirmSelection();
+    require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::BottomRight),
+            "terminal input requires an active selection drag");
+    fixture.services->updateOverlayState();
+    fixture.processEvents();
+    fixture.resetCounters();
+    int inputCalls = 0;
+    fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+    const QRectF released = fixture.displayedSelection().adjusted(0, 0, 31, 17);
+    fixture.services->discardSelectionDragInput();
+    fixture.selection.setDraggedSelectionRect(released, ScreenshotSelectionDragMode::BottomRight);
+    fixture.interaction.finishDrag();
+    fixture.services->updateOverlayState();
+    fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+    fixture.advanceClock(17);
+    fixture.flushFrame();
+    require(inputCalls == 0 && fixture.displayedSelection() == released &&
+                fixture.stateNotifications == 1,
+            "release must commit its exact coordinates and reject queued or later movement");
+}
+
+void resetAndEpochChangesDiscardDeferredSelectionDragInput() {
+    Fixture fixture(QSize(1200, 800), false);
+    fixture.interaction.confirmSelection();
+    require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::BottomRight),
+            "cancellation requires an active selection drag");
+    fixture.services->updateOverlayState();
+    int inputCalls = 0;
+    fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+    fixture.services->resetPresentation();
+    fixture.advanceClock(17);
+    fixture.flushFrame();
+    require(inputCalls == 0, "reset must discard pending external input");
+    fixture.services->updateOverlayState();
+    fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+    ++fixture.captureState.sessionId;
+    fixture.displays.startup->sessionId = fixture.captureState.sessionId;
+    fixture.flushFrame();
+    require(inputCalls == 0, "a changed session must never consume the previous gesture's input");
+    fixture.services->updateOverlayState();
+    fixture.services->requestSelectionDragInput([&] {
+        ++inputCalls;
+        fixture.services->resetPresentation();
+    });
+    fixture.flushFrame();
+    require(inputCalls == 1 && !fixture.services->frameSchedulerForTesting().active(),
+            "input that resets presentation must leave no retired frame work");
+    fixture.services->updateOverlayState();
+    fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+    fixture.flushFrame();
+    require(inputCalls == 2,
+            "reentrant input reset must release the frame guard for the next drag");
+}
+
 void theFirstUsableMarqueeIsPresentedImmediately() {
     Fixture fixture(QSize(1200, 800), false);
     fixture.interaction.returnToSelectionMode(false);
@@ -1459,6 +1560,9 @@ int main(int argc, char* argv[]) {
     theFirstResultAfterAnEmptySelectionIsImmediate();
     selectionDragBurstsPrepareAndCommitTheLatestModelAtOneFrame();
     selectionDragBoundariesAndCommandsCommitSynchronously();
+    deferredSelectionDragInputSamplesTheLatestPositionAtOneFrame();
+    terminalSelectionDragInputKeepsItsExactPosition();
+    resetAndEpochChangesDiscardDeferredSelectionDragInput();
     theFirstUsableMarqueeIsPresentedImmediately();
     canceledRequestsLeaveTheCommittedFrameUntouched();
     captureLifecycleChangesNotifyEvenWhenGeometryIsUnchanged();

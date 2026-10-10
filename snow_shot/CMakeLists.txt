@@ -6214,6 +6214,67 @@ if(SNOW_SHOT_BUILD_TESTS)
         SNOW_TEST_CROSS_PLATFORM TRUE ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(SNOW_SHOT_BUILD_BENCHMARKS)
+        add_executable(snow-shot-global-mouse-presentation-benchmark
+            tests/global_mouse_presentation_performance_benchmark.cpp
+            src/presentation/capture/screenshotglobalmousedrag.cpp)
+        target_link_libraries(snow-shot-global-mouse-presentation-benchmark PRIVATE
+            snow-shot-selection-presentation-runtime snow_shot_global_mouse)
+        snow_shot_import_offscreen_platform(snow-shot-global-mouse-presentation-benchmark)
+        add_test(NAME snow-shot-global-mouse-presentation-benchmark
+            COMMAND snow-shot-global-mouse-presentation-benchmark
+                --rates 120,144,165,240 --input-rates 1000,8000 --duration-ms 120 --warmup-ms 30)
+        set_tests_properties(snow-shot-global-mouse-presentation-benchmark PROPERTIES
+            LABELS "benchmark" TIMEOUT 120 ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+        set(SNOW_SHOT_GLOBAL_MOUSE_PRESENTATION_BASELINE_DIR "" CACHE PATH
+            "Optional original snow_shot source directory for the global mouse presentation benchmark")
+        if(SNOW_SHOT_GLOBAL_MOUSE_PRESENTATION_BASELINE_DIR)
+            set(_global_mouse_baseline_root "${SNOW_SHOT_GLOBAL_MOUSE_PRESENTATION_BASELINE_DIR}")
+            add_library(snow-shot-global-mouse-presentation-baseline-input STATIC
+                "${_global_mouse_baseline_root}/include/snow_shot/presentation/globalmousemanager.h"
+                "${_global_mouse_baseline_root}/include/snow_shot/presentation/globalmousegesture.h"
+                "${_global_mouse_baseline_root}/src/presentation/services/globalmousemanager.cpp"
+                "${_global_mouse_baseline_root}/src/presentation/services/globalmousegesture.cpp"
+                "${_global_mouse_baseline_root}/src/platform/globalmousebackend.cpp")
+            target_include_directories(snow-shot-global-mouse-presentation-baseline-input BEFORE PUBLIC
+                "${_global_mouse_baseline_root}/include")
+            target_link_libraries(snow-shot-global-mouse-presentation-baseline-input PUBLIC
+                snow_shot_storage Qt6::Gui)
+            if(WIN32)
+                target_sources(snow-shot-global-mouse-presentation-baseline-input PRIVATE
+                    "${_global_mouse_baseline_root}/src/platform/windows/globalmousebackend.cpp"
+                    "${_global_mouse_baseline_root}/src/platform/windows/globalmousebackend_p.h")
+                target_link_libraries(snow-shot-global-mouse-presentation-baseline-input PRIVATE
+                    dwmapi user32)
+            elseif(APPLE)
+                target_sources(snow-shot-global-mouse-presentation-baseline-input PRIVATE
+                    "${_global_mouse_baseline_root}/src/platform/macos/globalmousebackend.mm"
+                    "${_global_mouse_baseline_root}/src/platform/macos/globalmouseinput.cpp"
+                    "${_global_mouse_baseline_root}/src/platform/macos/globalmousebackend_p.h")
+                target_link_libraries(snow-shot-global-mouse-presentation-baseline-input PRIVATE
+                    "${SNOW_SHOT_CARBON_FRAMEWORK}" "${SNOW_SHOT_APPKIT_FRAMEWORK}"
+                    "${SNOW_SHOT_APPLICATION_SERVICES_FRAMEWORK}"
+                    "${SNOW_SHOT_CORE_FOUNDATION_FRAMEWORK}" "${SNOW_SHOT_CORE_GRAPHICS_FRAMEWORK}")
+            endif()
+            add_executable(snow-shot-global-mouse-presentation-baseline-benchmark
+                tests/global_mouse_presentation_performance_benchmark.cpp
+                src/presentation/capture/screenshotglobalmousedrag.cpp)
+            # Only the manager header comes from the archive. Every UI header and implementation
+            # stays current, keeping this comparison focused on the input handoff.
+            set(_global_mouse_baseline_include "${CMAKE_CURRENT_BINARY_DIR}/global-mouse-baseline-include")
+            file(MAKE_DIRECTORY "${_global_mouse_baseline_include}/snow_shot/presentation")
+            configure_file(
+                "${_global_mouse_baseline_root}/include/snow_shot/presentation/globalmousemanager.h"
+                "${_global_mouse_baseline_include}/snow_shot/presentation/globalmousemanager.h" COPYONLY)
+            target_include_directories(snow-shot-global-mouse-presentation-baseline-benchmark BEFORE PRIVATE
+                "${_global_mouse_baseline_include}" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+            target_compile_definitions(snow-shot-global-mouse-presentation-baseline-benchmark PRIVATE
+                SNOW_SHOT_GLOBAL_MOUSE_PRESENTATION_BASELINE=1)
+            target_link_libraries(snow-shot-global-mouse-presentation-baseline-benchmark PRIVATE
+                snow-shot-selection-presentation-runtime snow-shot-global-mouse-presentation-baseline-input)
+            snow_shot_import_offscreen_platform(snow-shot-global-mouse-presentation-baseline-benchmark)
+            unset(_global_mouse_baseline_include)
+            unset(_global_mouse_baseline_root)
+        endif()
         add_executable(snow-shot-selection-presentation-benchmark
             tests/screenshot_selection_presentation_performance_benchmark.cpp)
         target_link_libraries(snow-shot-selection-presentation-benchmark PRIVATE

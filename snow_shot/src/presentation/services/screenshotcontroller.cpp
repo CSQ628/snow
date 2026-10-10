@@ -665,6 +665,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     snow_shot::runtime::RuntimeActivityLease m_delayedCaptureActivity;
     PendingSelectionAction m_pendingSelectionAction = PendingSelectionAction::None;
     ScreenshotGlobalMouseDrag m_globalMouseDrag;
+    std::function<std::optional<QPointF>(quint64)> m_globalMouseMovementProvider;
     bool m_pendingOcrFromQuickOcrAction = false;
     bool m_ocrFromQuickOcrAction = false;
     bool m_ocrTranslateAfterRecognition = false;
@@ -1649,6 +1650,11 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
                 [this]() { handleCapturePresented(); },
                 [this]() {
                     if (m_globalMouseDrag.active()) {
+                        if (m_globalMouseMovementProvider) {
+                            if (auto position =
+                                    m_globalMouseMovementProvider(m_globalMouseDrag.id()))
+                                m_globalMouseDrag.update(m_globalMouseDrag.id(), *position);
+                        }
                         m_globalMouseDrag.setReady();
                         refreshGlobalMouseDragFromLiveCursor();
                         m_overlayInputHandler->beginExternalSelectionDrag(
@@ -4390,7 +4396,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer ? QStringLiteral("service_destroyed")
+                                           : !printer         ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -5588,6 +5594,8 @@ ScreenshotController::Impl::~Impl() {
 
 void ScreenshotController::Impl::endGlobalMouseDrag() {
     const quint64 id = m_globalMouseDrag.id();
+    if (m_presentationServices)
+        m_presentationServices->discardSelectionDragInput();
     m_globalMouseDrag.reset();
     if (m_overlayInputHandler) {
         m_overlayInputHandler->setExternalDragActive(false);
@@ -6125,7 +6133,29 @@ void ScreenshotController::updateGlobalMouseCapture(quint64 gestureId, const QPo
     }
 }
 
+void ScreenshotController::setGlobalMouseMovementProvider(
+    std::function<std::optional<QPointF>(quint64)> provider) {
+    m_impl->m_globalMouseMovementProvider = std::move(provider);
+}
+
+void ScreenshotController::requestGlobalMouseCaptureFrame(quint64 gestureId) {
+    const auto& drag = m_impl->m_globalMouseDrag;
+    if (!drag.active() || drag.id() != gestureId || !drag.ready() || drag.released() ||
+        !m_impl->m_globalMouseMovementProvider)
+        return;
+    m_impl->m_presentationServices->requestSelectionDragInput([this, gestureId] {
+        const auto& current = m_impl->m_globalMouseDrag;
+        if (!current.active() || current.id() != gestureId || !current.ready() ||
+            current.released())
+            return;
+        if (auto position = m_impl->m_globalMouseMovementProvider(gestureId))
+            updateGlobalMouseCapture(gestureId, *position);
+    });
+}
+
 void ScreenshotController::finishGlobalMouseCapture(quint64 gestureId, const QPointF& position) {
+    if (m_impl->m_globalMouseDrag.id() == gestureId)
+        m_impl->m_presentationServices->discardSelectionDragInput();
     if (m_impl->m_globalMouseDrag.update(gestureId, position, true)) {
         m_impl->applyGlobalMouseDrag(true);
     }

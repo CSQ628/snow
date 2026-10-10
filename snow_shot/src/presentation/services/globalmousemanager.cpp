@@ -2,28 +2,16 @@
 #include "snow_shot/storage/applicationstorage.h"
 
 #include <QJsonObject>
-#include <QCursor>
-#include <QDeadlineTimer>
-#include <QGuiApplication>
 #include <QMutex>
 #include <QMutexLocker>
-#include <QScreen>
-#include <QTimer>
-#include <algorithm>
+#include <QThread>
 #include <array>
-#include <cmath>
 #include <utility>
 
 namespace snow_shot::presentation {
 struct GlobalMouseManager::Impl {
     Impl(GlobalMouseManager& owner, std::unique_ptr<GlobalMouseBackend> input)
-        : q(owner), backend(input ? std::move(input) : createGlobalMouseBackend()), frameTimer(&q) {
-        frameTimer.setObjectName(QStringLiteral("globalMouseFrameTimer"));
-        frameTimer.setSingleShot(true);
-        frameTimer.setTimerType(Qt::PreciseTimer);
-        QObject::connect(&frameTimer, &QTimer::timeout, &q,
-                         [this]() { deliver(generation, true); });
-    }
+        : q(owner), backend(input ? std::move(input) : createGlobalMouseBackend()) {}
 
     void reload() {
         configuration.bindings.clear();
@@ -55,21 +43,45 @@ struct GlobalMouseManager::Impl {
             return;
         }
         using Kind = GlobalMouseDragEvent::Kind;
-        if (!pending.isEmpty() && event.kind != Kind::Begin &&
-            pending.last().kind == Kind::Update && pending.last().id == event.id) {
-            // A terminal event carries the final position and supersedes an unpresented move.
-            pending.last() = event;
+        if (event.kind == Kind::Update) {
+            if (event.id == 0 || event.id != producerActiveId) {
+                return;
+            }
+            const bool alreadyPending = pendingUpdate.has_value();
+            pendingUpdate = event;
+            if (alreadyPending) {
+                return;
+            }
+            // Hold the notification until the presentation owner consumes its sample.
+            updateNotificationDelivered = false;
         } else {
+            if (event.kind == Kind::Begin) {
+                producerActiveId = event.id;
+                pendingUpdate.reset();
+                updateNotificationDelivered = false;
+            } else {
+                if (producerActiveId == event.id) {
+                    producerActiveId = 0;
+                }
+                clearPendingUpdate(event.id);
+            }
             pending.push_back(event);
         }
-        if (deliveryQueued || (event.kind == Kind::Update && pacing)) {
+        if (deliveryQueued) {
             return;
         }
         deliveryQueued = true;
         QMetaObject::invokeMethod(&q, [this, epoch]() { deliver(epoch); }, Qt::QueuedConnection);
     }
 
-    void deliver(quint64 epoch, bool frameDeadline = false) {
+    void clearPendingUpdate(quint64 id) {
+        if (pendingUpdate && pendingUpdate->id == id) {
+            pendingUpdate.reset();
+            updateNotificationDelivered = false;
+        }
+    }
+
+    void deliver(quint64 epoch) {
         QVector<GlobalMouseDragEvent> events;
         {
             QMutexLocker lock(&mutex);
@@ -77,24 +89,8 @@ struct GlobalMouseManager::Impl {
                 return;
             }
             deliveryQueued = false;
-            // A timer can overtake a queued boundary wake. That stale wake must not
-            // present the next frame's movement early.
-            if (!frameDeadline && pacing &&
-                std::all_of(pending.cbegin(), pending.cend(), [](const auto& event) {
-                    return event.kind == GlobalMouseDragEvent::Kind::Update;
-                })) {
-                return;
-            }
-            if (frameDeadline) {
-                pacing = false;
-            }
             events.swap(pending);
-            if (events.isEmpty()) {
-                return;
-            }
-            pacing = true;
         }
-        QDeadlineTimer nextFrame(frameInterval, Qt::PreciseTimer);
         for (const auto& item : events) {
             if (epoch != generation || !started) {
                 return;
@@ -103,20 +99,13 @@ struct GlobalMouseManager::Impl {
                 activeId = item.id;
                 pendingCaptureId = item.id;
                 pendingCaptureEvent = item;
-                // QCursor uses logical desktop coordinates, unlike native gesture positions.
-                const QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
-                const qreal rate = screen ? screen->refreshRate() : 60.0;
-                frameInterval =
-                    std::max(1, static_cast<int>(std::ceil(1000.0 / (rate > 0 ? rate : 60.0))));
-                frameTimer.setInterval(frameInterval);
-                nextFrame.setRemainingTime(frameInterval, Qt::PreciseTimer);
             } else if (item.kind == GlobalMouseDragEvent::Kind::Cancel &&
                        pendingCaptureId == item.id) {
                 activeId = 0;
                 pendingCaptureId = 0;
             } else if (activeId != item.id) {
                 continue;
-            } else if (item.kind != GlobalMouseDragEvent::Kind::Update) {
+            } else {
                 activeId = 0;
             }
             emit q.dragEvent(item);
@@ -124,14 +113,16 @@ struct GlobalMouseManager::Impl {
         if (epoch != generation || !started) {
             return;
         }
-        if (activeId != 0) {
-            // Subscriber work consumes this frame's budget. Overruns yield once instead of
-            // adding a full interval or replaying missed frames.
-            frameTimer.start(static_cast<int>(std::max<qint64>(1, nextFrame.remainingTime())));
-        } else {
-            frameTimer.stop();
+        quint64 updateId = 0;
+        {
             QMutexLocker lock(&mutex);
-            pacing = false;
+            if (pendingUpdate && pendingUpdate->id == activeId && !updateNotificationDelivered) {
+                updateNotificationDelivered = true;
+                updateId = pendingUpdate->id;
+            }
+        }
+        if (updateId != 0) {
+            emit q.dragUpdateAvailable(updateId);
         }
     }
 
@@ -142,14 +133,14 @@ struct GlobalMouseManager::Impl {
     QMetaObject::Connection configurationConnection;
     QMutex mutex;
     QVector<GlobalMouseDragEvent> pending;
-    QTimer frameTimer;
-    int frameInterval = 17;
+    std::optional<GlobalMouseDragEvent> pendingUpdate;
     quint64 generation = 0;
+    quint64 producerActiveId = 0;
     quint64 activeId = 0;
-    // Release stops frame pacing, but capture preparation may still need cancellation.
+    // Release ends movement, but capture preparation may still need cancellation.
     quint64 pendingCaptureId = 0;
     GlobalMouseDragEvent pendingCaptureEvent;
-    bool pacing = false;
+    bool updateNotificationDelivered = false;
     bool deliveryQueued = false;
     bool started = false;
 };
@@ -227,6 +218,18 @@ void GlobalMouseManager::beginButtonDrag(settings::SettingsGlobalMouseAction act
     }
 }
 
+std::optional<GlobalMouseDragEvent> GlobalMouseManager::takePendingUpdate(quint64 id) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    QMutexLocker lock(&m_impl->mutex);
+    if (!m_impl->started || m_impl->activeId != id || !m_impl->pendingUpdate ||
+        m_impl->pendingUpdate->id != id) {
+        return std::nullopt;
+    }
+    auto event = std::exchange(m_impl->pendingUpdate, std::nullopt);
+    m_impl->updateNotificationDelivered = false;
+    return event;
+}
+
 GlobalMousePermissionState GlobalMouseManager::permissionState() const {
     return m_impl->permission;
 }
@@ -257,13 +260,14 @@ void GlobalMouseManager::shutdown() {
     m_impl->started = false;
     disconnect(m_impl->configurationConnection);
     m_impl->backend->stop();
-    m_impl->frameTimer.stop();
     {
         QMutexLocker lock(&m_impl->mutex);
         ++m_impl->generation;
         m_impl->activeId = 0;
+        m_impl->producerActiveId = 0;
         m_impl->pendingCaptureId = 0;
-        m_impl->pacing = false;
+        m_impl->pendingUpdate.reset();
+        m_impl->updateNotificationDelivered = false;
         m_impl->deliveryQueued = false;
         m_impl->pending.clear();
     }
@@ -282,9 +286,13 @@ void GlobalMouseManager::cancelGesture(quint64 id) {
     if (m_impl->pendingCaptureId == id) {
         m_impl->pendingCaptureId = 0;
         m_impl->activeId = 0;
-        m_impl->frameTimer.stop();
+    }
+    {
         QMutexLocker lock(&m_impl->mutex);
-        m_impl->pacing = false;
+        if (m_impl->producerActiveId == id) {
+            m_impl->producerActiveId = 0;
+        }
+        m_impl->clearPendingUpdate(id);
         m_impl->pending.removeIf([id](const auto& event) { return event.id == id; });
     }
     m_impl->backend->cancel(id);

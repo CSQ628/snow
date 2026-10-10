@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <functional>
+#include <optional>
 
 namespace snow_shot::platform {
 struct SelectedFileTarget;
@@ -73,6 +74,8 @@ class ScreenshotController : public QObject {
         snow_shot::presentation::GlobalMouseCoordinateSpace space =
             snow_shot::presentation::GlobalMouseCoordinateSpace::PhysicalPixels);
     void updateGlobalMouseCapture(quint64 gestureId, const QPointF& position);
+    void setGlobalMouseMovementProvider(std::function<std::optional<QPointF>(quint64)> provider);
+    void requestGlobalMouseCaptureFrame(quint64 gestureId);
     void finishGlobalMouseCapture(quint64 gestureId, const QPointF& position);
     void cancelGlobalMouseCapture(quint64 gestureId);
 

@@ -303,6 +303,19 @@ class ApplicationController::Impl {
                 static_cast<void>(featureRouter.dispatch(
                     feature, [this, event]() { dispatchGlobalMouseEvent(event); }, false));
             });
+        QObject::connect(&globalMouseManager,
+                         &presentation::GlobalMouseManager::dragUpdateAvailable, &q,
+                         [this](quint64 id) {
+                             if (!screenshotController || id != activeGlobalMouseGestureId)
+                                 return;
+                             static_cast<void>(featureRouter.dispatch(
+                                 activeGlobalMouseFeature,
+                                 [this, id]() {
+                                     if (screenshotController && id == activeGlobalMouseGestureId)
+                                         screenshotController->requestGlobalMouseCaptureFrame(id);
+                                 },
+                                 false));
+                         });
         auto& applicationStorage = storage::ApplicationStorage::instance();
         if (!applicationStorage.isInitialized()) {
             static_cast<void>(applicationStorage.initialize());
@@ -1459,6 +1472,25 @@ class ApplicationController::Impl {
             QObject::connect(screenshotController.get(),
                              &ScreenshotController::globalMouseCaptureEnded, &globalMouseManager,
                              &presentation::GlobalMouseManager::cancelGesture);
+            QObject::connect(screenshotController.get(),
+                             &ScreenshotController::globalMouseCaptureEnded, &q,
+                             [this](quint64 id) {
+                                 if (id == activeGlobalMouseGestureId)
+                                     activeGlobalMouseGestureId = 0;
+                             });
+            screenshotController->setGlobalMouseMovementProvider([this](quint64 id) {
+                std::optional<QPointF> position;
+                if (id != activeGlobalMouseGestureId)
+                    return position;
+                static_cast<void>(featureRouter.dispatch(
+                    activeGlobalMouseFeature,
+                    [this, id, &position]() {
+                        if (const auto update = globalMouseManager.takePendingUpdate(id))
+                            position = update->position;
+                    },
+                    false));
+                return position;
+            });
         }
         return screenshotController.get();
     }
@@ -1880,8 +1912,11 @@ class ApplicationController::Impl {
         using Kind = presentation::GlobalMouseDragEvent::Kind;
         switch (event.kind) {
         case Kind::Begin:
+            activeGlobalMouseGestureId = event.id;
+            activeGlobalMouseFeature = featureFamilyFor(event.action);
             if (!controller->beginGlobalMouseCapture(event.action, event.id, event.position,
                                                      event.coordinateSpace)) {
+                activeGlobalMouseGestureId = 0;
                 globalMouseManager.cancelGesture(event.id);
             }
             break;
@@ -1889,9 +1924,13 @@ class ApplicationController::Impl {
             controller->updateGlobalMouseCapture(event.id, event.position);
             break;
         case Kind::Finish:
+            if (event.id == activeGlobalMouseGestureId)
+                activeGlobalMouseGestureId = 0;
             controller->finishGlobalMouseCapture(event.id, event.position);
             break;
         case Kind::Cancel:
+            if (event.id == activeGlobalMouseGestureId)
+                activeGlobalMouseGestureId = 0;
             controller->cancelGlobalMouseCapture(event.id);
             break;
         }
@@ -1949,6 +1988,8 @@ class ApplicationController::Impl {
     presentation::PermissionGuideController permissionGuide{permissions};
 #endif
     presentation::GlobalMouseManager globalMouseManager;
+    quint64 activeGlobalMouseGestureId = 0;
+    FeatureFamily activeGlobalMouseFeature = FeatureFamily::Screenshot;
     // Settings are intentionally constructed on first window access.  The
     // tray and shortcut manager use only their compact bootstrap data.
     std::unique_ptr<presentation::settings::SettingsRegistry> settingsRegistry;
