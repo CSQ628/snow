@@ -335,7 +335,7 @@ void liveWidgetRetainsOriginalSourcesWithoutFilters() {
 }
 
 void pointer(SnowRuntime runtime, SnowViewport viewport, SnowPointerEventType type,
-             const QPointF& position) {
+             const QPointF& position, bool primaryDown = true) {
     SnowInputEvent event{};
     event.kind = SNOW_INPUT_EVENT_POINTER;
     event.pointer.pointer_id = 1;
@@ -345,7 +345,7 @@ void pointer(SnowRuntime runtime, SnowViewport viewport, SnowPointerEventType ty
     event.pointer.position_y = position.y();
     event.pointer.button =
         type == SNOW_POINTER_EVENT_MOVE ? SNOW_POINTER_BUTTON_NONE : SNOW_POINTER_BUTTON_PRIMARY;
-    event.pointer.buttons = type == SNOW_POINTER_EVENT_UP ? 0 : 1;
+    event.pointer.buttons = type == SNOW_POINTER_EVENT_UP || !primaryDown ? 0 : 1;
     SnowInteractionOutput output{};
     ScopedChangedViewportList changed;
     require(snow_viewport_process_input_ex(runtime, viewport, &event, &output,
@@ -375,11 +375,11 @@ double alphaWeight(const QImage& image) {
     double weight = 0;
     for (int y = 0; y < image.height(); ++y)
         for (int x = 0; x < image.width(); ++x)
-            weight += image.pixelColor(x, y).alphaF();
+            weight += static_cast<double>(image.pixelColor(x, y).alphaF());
     return weight;
 }
 
-void creationAndSelectionGuidesAreDashedAtEveryShapeZoomAndDpr() {
+void magnifierHoverAndSelectionReuseCreationGuidesAtEveryShapeZoomAndDpr() {
     for (const auto shape : {SNOW_RECTANGLE_SHAPE_RECTANGLE, SNOW_RECTANGLE_SHAPE_ELLIPSE,
                              SNOW_RECTANGLE_SHAPE_DIAMOND}) {
         for (double zoom : {0.5, 1.0, 2.0}) {
@@ -430,8 +430,28 @@ void creationAndSelectionGuidesAreDashedAtEveryShapeZoomAndDpr() {
             require(snow_viewport_set_active_tool_ex(runtime.get(), viewport.get(),
                                                      SNOW_ACTIVE_TOOL_SELECT,
                                                      changed.outParam()) == SNOW_OK &&
-                        snow_viewport_select_element_ex(runtime.get(), viewport.get(), id,
-                                                        changed.outParam()) == SNOW_OK &&
+                        snow_viewport_reset_editing_state_ex(runtime.get(), viewport.get(),
+                                                             changed.outParam()) == SNOW_OK,
+                    "prepare magnifier hover fixture");
+            for (const auto position : {QPointF(100, 70), QPointF(145, 70)}) {
+                pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_MOVE, position, false);
+                require(cache.sync(runtime.get(), viewport.get()) && cache.overlayItemCount() == 1,
+                        "hovering source or lens must publish only the dashed source contour");
+                const SnowCanvasOverlayItem hoverGuide(cache.overlayItems()[0]);
+                require(hoverGuide.kind == SNOW_OVERLAY_DISPLAY_ITEM_FOCUS_CONNECTION &&
+                            hoverGuide.arrow_stroke_style == SNOW_STROKE_STYLE_DASHED,
+                        "magnifier hover must use the creation contour instead of a rectangle");
+                for (double dpr : {1.0, 1.25, 2.0})
+                    for (bool cached : {false, true})
+                        require(renderGuide(hoverGuide, cache.overlayInfo(), dpr, cached) ==
+                                    renderGuide(creationGuide, cache.overlayInfo(), dpr, cached),
+                                "hover and creation must render the same dashed source shape");
+            }
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_MOVE, {10, 10}, false);
+            require(cache.sync(runtime.get(), viewport.get()) && cache.overlayItemCount() == 0,
+                    "leaving a magnifier must remove its hover contour");
+            require(snow_viewport_select_element_ex(runtime.get(), viewport.get(), id,
+                                                    changed.outParam()) == SNOW_OK &&
                         cache.sync(runtime.get(), viewport.get()),
                     "select guide fixture magnifier");
             const SnowCanvasOverlayItem* sourceGuide = nullptr;
@@ -441,11 +461,11 @@ void creationAndSelectionGuidesAreDashedAtEveryShapeZoomAndDpr() {
                 if (item.kind == SNOW_OVERLAY_DISPLAY_ITEM_FOCUS_CONNECTION)
                     sourceGuide = &item;
                 if (item.kind == SNOW_OVERLAY_DISPLAY_ITEM_DRAW_RECT &&
-                    item.rect_kind == SNOW_OVERLAY_RECT_MAGNIFIER_SELECTION_FRAME)
+                    item.rect_kind == SNOW_OVERLAY_RECT_SELECTION_FRAME)
                     frame = &item;
             }
             require(sourceGuide != nullptr && frame != nullptr,
-                    "selection must publish both the source contour and dashed selectable frame");
+                    "selection must publish the dashed source contour and standard shape frame");
             for (double rotation : {0.0, 0.4}) {
                 auto rotatedFrame = static_cast<const SnowOverlayDisplayItem&>(*frame);
                 rotatedFrame.rotation = rotation;
@@ -455,16 +475,14 @@ void creationAndSelectionGuidesAreDashedAtEveryShapeZoomAndDpr() {
                 solidFrame.rect_kind = SNOW_OVERLAY_RECT_SELECTION_FRAME;
                 for (double dpr : {1.0, 1.25, 2.0}) {
                     for (bool cached : {false, true}) {
-                        const QImage dashed =
+                        const QImage selected =
                             renderGuide(rotatedFrame, cache.overlayInfo(), dpr, cached);
-                        require(dashed ==
-                                    renderGuide(standardDash, cache.overlayInfo(), dpr, cached),
-                                "magnifier frames must match the existing canvas selection dashes");
-                        require(alphaWeight(dashed) <
-                                    alphaWeight(
-                                        renderGuide(solidFrame, cache.overlayInfo(), dpr, cached)) *
-                                        0.85,
-                                "cached and direct frame rendering must retain visible dash gaps");
+                        require(selected ==
+                                    renderGuide(solidFrame, cache.overlayInfo(), dpr, cached),
+                                "magnifier frames must match solid shape selection borders");
+                        require(alphaWeight(renderGuide(standardDash, cache.overlayInfo(), dpr,
+                                                        cached)) < alphaWeight(selected) * 0.85,
+                                "magnifier selection borders must remain solid at every DPR");
                         require(renderGuide(*sourceGuide, cache.overlayInfo(), dpr, cached) ==
                                     renderGuide(creationGuide, cache.overlayInfo(), dpr, cached),
                                 "creation and selection must render the same source shape");
@@ -472,12 +490,12 @@ void creationAndSelectionGuidesAreDashedAtEveryShapeZoomAndDpr() {
                         const QImage partial =
                             renderGuide(rotatedFrame, cache.overlayInfo(), dpr, cached, exposed);
                         require(alphaWeight(partial) > 0 &&
-                                    alphaWeight(partial) < alphaWeight(dashed) &&
+                                    alphaWeight(partial) < alphaWeight(selected) &&
                                     pixel(partial, 65, 50).alpha() == 0,
                                 "partial frame repaints must respect the exposed region");
                         for (int y = 46; y < 84; ++y)
                             for (int x = 81; x < 119; ++x)
-                                require(pixel(partial, x, y) == pixel(dashed, x, y),
+                                require(pixel(partial, x, y) == pixel(selected, x, y),
                                         "exposed guide pixels must match a complete repaint");
                     }
                 }
@@ -492,7 +510,7 @@ void creationAndSelectionGuidesAreDashedAtEveryShapeZoomAndDpr() {
                             &rotatedFrame, 1, projection, edge) ==
                             snow_canvas_widget_selection_hit_testing::SelectionInteractionTarget::
                                 Handle,
-                        "dashed selection frames must retain their complete interactive border");
+                        "magnifier selection frames must retain their complete interactive border");
             }
             require(snow_viewport_reset_editing_state_ex(runtime.get(), viewport.get(),
                                                          changed.outParam()) == SNOW_OK &&
@@ -581,7 +599,7 @@ void exportUsesDirectOriginalSourcesIncludingOutsideCrop() {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
     QApplication application(argc, argv);
-    creationAndSelectionGuidesAreDashedAtEveryShapeZoomAndDpr();
+    magnifierHoverAndSelectionReuseCreationGuidesAtEveryShapeZoomAndDpr();
     samplesOnlyOriginalPixelsAtEveryFactorAndShape();
     shapesAndBorderClipCleanly();
     roundedCornersClipSamplingAndStroke();

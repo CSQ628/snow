@@ -264,6 +264,7 @@ impl Editor {
             marquee_candidate_arrows,
             text_rect_ids,
             hovered_rect: self.hovered_rect(document),
+            hovered_magnifier: self.hovered_magnifier(document),
             hovered_free_draw: self.hovered_free_draw(document),
             hovered_pen_filter: self.hovered_pen_filter(document),
             hovered_text_rect: self.hovered_text_rect(document),

@@ -456,6 +456,7 @@ pub struct EditorPresentationState {
     pub marquee_candidate_arrows: Vec<SelectionArrowState>,
     pub text_rect_ids: Vec<ElementId>,
     pub hovered_rect: Option<RectangleData>,
+    pub hovered_magnifier: Option<snow_draw_engine_document::MagnifierData>,
     pub hovered_free_draw: Option<FreeDrawData>,
     pub hovered_pen_filter: Option<PenFilterData>,
     pub hovered_text_rect: Option<RectangleData>,

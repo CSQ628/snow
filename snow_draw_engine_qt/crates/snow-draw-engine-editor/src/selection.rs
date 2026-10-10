@@ -1,4 +1,6 @@
-use snow_draw_engine_document::{ArrowData, ElementId, FreeDrawData, PenFilterData, RectangleData};
+use snow_draw_engine_document::{
+    ArrowData, ElementId, FreeDrawData, MagnifierData, PenFilterData, RectangleData,
+};
 use snow_draw_engine_model::DocumentModel;
 
 use crate::{
@@ -127,6 +129,7 @@ impl Editor {
             self.state.selection = next;
             if document.is_none_or(|document| {
                 self.hovered_rect(document).is_none()
+                    && self.hovered_magnifier(document).is_none()
                     && self.hovered_free_draw(document).is_none()
                     && self.hovered_pen_filter(document).is_none()
                     && self.hovered_text_rect(document).is_none()
@@ -223,6 +226,7 @@ impl Editor {
         if self.state.selection != next {
             self.state.selection = next;
             if self.hovered_rect(document).is_none()
+                && self.hovered_magnifier(document).is_none()
                 && self.hovered_free_draw(document).is_none()
                 && self.hovered_pen_filter(document).is_none()
                 && self.hovered_text_rect(document).is_none()
@@ -249,7 +253,10 @@ impl Editor {
         if self.state.selection.contains(hovered_id) {
             return None;
         }
-        if document.pen_filter(hovered_id).is_ok() || document.free_draw(hovered_id).is_ok() {
+        if document.pen_filter(hovered_id).is_ok()
+            || document.free_draw(hovered_id).is_ok()
+            || document.magnifier(hovered_id).is_ok()
+        {
             return None;
         }
         let rect = document.element_rect_proxy(hovered_id)?;
@@ -257,6 +264,14 @@ impl Editor {
             .text(hovered_id)
             .is_err()
             .then(|| selection_outline_for_rect(&rect, self.camera().zoom))
+    }
+
+    pub(crate) fn hovered_magnifier(&self, document: &DocumentModel) -> Option<MagnifierData> {
+        let hovered_id = self.state.ui.hovered_element?;
+        if self.state.selection.contains(hovered_id) {
+            return None;
+        }
+        document.magnifier(hovered_id).ok().copied()
     }
 
     pub(crate) fn hovered_free_draw(&self, document: &DocumentModel) -> Option<FreeDrawData> {
@@ -395,7 +410,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use snow_draw_engine_core::EngineConfig;
+    use snow_draw_engine_core::{EngineConfig, Point};
     use snow_draw_engine_document::{
         ElementMeta, SerialNumberData, Transaction, resolve_serial_number_diameter,
     };
@@ -405,6 +420,50 @@ mod tests {
             (actual - expected).abs() <= f64::EPSILON,
             "expected {actual} to equal {expected}"
         );
+    }
+
+    #[test]
+    fn magnifier_hover_survives_other_selection_changes_and_hides_when_selected() {
+        let mut document = DocumentModel::new();
+        let magnifier_id = document.allocate_element_id();
+        let rectangle_id = document.allocate_element_id();
+        let value = MagnifierData::default();
+        let mut rectangle = value.source_rect();
+        rectangle.center = Point::new(200.0, 0.0);
+        let mut transaction = Transaction::new("insert magnifier and rectangle");
+        transaction.insert_magnifier(magnifier_id, ElementMeta::default(), value);
+        transaction.insert_rectangle(rectangle_id, ElementMeta::default(), rectangle);
+        document.apply_transaction(transaction).unwrap();
+
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_hovered_element(Some(magnifier_id));
+        let presentation = editor.presentation_state(&document);
+        assert_eq!(presentation.hovered_rect, None);
+        assert_eq!(presentation.hovered_magnifier, Some(value));
+
+        editor.set_selection_state_with_document(
+            Some(&document),
+            vec![rectangle_id],
+            Some(rectangle_id),
+        );
+        assert_eq!(editor.hovered_magnifier(&document), Some(value));
+
+        let snapshot = editor.capture_document_sync_snapshot(&document);
+        rectangle.width += 10.0;
+        let mut transaction = Transaction::new("resize rectangle");
+        transaction.update_rectangle(rectangle_id, rectangle);
+        document.apply_transaction(transaction).unwrap();
+        editor.sync_selection_after_document_change(&document, &snapshot.selection);
+        assert_eq!(editor.hovered_magnifier(&document), Some(value));
+
+        editor.set_selection_state_with_document(
+            Some(&document),
+            vec![magnifier_id],
+            Some(magnifier_id),
+        );
+        let presentation = editor.presentation_state(&document);
+        assert_eq!(presentation.hovered_magnifier, None);
+        assert_eq!(presentation.selected_magnifiers.len(), 1);
     }
 
     #[test]

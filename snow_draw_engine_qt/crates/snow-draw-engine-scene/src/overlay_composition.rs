@@ -45,6 +45,12 @@ pub(crate) fn compose_overlay_items(
         )));
     }
 
+    if let Some(value) = presentation.hovered_magnifier {
+        items.push(OverlayDisplayItem::FocusConnection(
+            magnifier_source_outline(value, zoom),
+        ));
+    }
+
     if let Some(rect) = presentation.hovered_text_rect {
         items.push(OverlayDisplayItem::Rectangle(ui_rect_item(
             UiShapeKind::TextHoverUnderline,
@@ -91,7 +97,6 @@ pub(crate) fn compose_overlay_items(
                     text_rect_ids: &presentation.text_rect_ids,
                     selected_item_count,
                     selected_arrow_count: presentation.selection_arrows.len(),
-                    single_magnifier: presentation.selected_magnifiers.len() == 1,
                     single_rect: presentation.selected_single_rect.as_ref(),
                     single_text_rect: presentation.selected_single_text_rect.as_ref(),
                     zoom,
@@ -191,7 +196,6 @@ struct SelectionOverlayRequest<'a> {
     text_rect_ids: &'a [ElementId],
     selected_item_count: usize,
     selected_arrow_count: usize,
-    single_magnifier: bool,
     single_rect: Option<&'a RectangleData>,
     single_text_rect: Option<&'a RectangleData>,
     zoom: f64,
@@ -207,7 +211,6 @@ fn append_selection_overlay_items(
         text_rect_ids,
         selected_item_count,
         selected_arrow_count,
-        single_magnifier,
         single_rect,
         single_text_rect,
         zoom,
@@ -236,8 +239,6 @@ fn append_selection_overlay_items(
     out.push(OverlayDisplayItem::Rectangle(ui_rect_item(
         if selected_item_count > 1 {
             UiShapeKind::SelectionMultiFrame
-        } else if single_magnifier {
-            UiShapeKind::MagnifierSelectionFrame
         } else {
             UiShapeKind::SelectionFrame
         },
@@ -545,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn magnifier_creation_and_selection_share_the_source_contour() {
+    fn magnifier_creation_hover_and_selection_share_the_source_contour() {
         use snow_draw_engine_document::{HighlightShape, MagnifierData};
         use snow_draw_engine_editor::SelectionMagnifierState;
 
@@ -588,6 +589,10 @@ mod tests {
                 assert!(contour.arrowhead_primitives.is_empty());
 
                 presentation.creation_preview = None;
+                presentation.hovered_magnifier = Some(value);
+                let hovered = compose_overlay_items(SnapConfig::default(), &presentation, view);
+                assert_eq!(hovered, creation);
+                presentation.hovered_magnifier = None;
                 presentation
                     .selected_magnifiers
                     .push(SelectionMagnifierState {
@@ -611,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn magnifier_selection_uses_a_dashed_frame_with_standard_handles() {
+    fn magnifier_selection_uses_the_shape_frame_and_keeps_the_dashed_source_contour() {
         use snow_draw_engine_document::MagnifierData;
         use snow_draw_engine_editor::SelectionMagnifierState;
 
@@ -639,18 +644,29 @@ mod tests {
             ..Default::default()
         };
         let items = compose_overlay_items(SnapConfig::default(), &presentation, frame_view());
-        assert_eq!(
-            overlay_rect(&items, 0).kind,
-            UiShapeKind::MagnifierSelectionFrame
-        );
+        assert_eq!(overlay_rect(&items, 0).kind, UiShapeKind::SelectionFrame);
         assert_eq!(overlay_rect(&items, 0).width, 88.0);
         assert_eq!(items.iter().filter(|item| matches!(item,
             OverlayDisplayItem::Rectangle(rect) if rect.kind == UiShapeKind::SelectionResizeHandle
         )).count(), 4);
+        assert_eq!(
+            items[6],
+            OverlayDisplayItem::FocusConnection(magnifier_source_outline(value, 1.0))
+        );
+        assert_eq!(
+            overlay_rect(&items, 7).kind,
+            UiShapeKind::MagnifierMoveHandle
+        );
 
         presentation.selected_magnifiers.clear();
-        let items = compose_overlay_items(SnapConfig::default(), &presentation, frame_view());
-        assert_eq!(overlay_rect(&items, 0).kind, UiShapeKind::SelectionFrame);
+        let shape_items = compose_overlay_items(SnapConfig::default(), &presentation, frame_view());
+        assert_eq!(shape_items, items[..6]);
+        presentation
+            .selected_magnifiers
+            .push(SelectionMagnifierState {
+                id: element_id(1),
+                magnifier: value,
+            });
         presentation.selection_elements.push(SelectionRectState {
             id: element_id(2),
             rect: source,
