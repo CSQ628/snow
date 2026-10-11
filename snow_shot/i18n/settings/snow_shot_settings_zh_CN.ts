@@ -3277,6 +3277,10 @@
             <translation>重置缩放</translation>
         </message>
         <message>
+            <source>Reset canvas</source>
+            <translation>重置画布</translation>
+        </message>
+        <message>
             <source>Reset transform</source>
             <translation>重置变换</translation>
         </message>
