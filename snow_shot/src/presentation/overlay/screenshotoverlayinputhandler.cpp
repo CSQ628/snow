@@ -21,6 +21,7 @@
 #include "snow_shot/image/screenshotregionpoints.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -457,6 +458,7 @@ void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* 
         return;
     }
     m_selectionWheelSteps.reset();
+    m_selectionResizeWheelSteps.reset();
     m_angleWheelSteps.reset();
     m_snappedDuringSelectionDrag = false;
     if (m_keepSelectionAspectRatioShortcut) {
@@ -816,10 +818,17 @@ bool ScreenshotOverlayInputHandler::handleWheel(ScreenshotOverlayWindow* overlay
     const bool smartSelection =
         m_context.selection.regionType() == ScreenshotRegionType::Rectangle &&
         m_context.interaction.intelligentSelecting();
+    const bool resizeSelection =
+        m_context.interaction.moveToolActive() && m_context.interaction.canResizeSelection() &&
+        !m_context.interaction.dragging() && m_context.selection.rectangular() &&
+        !m_context.selection.regionOperationActive() && m_context.selection.hasPixelSelection();
     if (!smartSelection || m_externalDragActive)
         m_selectionWheelSteps.reset();
+    if (!resizeSelection || m_externalDragActive)
+        m_selectionResizeWheelSteps.reset();
     if (!acceptInput()) {
         m_selectionWheelSteps.reset();
+        m_selectionResizeWheelSteps.reset();
         return true;
     }
     if (m_externalDragActive)
@@ -828,6 +837,33 @@ bool ScreenshotOverlayInputHandler::handleWheel(ScreenshotOverlayWindow* overlay
         return false;
     }
     if (recognitionTool(m_context.interaction.activeTool())) {
+        return true;
+    }
+    if (resizeSelection) {
+        m_angleWheelSteps.reset();
+        const int steps = m_selectionResizeWheelSteps.consume(event);
+        if (steps == 0)
+            return true;
+
+        const QRectF selection = m_context.selection.normalizedSelection();
+        const qreal maximumInset = std::max<qreal>(
+            0, std::floor((std::min(selection.width(), selection.height()) -
+                           snow_shot::presentation::kScreenshotSelectionMinimumSize) /
+                          2.0));
+        qreal delta = std::max<qreal>(steps, -maximumInset);
+        const QRectF bounds = m_context.geometry.canvasBounds();
+        if (delta > 0 && !bounds.isNull()) {
+            const qreal maximumOutset = std::floor(std::min(
+                {selection.left() - bounds.left(), selection.top() - bounds.top(),
+                 bounds.right() - selection.right(), bounds.bottom() - selection.bottom()}));
+            delta = std::min(delta, std::max<qreal>(0, maximumOutset));
+        }
+        const int adjustment = static_cast<int>(delta);
+        if (adjustment != 0) {
+            // Move every edge by whole canvas units, keeping the center fixed without scaling.
+            m_context.actions.adjustSelectionFromToolbar(-adjustment, -adjustment, adjustment,
+                                                         adjustment);
+        }
         return true;
     }
     if (overlay != nullptr && overlay->canvas() != nullptr &&
@@ -844,6 +880,8 @@ bool ScreenshotOverlayInputHandler::handleWheel(ScreenshotOverlayWindow* overlay
         return true;
     }
     m_angleWheelSteps.reset();
+    if (canvas != nullptr && canvas->hasMagnifierAdjustmentTarget())
+        return canvas->adjustMagnifierFromWheel(event);
     const int deltaY =
         !event.pixelDelta().isNull() ? event.pixelDelta().y() : event.angleDelta().y();
     if (deltaY != 0 && wheelAdjustsStrokeWidth(m_context.interaction.activeTool())) {
@@ -1203,12 +1241,8 @@ bool ScreenshotOverlayInputHandler::restorePreviousSelection(
         return false;
     }
     const QRect bounds = ScreenshotHalfOpenRect::fromRectF(canvasBounds).toAlignedQRect();
-    if (!m_context.selection.applyParams(params, bounds)) {
-        if (!m_context.selection.hasPixelSelection()) {
-            m_context.interaction.returnToSelectionMode(false);
-            m_context.actions.hideMainToolbar();
-            m_context.actions.updateOverlayState();
-        }
+    const auto restored = clampScreenshotSelectionParamsForRestore(params, bounds);
+    if (!restored || !m_context.selection.applyParams(*restored, bounds)) {
         return false;
     }
     m_context.intelligentSelection.clearTransientState();
@@ -1442,6 +1476,7 @@ void ScreenshotOverlayInputHandler::restoreScrollingCaptureAfterFailedResize() {
 
 void ScreenshotOverlayInputHandler::resetTransientShortcuts() {
     m_selectionWheelSteps.reset();
+    m_selectionResizeWheelSteps.reset();
     m_angleWheelSteps.reset();
     static_cast<void>(cancelEffectDrag());
     leaveEffectEditors();

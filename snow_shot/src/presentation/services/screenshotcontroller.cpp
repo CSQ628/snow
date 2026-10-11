@@ -258,6 +258,8 @@ ScreenshotToolPalette::Tool paletteToolForActiveTool(ScreenshotActiveTool tool) 
         return ScreenshotToolPalette::Tool::Html;
     case ScreenshotActiveTool::PenFilter:
         return ScreenshotToolPalette::Tool::PenFilter;
+    case ScreenshotActiveTool::Magnifier:
+        return ScreenshotToolPalette::Tool::Magnifier;
     case ScreenshotActiveTool::Spotlight:
         return ScreenshotToolPalette::Tool::Spotlight;
     case ScreenshotActiveTool::Move:
@@ -405,6 +407,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void setHighlightTool() override;
     void setPenHighlightTool() override;
     void setSpotlightTool() override;
+    void setMagnifierTool() override;
     void setEraserTool() override;
     void setRectangleEraserTool() override;
     void setBrushEraserTool() override;
@@ -555,6 +558,8 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void toggleSelectionAspectRatioLockFromToolbar() override;
     void
     setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset preset) override;
+    ScreenshotSelectionToolbarQuickSets selectionQuickSetsForToolbar() const override;
+    void applySelectionParamsFromToolbar(const ScreenshotSelectionParams& params) override;
     void openSelectionResizeModalFromToolbar() override;
     void hideColorPickersForScreenshotUi() override;
     void hideColorPicker();
@@ -2073,6 +2078,9 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
     actions.requestSelectionDragPresentation = [this] {
         m_presentationServices->requestSelectionDragPresentation();
     };
+    actions.adjustSelectionFromToolbar = [this](int minDx, int minDy, int maxDx, int maxDy) {
+        m_selectionEditWorkflow->adjustSelectionFromToolbar(minDx, minDy, maxDx, maxDy);
+    };
     m_overlayInputHandler =
         std::make_unique<ScreenshotOverlayInputHandler>(ScreenshotOverlayInputHandlerContext{
             m_captureState,
@@ -2428,25 +2436,21 @@ bool ScreenshotController::Impl::setScreenshotCursorVisible(bool visible) {
     if (visible == m_displaySession.cursorVisible)
         return true;
     m_displaySession.cursorVisible = visible;
-    QList<ScreenshotImageLayer> layers;
     QRectF damage;
     m_displaySession.forEachImageSource([&](qsizetype, const CapturedDisplayModel& display) {
-        layers.append(screenshotDisplayImageLayers(display, visible));
         const QRectF cursor = screenshotCursorCanvasRect(display);
         if (!cursor.isEmpty())
             damage = damage.isEmpty() ? cursor : damage.united(cursor);
     });
     const bool hasImageSources = m_displaySession.hasImageSources();
-    const ScreenshotImageSource imageSource =
-        hasImageSources ? ScreenshotImageSource::fromLayers(std::move(layers))
-                        : ScreenshotImageSource{};
+    const ScreenshotImageSource imageSource = screenshotDisplaySessionImageSource(m_displaySession);
     m_displaySession.forEachActiveOverlay(
         [&](qsizetype, const CapturedDisplayModel& display, ScreenshotOverlayWindow* overlay) {
             if (hasImageSources)
-                overlay->setScreenshotImageSource(imageSource, damage);
-            else if (!display.cursorPatch.isNull())
+                overlay->setScreenshotImageSource(imageSource, damage, imageSource);
+            else
                 overlay->setScreenshotImageSource(screenshotDisplayImageSource(display, visible),
-                                                  screenshotCursorCanvasRect(display));
+                                                  damage, imageSource);
         });
     invalidateRecognitionSession();
     if (m_autoFilterController)
@@ -2608,6 +2612,9 @@ bool ScreenshotController::Impl::activateToolForSelectionResize(ScreenshotActive
         break;
     case ScreenshotActiveTool::SerialNumber:
         setSerialNumberTool();
+        break;
+    case ScreenshotActiveTool::Magnifier:
+        setMagnifierTool();
         break;
     case ScreenshotActiveTool::Spotlight:
         setSpotlightTool();
@@ -4390,7 +4397,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer ? QStringLiteral("service_destroyed")
+                                           : !printer         ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -5305,6 +5312,13 @@ void ScreenshotController::Impl::setFilterTool() {
     setRectangleFilterTool();
 }
 
+void ScreenshotController::Impl::setMagnifierTool() {
+    deactivateRecognition();
+    const bool scrollingCaptureStopped = stopScrollingCapture(true);
+    m_toolCommandWorkflow->setMagnifierTool();
+    restoreToolUiAfterScrollingCapture(scrollingCaptureStopped);
+}
+
 void ScreenshotController::Impl::setSpotlightTool() {
     deactivateRecognition();
     const bool scrollingCaptureStopped = stopScrollingCapture(true);
@@ -5400,6 +5414,27 @@ void ScreenshotController::Impl::toggleSelectionAspectRatioLockFromToolbar() {
 void ScreenshotController::Impl::setSelectionAspectRatioPresetFromToolbar(
     ScreenshotSelectionAspectRatioPreset preset) {
     m_selectionEditWorkflow->setSelectionAspectRatioPresetFromToolbar(preset);
+}
+
+ScreenshotSelectionToolbarQuickSets
+ScreenshotController::Impl::selectionQuickSetsForToolbar() const {
+    ScreenshotSelectionToolbarQuickSets quickSets;
+    if (m_selectionSettings == nullptr) {
+        return quickSets;
+    }
+    const QRect bounds =
+        ScreenshotHalfOpenRect::fromRectF(m_geometry.canvasBounds()).toAlignedQRect();
+    if (bounds.isEmpty()) {
+        return quickSets;
+    }
+    quickSets.previous = m_selectionSettings->previousSelectionParams(bounds);
+    quickSets.presets = sanitizeScreenshotSelectionPresets(m_selectionSettings->presets(), bounds);
+    return quickSets;
+}
+
+void ScreenshotController::Impl::applySelectionParamsFromToolbar(
+    const ScreenshotSelectionParams& params) {
+    m_selectionEditWorkflow->applySelectionParamsFromToolbar(params);
 }
 
 void ScreenshotController::Impl::setSelectionToolbarPopupVisible(bool visible) {
@@ -6444,6 +6479,7 @@ const std::pair<const char*, ScreenshotActiveTool> mcpTools[] = {
     {"serial_number", ScreenshotActiveTool::SerialNumber},
     {"watermark", ScreenshotActiveTool::Watermark},
     {"spotlight", ScreenshotActiveTool::Spotlight},
+    {"magnifier", ScreenshotActiveTool::Magnifier},
     {"auto_filter", ScreenshotActiveTool::AutoFilter},
     {"ocr", ScreenshotActiveTool::Ocr},
     {"text_translation", ScreenshotActiveTool::TextTranslation},

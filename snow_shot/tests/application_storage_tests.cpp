@@ -2237,10 +2237,12 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
 
     const shortcuts::ShortcutBindingMap defaults = drawingShortcuts.allShortcuts();
     require(
-        defaults.size() == 15 && defaults.contains(QStringLiteral("line")) &&
+        defaults.size() == 16 && defaults.contains(QStringLiteral("line")) &&
             defaults.value(QStringLiteral("line")).isEmpty() &&
             defaults.contains(QStringLiteral("spotlight")) &&
             defaults.value(QStringLiteral("spotlight")).isEmpty() &&
+            defaults.contains(QStringLiteral("magnifier")) &&
+            defaults.value(QStringLiteral("magnifier")).isEmpty() &&
             portable(defaults.value(QStringLiteral("select"))) ==
                 QStringList{QStringLiteral("V")} &&
             portable(defaults.value(QStringLiteral("shape"))) == QStringList{QStringLiteral("1")} &&
@@ -2251,7 +2253,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 QStringList{QStringLiteral("Ctrl+Shift+Z")} &&
             drawingShortcuts.shortcuts(QStringLiteral("unsupported")).isEmpty() &&
             !drawingShortcuts.setShortcuts(QStringLiteral("unsupported"), {QStringLiteral("Q")}),
-        "drawing shortcut adapter must expose fourteen tools and the canvas reset default");
+        "drawing shortcut adapter must expose fifteen tools and the canvas reset default");
 
     require(drawingShortcuts.setSelect({QStringLiteral("Ctrl+Shift+V")}) &&
                 portable(drawingShortcuts.select()) == QStringList{QStringLiteral("Ctrl+Shift+V")},
@@ -2281,7 +2283,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
     incomplete.remove(QStringLiteral("watermark"));
     require(!drawingShortcuts.setAllShortcutsAtomic(incomplete) &&
                 drawingShortcuts.allShortcuts() == beforeCollision,
-            "atomic drawing shortcut updates must require all fourteen tools");
+            "atomic drawing shortcut updates must require every tool and canvas reset");
 
     shortcuts::ShortcutBindingMap emptyAssignment = beforeCollision;
     emptyAssignment.insert(QStringLiteral("shape"), {});

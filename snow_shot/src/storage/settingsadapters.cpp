@@ -58,13 +58,11 @@ bool setShortcutValue(const QString& key, const shortcuts::ShortcutBindingList& 
 
 const QStringList& drawingShortcutToolIds() {
     static const QStringList ids = {
-        QStringLiteral("select"),        QStringLiteral("shape"),
-        QStringLiteral("arrow"),         QStringLiteral("brush"),
-        QStringLiteral("highlight"),     QStringLiteral("text"),
-        QStringLiteral("serial_number"), QStringLiteral("filter"),
-        QStringLiteral("eraser"),        QStringLiteral("watermark"),
-        QStringLiteral("line"),          QStringLiteral("spotlight"),
-        QStringLiteral("distance"),      QStringLiteral("angle"),
+        QStringLiteral("select"),        QStringLiteral("shape"),     QStringLiteral("arrow"),
+        QStringLiteral("brush"),         QStringLiteral("highlight"), QStringLiteral("text"),
+        QStringLiteral("serial_number"), QStringLiteral("filter"),    QStringLiteral("eraser"),
+        QStringLiteral("watermark"),     QStringLiteral("line"),      QStringLiteral("spotlight"),
+        QStringLiteral("distance"),      QStringLiteral("angle"),     QStringLiteral("magnifier"),
         QStringLiteral("reset_canvas"),
     };
     return ids;

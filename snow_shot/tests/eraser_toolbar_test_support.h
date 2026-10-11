@@ -1,5 +1,6 @@
 #pragma once
 
+#include "physical_key_test_support.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -7,7 +8,6 @@
 #include "widgets/radio_button_group.h"
 #include <QAbstractButton>
 #include <QApplication>
-#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -79,9 +79,9 @@ inline void verifyEraserToolbarHost(ScreenshotToolPalette& palette, SnowCanvasWi
                                              &canvas, [&]() { ++resets; });
     const auto key = [&](QWidget& receiver, Qt::Key code, Qt::KeyboardModifiers modifiers,
                          bool repeat = false) {
-        QKeyEvent press(QEvent::KeyPress, code, modifiers, QString(), repeat);
+        PhysicalKeyEvent press(QEvent::KeyPress, code, modifiers, QString(), repeat);
         QApplication::sendEvent(&receiver, &press);
-        QKeyEvent release(QEvent::KeyRelease, code, modifiers);
+        PhysicalKeyEvent release(QEvent::KeyRelease, code, modifiers);
         QApplication::sendEvent(&receiver, &release);
     };
     canvas.window()->activateWindow();
@@ -103,8 +103,12 @@ inline void verifyEraserToolbarHost(ScreenshotToolPalette& palette, SnowCanvasWi
     require(
         shortcuts.setShortcuts(QStringLiteral("reset_canvas"), {QStringLiteral("Ctrl+Alt+F12")}),
         "rebind the reset shortcut while the canvas is open");
+    // A fresh edit retires redo of the reset before testing the old binding;
+    // the canvas may still handle Ctrl+Shift+Z as its standard redo command.
+    gesture({40, 160}, {180, 160});
     key(canvas, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
-    require(resets == 1, "rebinding reset removes its default shortcut immediately");
+    require(resets == 1 && pixel(canvas.grab().toImage(), {100, 80}).alpha() > 200,
+            "rebinding reset removes its default shortcut immediately");
     {
         QLineEdit editor(&canvas);
         editor.show();
