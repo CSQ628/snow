@@ -666,7 +666,7 @@ impl Editor {
                     .collect::<Vec<_>>();
                 let mut preview_arrows = state.preview_arrows.clone();
                 preview_arrows.extend(
-                    self.recompute_bound_arrows(document, &state.preview_elements)
+                    self.recompute_bound_arrows(document, &state.binding_overrides())
                         .into_iter()
                         .filter(|(id, _, _)| !selected_arrow_ids.contains(id))
                         .map(|(id, arrow, _)| SelectionArrowState { id, arrow }),

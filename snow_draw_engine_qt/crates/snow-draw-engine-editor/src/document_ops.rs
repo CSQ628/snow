@@ -18,6 +18,7 @@ use crate::{
         selection_bounds_to_draw_rect,
     },
     polyline_simplification::simplify_pen_filter_geometry,
+    snapping::BindableElementOverride,
     state::ResizeHandle,
     style::stepped_font_size,
     text::{
@@ -905,6 +906,7 @@ impl Editor {
             element.rect.center.y += delta.y;
         }
         let mut next_arrows: Vec<SelectionArrowState> = Vec::new();
+        let mut binding_overrides = Vec::new();
         for id in &selected {
             let owner = label_owner.get(id).copied().unwrap_or(*id);
             let delta = deltas.get(&owner).copied().unwrap_or(Point::new(0.0, 0.0));
@@ -928,6 +930,7 @@ impl Editor {
             };
             rect.center.x += delta.x;
             rect.center.y += delta.y;
+            binding_overrides.push(BindableElementOverride { id: *id, rect });
             // A selected label rides along with its owner's update; an
             // unselected one is appended by the owner instead.
             if !label_owner.contains_key(id) {
@@ -948,7 +951,7 @@ impl Editor {
         // the new geometry.
         let selected_arrow_ids: Vec<ElementId> = next_arrows.iter().map(|state| state.id).collect();
         for (arrow_id, arrow, reorder_targets) in self
-            .recompute_bound_arrows(document, &next_elements)
+            .recompute_bound_arrows(document, &binding_overrides)
             .into_iter()
             .filter(|(arrow_id, _, _)| !selected_arrow_ids.contains(arrow_id))
         {

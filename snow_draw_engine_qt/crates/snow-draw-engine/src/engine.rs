@@ -33,6 +33,8 @@ mod filter_snap_tests;
 mod free_draw_continuation_tests;
 mod input;
 #[cfg(test)]
+mod magnifier_binding_tests;
+#[cfg(test)]
 mod magnifier_drag_style_tests;
 #[cfg(test)]
 mod magnifier_group_move_tests;

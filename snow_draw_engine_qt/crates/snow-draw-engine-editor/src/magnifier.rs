@@ -445,7 +445,7 @@ impl Editor {
 impl EditSelectionState {
     /// Geometry comes from the pointer-down snapshot; appearance is rebased on document edits.
     /// Target lookups and bulk previews share this transform without rebuilding the whole group.
-    fn magnifier_preview(&self, id: ElementId) -> Option<MagnifierData> {
+    pub(crate) fn magnifier_preview(&self, id: ElementId) -> Option<MagnifierData> {
         let original = *self.original_magnifiers.get(&id)?;
         let single = self.original_elements.len() == 1 && self.original_arrows.is_empty();
         let source_preview = if single {

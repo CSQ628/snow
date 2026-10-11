@@ -182,7 +182,7 @@ impl Editor {
             .map(|arrow| arrow.id)
             .collect::<Vec<_>>();
         let recomputed_arrows = self
-            .recompute_bound_arrows(document, &state.preview_elements)
+            .recompute_bound_arrows(document, &state.binding_overrides())
             .into_iter()
             .filter(|(arrow_id, _, _)| !selected_arrow_ids.contains(arrow_id))
             .collect::<Vec<_>>();

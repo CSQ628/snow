@@ -1,6 +1,26 @@
 use super::*;
 use snow_draw_engine_core::arrow::{BindMode, EngineContext};
 
+/// Actual binding-target geometry, independent of compound selection/layout bounds.
+pub(crate) struct BindableElementOverride {
+    pub(crate) id: ElementId,
+    pub(crate) rect: RectangleData,
+}
+
+impl EditSelectionState {
+    pub(crate) fn binding_overrides(&self) -> Vec<BindableElementOverride> {
+        self.preview_elements
+            .iter()
+            .map(|preview| BindableElementOverride {
+                id: preview.id,
+                rect: self
+                    .magnifier_preview(preview.id)
+                    .map_or(preview.rect, |value| value.source_rect()),
+            })
+            .collect()
+    }
+}
+
 impl Editor {
     pub(crate) fn snap_point_to_external_guides(
         &self,
@@ -46,7 +66,7 @@ impl Editor {
     pub(crate) fn bindable_elements(
         &self,
         document: &DocumentModel,
-        overrides: &[SelectionRectState],
+        overrides: &[BindableElementOverride],
     ) -> Vec<BindableElementState> {
         let mut overrides = overrides
             .iter()
@@ -121,9 +141,9 @@ impl Editor {
     pub(crate) fn recompute_bound_arrows(
         &self,
         document: &DocumentModel,
-        preview_elements: &[SelectionRectState],
+        overrides: &[BindableElementOverride],
     ) -> Vec<(ElementId, ArrowData, Vec<ElementId>)> {
-        let changed_bindable_ids = preview_elements
+        let changed_bindable_ids = overrides
             .iter()
             .map(|element| element.id)
             .collect::<Vec<_>>();
@@ -143,7 +163,7 @@ impl Editor {
             return Vec::new();
         }
 
-        let bindables = self.bindable_elements(document, preview_elements);
+        let bindables = self.bindable_elements(document, overrides);
 
         affected_arrow_ids
             .into_iter()
