@@ -5356,7 +5356,7 @@ ScreenshotRecognitionWindow* ScreenshotPinnedWindow::ensureRecognitionContent() 
                 QRectF imageRect =
                     m_canvas->canvasToViewTransform().mapRect(source.materializedCanvasRect);
                 imageRect = QRectF(imageRect.topLeft() * scale, imageRect.size() * scale);
-                return ScreenshotOriginalImagePreviewState{
+                ScreenshotOriginalImagePreviewState state{
                     source.materializedImage,
                     imageRect,
                     physical ? currentNativeGeometry()
@@ -5364,6 +5364,8 @@ ScreenshotRecognitionWindow* ScreenshotPinnedWindow::ensureRecognitionContent() 
                     this,
                     true,
                     m_alwaysOnTop};
+                state.mouseWheelZoomMode = m_mouseWheelZoomMode;
+                return state;
             },
             this);
         content->setOriginalImagePreviewAboveSiblingProvider([this]() -> QWidget* {
@@ -6439,7 +6441,7 @@ void ScreenshotPinnedWindow::printContent() {
                 {{QStringLiteral("request_kind"), QStringLiteral("pinned")},
                  {QStringLiteral("operation"), QString::number(replacement)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
