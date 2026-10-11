@@ -64,10 +64,7 @@ impl Editor {
                 document
                     .magnifier(value.id)
                     .ok()
-                    .map(|magnifier| crate::SelectionMagnifierState {
-                        id: value.id,
-                        magnifier: *magnifier,
-                    })
+                    .map(|magnifier| (value.id, *magnifier))
             })
             .collect();
         self.state.interaction = match request.target {

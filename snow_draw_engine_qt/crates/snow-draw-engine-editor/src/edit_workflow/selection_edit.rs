@@ -149,11 +149,12 @@ impl Editor {
             self.bump_scene_state_revision();
         }
         // A centred reflection can move both regions while their union proxy stays unchanged.
-        let magnifiers = self.selection_magnifier_previews(document, &state);
+        let magnifiers = self.selection_magnifier_previews(&state);
         let magnifiers_changed = magnifiers.iter().any(|preview| {
-            state.original_magnifiers.iter().any(|original| {
-                preview.id == original.id && preview.magnifier != original.magnifier
-            })
+            state
+                .original_magnifiers
+                .get(&preview.id)
+                .is_some_and(|original| preview.magnifier != *original)
         });
         if !magnifiers_changed
             && state.preview_elements == state.original_elements
@@ -224,7 +225,7 @@ impl Editor {
             transaction.update_magnifier(value.id, value.magnifier);
         }
         for preview in state.preview_elements {
-            if magnifiers.iter().any(|value| value.id == preview.id) {
+            if state.original_magnifiers.contains_key(&preview.id) {
                 continue;
             }
             if Some(preview.id) == active_text_id {
@@ -1003,7 +1004,7 @@ mod tests {
             opacity: 1.0,
         };
         let state = EditSelectionState {
-            original_magnifiers: Vec::new(),
+            original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
@@ -1530,7 +1531,7 @@ mod tests {
             )
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
-            original_magnifiers: Vec::new(),
+            original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
@@ -1604,7 +1605,7 @@ mod tests {
             )
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
-            original_magnifiers: Vec::new(),
+            original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
@@ -1684,7 +1685,7 @@ mod tests {
             )
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
-            original_magnifiers: Vec::new(),
+            original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
@@ -1859,7 +1860,7 @@ mod tests {
             )
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
-            original_magnifiers: Vec::new(),
+            original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,

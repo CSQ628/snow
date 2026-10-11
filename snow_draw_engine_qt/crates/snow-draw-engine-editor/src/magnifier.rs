@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use snow_draw_engine_core::{ColorRgba8, CornerRadii, ErrorCode, Point, arrow::Arrowhead};
 use snow_draw_engine_document::{ElementId, MagnifierData, Transaction};
 use snow_draw_engine_model::DocumentModel;
+use std::collections::HashMap;
 
 pub const MAGNIFIER_STYLE_PROPERTY_SHAPE: u32 = 1;
 pub const MAGNIFIER_STYLE_PROPERTY_STROKE: u32 = 2;
@@ -354,73 +355,26 @@ impl Editor {
             return Some(state.preview);
         }
         if let InteractionState::EditingSelection(state) = &self.state.interaction
-            && let Some(value) = self
-                .selection_magnifier_previews(document, state)
-                .into_iter()
-                .find(|value| value.id == id)
+            && let Some(value) = state.magnifier_preview(id)
         {
-            return Some(value.magnifier);
+            return Some(value);
         }
         document.magnifier(id).ok().copied()
     }
     pub(crate) fn selection_magnifier_previews(
         &self,
-        _document: &DocumentModel,
         state: &EditSelectionState,
     ) -> Vec<SelectionMagnifierState> {
-        let single = state.original_elements.len() == 1 && state.original_arrows.is_empty();
         state
             .preview_elements
             .iter()
             .filter_map(|preview| {
-                let original = state
-                    .original_magnifiers
-                    .iter()
-                    .find(|value| value.id == preview.id)?
-                    .magnifier;
-                let mut next = original;
-                match state.preview_transform {
-                    SelectionTransform::Identity => {
-                        if let SelectionEditMode::CornerRadius { .. } = state.mode {
-                            next.corner_radii = preview.rect.corner_radii;
-                        }
-                    }
-                    SelectionTransform::Move { delta } => next = original.translated(delta),
-                    transform @ SelectionTransform::Resize {
-                        scale_x, scale_y, ..
-                    } => {
-                        next.source_center =
-                            transform.map_point(&state.original_bounds, original.source_center);
-                        if single {
-                            next.width = preview.rect.width;
-                            next.height = preview.rect.height;
-                        } else {
-                            next.magnified_center = transform
-                                .map_point(&state.original_bounds, original.magnified_center);
-                            next.width *= scale_x.abs();
-                            next.height *= scale_y.abs();
-                        }
-                        next.corner_radii = flipped_corner_radii(
-                            original.shape,
-                            original.corner_radii,
-                            scale_x < -f64::EPSILON,
-                            scale_y < -f64::EPSILON,
-                        );
-                    }
-                    transform @ SelectionTransform::Rotate { angle } => {
-                        if !single {
-                            next.source_center =
-                                transform.map_point(&state.original_bounds, original.source_center);
-                            next.magnified_center = transform
-                                .map_point(&state.original_bounds, original.magnified_center);
-                        }
-                        next.rotation = normalize_rotation(original.rotation + angle);
-                    }
-                }
-                Some(SelectionMagnifierState {
-                    id: preview.id,
-                    magnifier: next,
-                })
+                state
+                    .magnifier_preview(preview.id)
+                    .map(|magnifier| SelectionMagnifierState {
+                        id: preview.id,
+                        magnifier,
+                    })
             })
             .collect()
     }
@@ -488,22 +442,78 @@ impl Editor {
     }
 }
 
+impl EditSelectionState {
+    /// Geometry comes from the pointer-down snapshot; appearance is rebased on document edits.
+    /// Target lookups and bulk previews share this transform without rebuilding the whole group.
+    fn magnifier_preview(&self, id: ElementId) -> Option<MagnifierData> {
+        let original = *self.original_magnifiers.get(&id)?;
+        let single = self.original_elements.len() == 1 && self.original_arrows.is_empty();
+        let source_preview = if single {
+            Some(self.preview_elements.first()?.rect)
+        } else {
+            None
+        };
+        let mut next = original;
+        match self.preview_transform {
+            SelectionTransform::Identity => {
+                if let SelectionEditMode::CornerRadius { .. } = self.mode
+                    && let Some(preview) = source_preview
+                {
+                    next.corner_radii = preview.corner_radii;
+                }
+            }
+            SelectionTransform::Move { delta } => next = original.translated(delta),
+            transform @ SelectionTransform::Resize {
+                scale_x, scale_y, ..
+            } => {
+                next.source_center =
+                    transform.map_point(&self.original_bounds, original.source_center);
+                if let Some(preview) = source_preview {
+                    next.width = preview.width;
+                    next.height = preview.height;
+                } else {
+                    next.magnified_center =
+                        transform.map_point(&self.original_bounds, original.magnified_center);
+                    next.width *= scale_x.abs();
+                    next.height *= scale_y.abs();
+                }
+                next.corner_radii = flipped_corner_radii(
+                    original.shape,
+                    original.corner_radii,
+                    scale_x < -f64::EPSILON,
+                    scale_y < -f64::EPSILON,
+                );
+            }
+            transform @ SelectionTransform::Rotate { angle } => {
+                if !single {
+                    next.source_center =
+                        transform.map_point(&self.original_bounds, original.source_center);
+                    next.magnified_center =
+                        transform.map_point(&self.original_bounds, original.magnified_center);
+                }
+                next.rotation = normalize_rotation(original.rotation + angle);
+            }
+        }
+        Some(next)
+    }
+}
+
 fn sync_selection_magnifier_styles(
     document: &DocumentModel,
-    magnifiers: &mut [SelectionMagnifierState],
+    magnifiers: &mut HashMap<ElementId, MagnifierData>,
     original_elements: &mut [SelectionRectState],
     preview_elements: &mut [SelectionRectState],
     no_arrows: bool,
 ) {
     let single = original_elements.len() == 1 && no_arrows;
-    for value in magnifiers {
-        let Ok(committed) = document.magnifier(value.id) else {
+    for (id, value) in magnifiers {
+        let Ok(committed) = document.magnifier(*id) else {
             continue;
         };
         let style = MagnifierStyle::from_data(committed);
-        let properties = MagnifierStyle::from_data(&value.magnifier).differences(style);
-        style.apply(&mut value.magnifier);
-        value.magnifier.opacity = committed.opacity;
+        let properties = MagnifierStyle::from_data(value).differences(style);
+        style.apply(value);
+        value.opacity = committed.opacity;
         // A group proxy is the union of source and lens, frozen at pointer down. Only a
         // single source proxy carries the shape/corner appearance used by its handles.
         if single {
@@ -511,7 +521,7 @@ fn sync_selection_magnifier_styles(
                 .iter_mut()
                 .chain(preview_elements.iter_mut())
             {
-                if element.id != value.id {
+                if element.id != *id {
                     continue;
                 }
                 if properties & MAGNIFIER_STYLE_PROPERTY_SHAPE != 0 {

@@ -928,6 +928,20 @@ impl ElementData {
         self.kind().is_filter()
     }
 
+    /// Tests geometry only; callers choose visibility, locking, and filter eligibility.
+    pub fn hit_test(&self, point: Point<f64>, hit_tolerance: f64) -> bool {
+        match self {
+            Self::Rectangle(rect) => rectangle_hit_test(rect, point, hit_tolerance),
+            Self::Magnifier(value) => crate::magnifier_hit_test(value, point, hit_tolerance),
+            Self::Filter(filter) => crate::filter_hit_test(filter, point, hit_tolerance),
+            Self::PenFilter(filter) => crate::pen_filter_hit_test(filter, point, hit_tolerance),
+            Self::Arrow(arrow) => arrow_hit_test(arrow, point, hit_tolerance),
+            Self::FreeDraw(free_draw) => free_draw_hit_test(free_draw, point, hit_tolerance),
+            Self::Text(text) => text_hit_test(text, point, hit_tolerance),
+            Self::SerialNumber(serial) => serial_number_hit_test(serial, point, hit_tolerance),
+        }
+    }
+
     pub(crate) fn bounds(&self) -> DrawRect {
         match self {
             Self::Rectangle(rect) => rect_bounds(rect),
@@ -1727,31 +1741,17 @@ impl Document {
     ) -> Option<(ElementId, ElementKind)> {
         self.paint_order.iter().rev().find_map(|id| {
             let element = self.element(*id).ok()?;
-            if !element.meta.visible {
+            if !element.meta.visible || element.data.is_filter() {
                 return None;
             }
-            match &element.data {
-                ElementData::Rectangle(rect) if rectangle_hit_test(rect, point, hit_tolerance) => {
-                    Some((*id, ElementKind::Rectangle))
-                }
-                ElementData::Arrow(arrow) if arrow_hit_test(arrow, point, hit_tolerance) => {
-                    Some((*id, arrow.element_kind()))
-                }
-                ElementData::FreeDraw(free_draw)
-                    if free_draw_hit_test(free_draw, point, hit_tolerance) =>
-                {
-                    Some((*id, ElementKind::FreeDraw))
-                }
-                ElementData::Text(text) if text_hit_test(text, point, hit_tolerance) => {
-                    Some((*id, ElementKind::Text))
-                }
-                ElementData::SerialNumber(serial)
-                    if serial_number_hit_test(serial, point, hit_tolerance) =>
-                {
-                    Some((*id, ElementKind::SerialNumber))
-                }
-                _ => None,
-            }
+            let kind = match &element.data {
+                ElementData::Rectangle(_) => ElementKind::Rectangle,
+                data => data.kind(),
+            };
+            element
+                .data
+                .hit_test(point, hit_tolerance)
+                .then_some((*id, kind))
         })
     }
 

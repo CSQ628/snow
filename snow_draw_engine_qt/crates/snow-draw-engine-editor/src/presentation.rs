@@ -149,9 +149,7 @@ impl Editor {
             .unwrap_or_default();
         let mut preview_arrows = self.preview_selection_arrows(document);
         let mut preview_magnifiers = match &self.state.interaction {
-            InteractionState::EditingSelection(state) => {
-                self.selection_magnifier_previews(document, state)
-            }
+            InteractionState::EditingSelection(state) => self.selection_magnifier_previews(state),
             InteractionState::EditingMagnifier(state) => vec![crate::SelectionMagnifierState {
                 id: state.id,
                 magnifier: state.preview,
@@ -207,6 +205,23 @@ impl Editor {
             .map_or_else(Vec::new, |(arrow_id, arrow)| {
                 self.arrow_handle_states(document, arrow_id, &arrow)
             });
+        let magnifier_previews_by_id: std::collections::HashMap<_, _> = preview_magnifiers
+            .iter()
+            .map(|value| (value.id, value.magnifier))
+            .collect();
+        let selected_magnifiers = self
+            .state
+            .selection
+            .ids
+            .iter()
+            .filter_map(|id| {
+                magnifier_previews_by_id
+                    .get(id)
+                    .copied()
+                    .or_else(|| document.magnifier(*id).ok().copied())
+                    .map(|magnifier| crate::SelectionMagnifierState { id: *id, magnifier })
+            })
+            .collect();
         let duplicate_preview = if let InteractionState::EditingSelection(state) =
             &self.state.interaction
             && state.duplicate
@@ -247,16 +262,7 @@ impl Editor {
             active_text_draft: self.active_text_draft_display_presentation(),
             preview_arrows,
             preview_magnifiers,
-            selected_magnifiers: self
-                .state
-                .selection
-                .ids
-                .iter()
-                .filter_map(|id| {
-                    self.magnifier_snapshot(document, *id)
-                        .map(|magnifier| crate::SelectionMagnifierState { id: *id, magnifier })
-                })
-                .collect(),
+            selected_magnifiers,
             preview_elements,
             preview_text_paints: self.selection_preview_text_paints(document),
             marquee: self.state.ui.marquee,
@@ -1431,7 +1437,7 @@ mod tests {
         let mut editor = editor_with_surface();
         editor.select_element(&document, text_id).unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
-            original_magnifiers: Vec::new(),
+            original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
@@ -1504,7 +1510,7 @@ mod tests {
         let mut editor = editor_with_surface();
         editor.select_element(&document, text_id).unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
-            original_magnifiers: Vec::new(),
+            original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,

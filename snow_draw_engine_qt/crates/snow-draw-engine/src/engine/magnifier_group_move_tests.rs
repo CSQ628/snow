@@ -291,3 +291,133 @@ fn magnifier_group_empty_space_outside_selection_frame_does_not_move_any_member(
         assert_eq!(engine.model.element(id).unwrap().data, original);
     }
 }
+
+#[test]
+fn magnifier_group_many_mixed_previews_preserve_selection_order_and_geometry() {
+    let mut engine = Engine::default();
+    let viewport = engine.create_viewport(ViewportConfig::default()).unwrap();
+    engine
+        .set_viewport_surface_size(viewport, 800, 600)
+        .unwrap();
+    engine
+        .set_viewport_active_tool(viewport, ActiveTool::Select)
+        .unwrap();
+    let mut transaction = Transaction::new("many mixed magnifier preview fixture");
+    let mut originals = Vec::new();
+    let mut ids = Vec::new();
+    for index in 0..64 {
+        let id = engine.model.allocate_element_id();
+        let value = MagnifierData {
+            source_center: Point::new(f64::from(index) * 200.0, 0.0),
+            magnified_center: Point::new(f64::from(index) * 200.0 + 100.0, 80.0),
+            width: 40.0,
+            height: 30.0,
+            rotation: f64::from(index % 4) * 0.1,
+            factor: 1.5 + f64::from(index % 3),
+            shape: [
+                HighlightShape::Rectangle,
+                HighlightShape::Ellipse,
+                HighlightShape::Diamond,
+            ][index as usize % 3],
+            ..Default::default()
+        };
+        transaction.insert_magnifier(id, Default::default(), value);
+        originals.push((id, value));
+        ids.push(id);
+        let companion = engine.model.allocate_element_id();
+        if index % 2 == 0 {
+            let mut rectangle = value.source_rect();
+            rectangle.center.y = 200.0;
+            transaction.insert_rectangle(companion, Default::default(), rectangle);
+        } else {
+            let arrow = ArrowData::from_global_points(
+                &[
+                    Point::new(value.source_center.x, 200.0),
+                    Point::new(value.source_center.x + 60.0, 220.0),
+                ],
+                value.stroke,
+                2.0,
+                StrokeStyle::Solid,
+                ArrowType::Straight,
+                None,
+                None,
+            )
+            .unwrap();
+            transaction.insert_arrow(companion, Default::default(), arrow);
+        }
+        ids.push(companion);
+    }
+    apply(&mut engine, viewport, transaction);
+    ids.reverse();
+    originals.reverse();
+    let snapshot = serde_json::from_value(serde_json::json!({
+        "selectedIds": ids, "primaryId": ids[0]
+    }))
+    .unwrap();
+    engine
+        .editor
+        .restore_history_selection(&engine.model, &snapshot);
+    engine.refresh_all_viewports().unwrap();
+
+    for completion in [PointerEventType::Cancel, PointerEventType::Up] {
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Down,
+            400.0,
+            300.0,
+            false,
+        );
+        pointer(
+            &mut engine,
+            viewport,
+            PointerEventType::Move,
+            423.0,
+            317.0,
+            false,
+        );
+        let presentation = engine
+            .editor
+            .presentation_state(&engine.model, &engine.viewport_slot(viewport).unwrap().view);
+        assert_eq!(engine.selected_ids(), ids);
+        assert_eq!(presentation.preview_magnifiers.len(), originals.len());
+        assert_eq!(
+            presentation.selected_magnifiers,
+            presentation.preview_magnifiers
+        );
+        for (preview, (id, original)) in presentation.preview_magnifiers.iter().zip(&originals) {
+            assert_eq!(preview.id, *id);
+            assert_eq!(
+                preview.magnifier,
+                original.translated(Point::new(23.0, 17.0))
+            );
+            assert_eq!(*engine.model.magnifier(*id).unwrap(), *original);
+        }
+        pointer(&mut engine, viewport, completion, 423.0, 317.0, false);
+        let presentation = engine
+            .editor
+            .presentation_state(&engine.model, &engine.viewport_slot(viewport).unwrap().view);
+        assert!(presentation.preview_magnifiers.is_empty());
+        for (selected, (id, original)) in presentation.selected_magnifiers.iter().zip(&originals) {
+            let expected = if completion == PointerEventType::Up {
+                original.translated(Point::new(23.0, 17.0))
+            } else {
+                *original
+            };
+            assert_eq!(selected.id, *id);
+            assert_eq!(selected.magnifier, expected);
+            assert_eq!(*engine.model.magnifier(*id).unwrap(), expected);
+        }
+    }
+    assert!(engine.undo().unwrap());
+    for (id, original) in &originals {
+        assert_eq!(*engine.model.magnifier(*id).unwrap(), *original);
+    }
+    assert!(engine.redo().unwrap());
+    for (id, original) in &originals {
+        assert_eq!(
+            *engine.model.magnifier(*id).unwrap(),
+            original.translated(Point::new(23.0, 17.0))
+        );
+    }
+}

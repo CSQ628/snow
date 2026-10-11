@@ -28,14 +28,22 @@ struct SourceLayer {
     QPainterPath coveragePath;
 };
 
-QList<SourceLayer> sampledLayers(const QList<SnowCanvasBaseImageSource>& sources,
-                                 const QTransform& sourceToView, const QTransform& viewToDevice,
-                                 const QRectF& visible) {
-    QList<SourceLayer> layers;
-    layers.reserve(sources.size());
-    const QRectF needed = sourceToView.inverted().mapRect(visible);
+struct SamplingPlan {
+    QList<SourceLayer> exposedLayers;
+    bool usesGroupMask = false;
+};
+
+SamplingPlan samplingPlan(const QList<SnowCanvasBaseImageSource>& sources,
+                          const QTransform& sourceToView, const QTransform& viewToDevice,
+                          const QRectF& lensBounds, const QRectF& visible) {
+    SamplingPlan plan;
+    plan.exposedLayers.reserve(sources.size());
+    const QTransform viewToSource = sourceToView.inverted();
+    const QRectF lensSamples = viewToSource.mapRect(lensBounds);
+    const QRectF exposedSamples = viewToSource.mapRect(visible);
     const QRectF devicePixel =
         (sourceToView * viewToDevice).inverted().mapRect(QRectF(0.0, 0.0, 1.0, 1.0));
+    bool hasLensLayer = false;
     for (const auto& source : sources) {
         if (source.image.isNull() || !finiteRect(source.canvasRect) ||
             !source.canvasRect.isValid() || !finiteRect(source.coverage))
@@ -48,7 +56,13 @@ QList<SourceLayer> sampledLayers(const QList<SnowCanvasBaseImageSource>& sources
             qMax(source.canvasRect.width() / source.image.width(), devicePixel.width());
         const double guardY =
             qMax(source.canvasRect.height() / source.image.height(), devicePixel.height());
-        if (!needed.adjusted(-guardX, -guardY, guardX, guardY).intersects(coverage))
+        if (!lensSamples.adjusted(-guardX, -guardY, guardX, guardY).intersects(coverage))
+            continue;
+        // Masking belongs to the complete lens. Exposure may cull a layer, but
+        // must not switch the remaining pixels between direct and group masks.
+        plan.usesGroupMask |= hasLensLayer;
+        hasLensLayer = true;
+        if (!exposedSamples.adjusted(-guardX, -guardY, guardX, guardY).intersects(coverage))
             continue;
         SourceLayer layer{&source, {}};
         if (!source.coverage.isEmpty()) {
@@ -56,9 +70,9 @@ QList<SourceLayer> sampledLayers(const QList<SnowCanvasBaseImageSource>& sources
             coveragePath.addRect(coverage);
             layer.coveragePath = sourceToView.map(coveragePath);
         }
-        layers.append(std::move(layer));
+        plan.exposedLayers.append(std::move(layer));
     }
-    return layers;
+    return plan;
 }
 
 void drawLayer(QPainter& painter, const SourceLayer& layer, const QTransform& sourceToView,
@@ -237,13 +251,15 @@ void render(QPainter& painter, const SceneDisplayInfo& displayInfo,
                                       destinationCenter.y() - geometry.source_center_y * scale);
         painter.save();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        const auto layers =
-            sampledLayers(*sources, sourceToView, painter.deviceTransform(), visible);
-        if (layers.size() <= 1) {
-            for (const auto& layer : layers)
-                drawLayer(painter, layer, sourceToView, &viewPath);
-        } else {
-            drawCompositedLayers(painter, layers, sourceToView, viewPath, visible);
+        const auto plan = samplingPlan(*sources, sourceToView, painter.deviceTransform(),
+                                       viewPath.boundingRect(), visible);
+        if (!plan.exposedLayers.isEmpty()) {
+            if (plan.usesGroupMask) {
+                drawCompositedLayers(painter, plan.exposedLayers, sourceToView, viewPath, visible);
+            } else {
+                for (const auto& layer : plan.exposedLayers)
+                    drawLayer(painter, layer, sourceToView, &viewPath);
+            }
         }
         painter.restore();
     }

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snow_draw_engine_core::{CornerRadii, ErrorCode, Point, SnapGuide, arrow::ArrowEndpointEdge};
 use snow_draw_engine_document::{
-    ArrowData, ArrowSuggestedBinding, ElementId, ElementKind, FilterData, PenFilterData,
-    RectangleData, SerialNumberData, SerialNumberNumericType, TextData,
+    ArrowData, ArrowSuggestedBinding, ElementId, ElementKind, FilterData, MagnifierData,
+    PenFilterData, RectangleData, SerialNumberData, SerialNumberNumericType, TextData,
 };
 use snow_draw_engine_interaction::{CursorStyle, PointerButton};
 use snow_draw_engine_model::DocumentModel;
@@ -224,7 +224,7 @@ pub(crate) enum SelectionEditMode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EditSelectionState {
-    pub(crate) original_magnifiers: Vec<crate::SelectionMagnifierState>,
+    pub(crate) original_magnifiers: HashMap<ElementId, MagnifierData>,
     pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
     pub(crate) button: PointerButton,
@@ -239,7 +239,7 @@ pub(crate) struct EditSelectionState {
 }
 
 pub(crate) struct BeginSelectionEditRequest {
-    pub(crate) original_magnifiers: Vec<crate::SelectionMagnifierState>,
+    pub(crate) original_magnifiers: HashMap<ElementId, MagnifierData>,
     pub(crate) pointer_id: u32,
     pub(crate) button: PointerButton,
     pub(crate) original_elements: Vec<SelectionRectState>,
@@ -264,7 +264,7 @@ pub(crate) struct BeginSelectionInteractionRequest {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PendingSelectionMoveState {
-    pub(crate) original_magnifiers: Vec<crate::SelectionMagnifierState>,
+    pub(crate) original_magnifiers: HashMap<ElementId, MagnifierData>,
     pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
     pub(crate) button: PointerButton,

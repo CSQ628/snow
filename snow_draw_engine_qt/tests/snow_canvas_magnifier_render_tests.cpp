@@ -458,6 +458,69 @@ void multilayerOpacityTilesKeepSparseClipsAndBoundedScratch() {
             "invisible magnifiers must not sample originals or allocate scratch");
 }
 
+void partialPaintPreservesMasksWhenOnlyOneOriginalLayerIsExposed() {
+    QImage original(30, 30, QImage::Format_ARGB32_Premultiplied);
+    original.fill(Qt::green);
+    QImage cursor(4, 4, original.format());
+    cursor.fill(Qt::red);
+    const QRegion fullExposure(QRect(0, 0, 200, 140));
+    const QRegion partialExposure(QRect(96, 38, 14, 35));
+    const QRectF comparedViewBounds = QRectF(partialExposure.boundingRect()).adjusted(1, 1, -1, -1);
+    for (double sourceLeft : {21.0, 21.2}) {
+        const QRectF sourceBounds(sourceLeft, 55, 30, 30);
+        const QList<SnowCanvasBaseImageSource> sources{
+            {original, sourceBounds, sourceBounds},
+            {cursor, QRectF(42, 70, 4, 4), QRectF(42, 70, 4, 4)}};
+        for (double factor : {2.0, 2.1}) {
+            for (double opacity : {0.5, 1.0}) {
+                auto lens = magnifier(factor);
+                lens.stroke.a = 0;
+                lens.corner_radii = {6, 6, 6, 6};
+                lens.opacity = opacity;
+                for (double dpr : {1.0, 1.25, 2.0}) {
+                    for (const QTransform& outer :
+                         {QTransform(), QTransform(1.7, 0, 0, 1.25, 5.3, 7.1)}) {
+                        const QImage full =
+                            renderOpacityFixture(lens, sources, dpr, outer, fullExposure, 1.0,
+                                                 QPainter::CompositionMode_SourceOver, false);
+                        snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+                        const QImage partial =
+                            renderOpacityFixture(lens, sources, dpr, outer, partialExposure, 1.0,
+                                                 QPainter::CompositionMode_SourceOver, false);
+                        const auto diagnostics =
+                            snow_canvas_magnifier_renderer::diagnosticsForCurrentThread();
+                        require(diagnostics.sourceLayerDrawCount == 1 &&
+                                    diagnostics.peakCompositingPixelCount <= 65536u,
+                                "stable multilayer masks must retain exposure culling and "
+                                "bounded compositing scratch");
+                        const QTransform deviceToView =
+                            (outer * QTransform::fromScale(dpr, dpr)).inverted();
+                        int comparedPixels = 0;
+                        for (int y = 0; y < full.height(); ++y) {
+                            for (int x = 0; x < full.width(); ++x) {
+                                if (!comparedViewBounds.contains(
+                                        deviceToView.map(QPointF(x + 0.5, y + 0.5))))
+                                    continue;
+                                const QRgb expected = full.pixel(x, y);
+                                const QRgb actual = partial.pixel(x, y);
+                                require(qAbs(qRed(actual) - qRed(expected)) <= 1 &&
+                                            qAbs(qGreen(actual) - qGreen(expected)) <= 1 &&
+                                            qAbs(qBlue(actual) - qBlue(expected)) <= 1 &&
+                                            qAbs(qAlpha(actual) - qAlpha(expected)) <= 1,
+                                        "culling a cursor outside the exposure must preserve "
+                                        "the original layer's coverage and completed lens mask");
+                                ++comparedPixels;
+                            }
+                        }
+                        require(comparedPixels > 0,
+                                "the exposure fixture must compare physical interior pixels");
+                    }
+                }
+            }
+        }
+    }
+}
+
 void inheritedOpacityAppliesToTheCompleteMagnifierSceneItem() {
     QImage original(200, 140, QImage::Format_ARGB32_Premultiplied);
     original.fill(Qt::green);
@@ -951,9 +1014,10 @@ void largeOffscreenSourcesKeepSharedPixelsAndCullUnexposedLayers() {
             const QImage full = render({lens}, sources, dpr, info);
             require(pixel(full, 100, 70) == QColor(Qt::green),
                     "large source transforms must retain visible pixels at distant origins");
-            require(snow_canvas_magnifier_renderer::diagnosticsForCurrentThread()
-                            .sourceLayerDrawCount == 1,
-                    "canonical sampling must still cull unexposed source layers");
+            const auto diagnostics = snow_canvas_magnifier_renderer::diagnosticsForCurrentThread();
+            require(diagnostics.sourceLayerDrawCount == 1 && diagnostics.compositedTileCount == 0 &&
+                        diagnostics.peakCompositingPixelCount == 0,
+                    "a lens sampling one original must cull remote layers without scratch");
             const QRegion exposed(QRect(95, 65, 13, 17));
             const QImage partial = render({lens}, sources, dpr, info, exposed);
             require(pixel(partial, 100, 70) == pixel(full, 100, 70),
@@ -1393,6 +1457,7 @@ int main(int argc, char** argv) {
     missingPixelsStayTransparentAndCoverageIsRespected();
     multilayerOpacityComposesOriginalsBeforeElementAppearance();
     multilayerOpacityTilesKeepSparseClipsAndBoundedScratch();
+    partialPaintPreservesMasksWhenOnlyOneOriginalLayerIsExposed();
     patternedMultilayerSamplingPreservesSpanEndpointsAcrossCompositingStripes();
     partialPaintAndProjectionRetainOriginalSampling();
     integerProjectionPartialPaintKeepsExactSamples();
