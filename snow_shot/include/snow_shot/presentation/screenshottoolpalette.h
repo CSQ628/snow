@@ -718,7 +718,8 @@ class ScreenshotToolPalette final : public QWidget,
     bool applyActiveToolSecondaryToolbarVisibility();
     [[nodiscard]] bool activeToolUsesStyleToolbar() const;
     bool setSecondaryToolbarVisibility(bool actionToolbarVisible, bool styleToolbarVisible);
-    void updateSelectionActionAvailability(bool hasSelection, quint32 selectedElementCount);
+    void updateSelectionActionAvailability(bool hasSelection, quint32 selectedElementCount,
+                                           bool opacityAvailable);
     void updateHistoryActionAvailability();
     void updateTextRecognitionBusy();
     void updateScrollingRecognitionButtons();

@@ -1336,8 +1336,7 @@ void ScreenshotToolPalette::resetStyleState() {
     refreshFilterEditorState(m_filterEditor, false);
     refreshFilterEditorState(m_penFilterEditor, true);
     setSpotlightConfig(m_styleDefaults.spotlight);
-    m_selectionOpacityAvailable = false;
-    updateSelectionActionAvailability(false, 0);
+    updateSelectionActionAvailability(false, 0, false);
 }
 
 void ScreenshotToolPalette::setCreationStyleDefaults(const SnowCanvasStyleDefaults& defaults) {
@@ -1386,7 +1385,7 @@ bool ScreenshotToolPalette::stepStrokeWidth(int direction) {
 }
 
 bool ScreenshotToolPalette::stepSelectionOpacity(int direction) {
-    if (direction == 0 || m_activeTool != Tool::Select || !m_hasSelectedElements ||
+    if (direction == 0 || m_activeTool != Tool::Select || !m_selectionOpacityAvailable ||
         m_selectionOpacitySlider == nullptr) {
         return false;
     }
@@ -1691,14 +1690,17 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
 }
 
 void ScreenshotToolPalette::updateSelectionActionAvailability(bool hasSelection,
-                                                              quint32 selectedElementCount) {
+                                                              quint32 selectedElementCount,
+                                                              bool opacityAvailable) {
     if (m_selectionActionAvailabilityInitialized && m_hasSelectedElements == hasSelection &&
-        m_selectedElementCount == selectedElementCount) {
+        m_selectedElementCount == selectedElementCount &&
+        m_selectionOpacityAvailable == opacityAvailable) {
         return;
     }
     m_selectionActionAvailabilityInitialized = true;
     m_hasSelectedElements = hasSelection;
     m_selectedElementCount = selectedElementCount;
+    m_selectionOpacityAvailable = opacityAvailable;
     for (QWidget* control : std::as_const(m_selectionActionControls)) {
         if (control != nullptr) {
             control->setEnabled(control == m_drawTemplateSelect || hasSelection);
@@ -2980,10 +2982,11 @@ void ScreenshotToolPalette::setStyleToolbarState(const SnowCanvasStyleToolbarSta
     SNOW_SHOT_TOOLBAR_PERF_SCOPE("palette.set_style_toolbar_state");
     m_styleControls->setStyleToolbarState(state);
     const bool hasSelectedElements = hasSelectedCanvasElements(state);
-    m_selectionOpacityAvailable = hasSelectedElements &&
+    const bool opacityAvailable = hasSelectedElements &&
                                   state.source != SnowCanvasStyleToolbarSource::SelectedSpotlight &&
                                   state.source != SnowCanvasStyleToolbarSource::SelectedMagnifier;
-    updateSelectionActionAvailability(hasSelectedElements, state.selectedElementCount);
+    updateSelectionActionAvailability(hasSelectedElements, state.selectedElementCount,
+                                      opacityAvailable);
     // Canvas style state and palette tool state are delivered independently.
     // Style state synchronizes values, but only a style-capable active tool may
     // choose an editor. The active tool alone owns secondary-row visibility.
@@ -8085,7 +8088,8 @@ void ScreenshotToolPalette::createSelectionActionFamily() {
     addSelectButton("Delete selected elements", custom_outlined_icons::Trash(),
                     &ScreenshotToolPalette::deleteSelectionRequested);
     m_selectionActionAvailabilityInitialized = false;
-    updateSelectionActionAvailability(m_hasSelectedElements, m_selectedElementCount);
+    updateSelectionActionAvailability(m_hasSelectedElements, m_selectedElementCount,
+                                      m_selectionOpacityAvailable);
     setSelectionOpacity(m_selectionOpacity, m_selectionOpacityMixed);
 }
 

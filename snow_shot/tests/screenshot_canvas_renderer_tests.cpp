@@ -6477,7 +6477,12 @@ void overlayMagnifierWheelPreservesCreationStyle() {
     interaction.enterOverlayVisible(true);
     selection.setSelectionRect(QRectF(0, 0, 400, 300));
     interaction.confirmSelection();
+    int opacitySteps = 0;
     ScreenshotOverlayInputActions actions;
+    actions.stepSelectionOpacity = [&](int) {
+        ++opacitySteps;
+        return true;
+    };
     ScreenshotOverlayInputHandler handler(
         {capture, interaction, selection, intelligent, geometry, displays, actions});
     NoopOverlayEventSink sink;
@@ -6564,8 +6569,8 @@ void overlayMagnifierWheelPreservesCreationStyle() {
             QApplication::sendEvent(canvas, &event);
         }
     };
-    drag({20, 20}, {40, 40});
-    drag({30, 30}, {30, 30});
+    drag({20, 20}, {140, 100});
+    drag({80, 60}, {80, 60});
     require(canvas->canvasStyleToolbarState().source ==
                 SnowCanvasStyleToolbarSource::SelectedMagnifier,
             "source-region selection must expose the magnifier style");
@@ -6596,6 +6601,39 @@ void overlayMagnifierWheelPreservesCreationStyle() {
             "a completed selected factor gesture must remain one undoable history entry");
     require(canvas->redo() && magnifier() == edited,
             "redo must restore the selected magnifier factor gesture");
+    require(canvas->setCanvasTool(SnowCanvasTool::Select),
+            "select magnifiers through the screenshot selection tool");
+    interaction.setCanvasTool(ScreenshotActiveTool::Select);
+    drag({80, 60}, {80, 60});
+    require(canvas->canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::SelectedMagnifier &&
+                magnifier() == edited,
+            "selecting the magnifier body must preserve its geometry and provide a wheel target");
+    wheel(90, 120);
+    require(factorIs(2.9) && committedEdits == 7 && opacitySteps == 0 && magnifier() == edited,
+            "Select-tool pixel gestures must wait for a factor step without changing opacity");
+    wheel(10, 120);
+    require(factorIs(3.0) && committedEdits == 8 && !creationDefaults && opacitySteps == 0 &&
+                magnifier().value(QStringLiteral("opacity")) ==
+                    edited.value(QStringLiteral("opacity")),
+            "Select-tool overlay wheels must edit the selected factor and preserve opacity");
+    wheel(30, 0);
+    const auto beforeModifiedWheel = magnifier();
+    const auto camera = canvas->canvasToViewTransform();
+    for (const auto modifiers : {Qt::ControlModifier, Qt::AltModifier, Qt::MetaModifier}) {
+        QWheelEvent event(QPointF(30, 30), canvas->mapToGlobal(QPoint(30, 30)), QPoint(0, 100),
+                          QPoint(0, 120), Qt::NoButton, modifiers, Qt::ScrollUpdate, false);
+        require(!handler.handleWheel(&overlay, event) && magnifier() == beforeModifiedWheel &&
+                    committedEdits == 8 && opacitySteps == 0 &&
+                    canvas->canvasToViewTransform() == camera,
+                "modified selected-magnifier wheels must leave factors, opacity and camera alone");
+    }
+    wheel(70, 0);
+    require(factorIs(3.0) && committedEdits == 8,
+            "modified overlay wheels must discard the incomplete selected factor gesture");
+    wheel(30, 0);
+    require(factorIs(3.1) && committedEdits == 9 && !creationDefaults && opacitySteps == 0,
+            "selected overlay factor adjustment must resume after modified input");
     require(canvas->resetEditingState() && canvas->setCanvasTool(SnowCanvasTool::Magnifier) &&
                 factorIs(2.8),
             "selected overlay wheel edits must preserve the future magnifier factor");

@@ -428,6 +428,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool setCanvasMagnifierStyle(const SnowCanvasMagnifierStyle& style, quint32 properties,
                                  bool creationDefaults);
     bool adjustAngleValue(double deltaRadians);
+    bool hasMagnifierAdjustmentTarget() const;
     bool adjustMagnifierFromWheel(const QWheelEvent& event);
     snow_canvas_wheel::StepAccumulator angleWheelSteps;
     std::uint64_t angleAdjustmentTarget = 0;
@@ -1069,15 +1070,24 @@ bool SnowCanvasWidget::adjustMagnifierFromWheel(const QWheelEvent& event) {
     return m_impl->adjustMagnifierFromWheel(event);
 }
 
-bool SnowCanvasWidget::Impl::adjustMagnifierFromWheel(const QWheelEvent& event) {
+bool SnowCanvasWidget::hasMagnifierAdjustmentTarget() const {
+    return m_impl->hasMagnifierAdjustmentTarget();
+}
+
+bool SnowCanvasWidget::Impl::hasMagnifierAdjustmentTarget() const {
     if (!interactionEnabled() || textInteraction.isActive())
         return false;
-    const auto before = canvasStyleToolbarState();
-    if (canvasTool() == SnowCanvasTool::Angle ||
-        before.source == SnowCanvasStyleToolbarSource::SelectedAngle ||
-        (canvasTool() != SnowCanvasTool::Magnifier &&
-         before.source != SnowCanvasStyleToolbarSource::SelectedMagnifier))
+    const auto tool = canvasTool();
+    const auto source = displayState.snapshot().styleToolbarState.source;
+    return tool != SnowCanvasTool::Angle && source != SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_ANGLE &&
+           (tool == SnowCanvasTool::Magnifier ||
+            source == SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_MAGNIFIER);
+}
+
+bool SnowCanvasWidget::Impl::adjustMagnifierFromWheel(const QWheelEvent& event) {
+    if (!hasMagnifierAdjustmentTarget())
         return false;
+    const auto before = canvasStyleToolbarState();
 
     auto input = snow_canvas_input::makeWheelInput(event);
     if (!snow_canvas_wheel::usesPreciseDelta(event)) {

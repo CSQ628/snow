@@ -845,7 +845,7 @@ bool ScreenshotOverlayInputHandler::handleWheel(ScreenshotOverlayWindow* overlay
         return true;
     }
     m_angleWheelSteps.reset();
-    if (m_context.interaction.activeTool() == ScreenshotActiveTool::Magnifier && canvas != nullptr)
+    if (canvas != nullptr && canvas->hasMagnifierAdjustmentTarget())
         return canvas->adjustMagnifierFromWheel(event);
     const int deltaY =
         !event.pixelDelta().isNull() ? event.pixelDelta().y() : event.angleDelta().y();

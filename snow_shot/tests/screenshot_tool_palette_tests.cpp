@@ -11784,7 +11784,8 @@ void magnifierStyleWheelsPersistCompletedSteps() {
     options.showMagnifierTool = true;
     options.styleDefaults = defaults;
     ScreenshotToolPalette palette(options);
-    SnowCanvasWidget canvas;
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
     canvas.resize(400, 300);
     canvas.show();
     QApplication::processEvents();
@@ -11792,6 +11793,13 @@ void magnifierStyleWheelsPersistCompletedSteps() {
     ScreenshotStyleBinding binding(palette, canvas, &palette);
     QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
                      [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    int opacityEdits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionOpacityChanged, &canvas,
+                     [&](qreal opacity) {
+                         ++opacityEdits;
+                         require(canvas.setSelectedOpacity(opacity),
+                                 "selection opacity commands must reach the canvas");
+                     });
     require(canvas.setViewportCamera(200, 150, 1) &&
                 canvas.setCanvasTool(SnowCanvasTool::Magnifier),
             "activate the pinned-style magnifier wheel fixture");
@@ -11850,6 +11858,99 @@ void magnifierStyleWheelsPersistCompletedSteps() {
                 screenshotCanvasToolStyleDefaults() == saved &&
                 palette.creationStyleDefaults().magnifier == saved.magnifier,
             "selected magnifier wheel edits must preserve saved creation preferences");
+    require(canvas.setCanvasTool(SnowCanvasTool::Select),
+            "select pinned magnifiers through the Select tool");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    mouse(QEvent::MouseButtonPress, {40, 35}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {40, 35}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedMagnifier,
+            "the pinned Select tool must expose the selected magnifier factor");
+    const auto magnifier = [&] {
+        const auto elementSlots = QJsonDocument::fromJson(runtime.serializeDocumentSession())
+                                      .object()
+                                      .value(QStringLiteral("document"))
+                                      .toObject()
+                                      .value(QStringLiteral("slots"))
+                                      .toArray();
+        for (const auto& slot : elementSlots) {
+            const auto data = slot.toObject().value(QStringLiteral("data")).toObject();
+            if (data.contains(QStringLiteral("Magnifier")))
+                return data.value(QStringLiteral("Magnifier")).toObject();
+        }
+        require(false, "the pinned wheel fixture must retain its magnifier");
+        return QJsonObject();
+    };
+    const auto beforeSelectedWheel = magnifier();
+    wheel(-90, -120);
+    require(commits == 3 && opacityEdits == 0 && magnifier() == beforeSelectedWheel,
+            "partial Select-tool wheel gestures must leave magnifier factor and opacity unchanged");
+    wheel(-10, -120);
+    require(commits == 4 && canvas.canvasMagnifierStyle().factor == 2.4 && opacityEdits == 0 &&
+                magnifier().value(QStringLiteral("opacity")) ==
+                    beforeSelectedWheel.value(QStringLiteral("opacity")) &&
+                screenshotCanvasToolStyleDefaults() == saved &&
+                palette.creationStyleDefaults().magnifier == saved.magnifier,
+            "pinned Select-tool wheels must adjust factors without changing opacity or defaults");
+    wheel(30, 0);
+    const auto beforeModifiedWheel = magnifier();
+    for (const auto modifiers : {Qt::ControlModifier, Qt::AltModifier, Qt::MetaModifier}) {
+        QWheelEvent event(QPointF(40, 35), canvas.mapToGlobal(QPoint(40, 35)), QPoint(0, 100),
+                          QPoint(0, 120), Qt::NoButton, modifiers, Qt::ScrollUpdate, false);
+        require(!handleScreenshotStyleWheel(palette, canvas, event, accumulator) &&
+                    magnifier() == beforeModifiedWheel && commits == 4 && opacityEdits == 0 &&
+                    canvas.canvasToViewTransform() == camera,
+                "modified pinned magnifier wheels must preserve factors, opacity and camera");
+    }
+    wheel(70, 0);
+    require(commits == 4 && canvas.canvasMagnifierStyle().factor == 2.4,
+            "modified pinned input must discard incomplete selected factor gestures");
+    wheel(30, 0);
+    require(commits == 5 && canvas.canvasMagnifierStyle().factor == 2.5 && opacityEdits == 0,
+            "pinned selected factor gestures must resume after modified input");
+    require(canvas.resetEditingState(), "clear the pinned magnifier adjustment target");
+    const auto withoutTarget = magnifier();
+    QWheelEvent event(QPointF(100, 100), canvas.mapToGlobal(QPoint(100, 100)), QPoint(),
+                      QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    require(!handleScreenshotStyleWheel(palette, canvas, event, accumulator) &&
+                magnifier() == withoutTarget && commits == 5 && opacityEdits == 0,
+            "Select-tool wheels without an adjustment target must not edit magnifiers or opacity");
+}
+
+void disabledSelectionOpacityRejectsWheelSteps() {
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    int edits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionOpacityChanged, &palette,
+                     [&](qreal) { ++edits; });
+    auto* slider = palette.findChild<adqt::widgets::AdSlider*>(
+        QStringLiteral("screenshotSelectionOpacitySlider"));
+    require(slider != nullptr, "Select must materialize the selection opacity control");
+    SnowCanvasStyleToolbarState rectangle;
+    rectangle.source = SnowCanvasStyleToolbarSource::SelectedRectangle;
+    rectangle.selectedElementCount = 1;
+    rectangle.shapeStyle.opacity = 0.5;
+    palette.setStyleToolbarState(rectangle);
+    require(slider->isEnabled() && slider->value() == 50,
+            "a selected rectangle must enable its opacity control");
+    for (const auto source : {SnowCanvasStyleToolbarSource::SelectedMagnifier,
+                              SnowCanvasStyleToolbarSource::SelectedSpotlight}) {
+        SnowCanvasStyleToolbarState selected;
+        selected.source = source;
+        selected.selectedElementCount = 1;
+        palette.setStyleToolbarState(selected);
+        require(!slider->isEnabled(),
+                "changing the selected kind must disable opacity even with the same item count");
+        palette.setSelectionOpacity(0.65, true);
+        const auto before = slider->value();
+        require(!palette.stepSelectionOpacity(-1) && !palette.stepSelectionOpacity(1) &&
+                    slider->value() == before && slider->property("mixed").toBool() && edits == 0,
+                "disabled opacity steps must preserve mixed values without emitting commands");
+    }
+    palette.setStyleToolbarState(rectangle);
+    require(slider->isEnabled() && palette.stepSelectionOpacity(-1) && slider->value() == 45 &&
+                edits == 1,
+            "enabled selection opacity controls must retain their ordinary five-percent steps");
 }
 
 void magnifierControlsRetranslateAndRenderPreviews() {
@@ -17789,11 +17890,22 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--selected-magnifier-wheel-only"))) {
+        magnifierStyleWheelsPersistCompletedSteps();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--disabled-selection-opacity-only"))) {
+        disabledSelectionOpacityRejectsWheelSteps();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--magnifier-only"))) {
         magnifierLayoutMigrationPreservesCustomization();
         magnifierControlsPatchIndependentProperties();
         magnifierStylesPersistAndIgnoreSelectedEdits();
         magnifierStyleWheelsPersistCompletedSteps();
+        disabledSelectionOpacityRejectsWheelSteps();
         magnifierControlsRetranslateAndRenderPreviews();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
@@ -18134,6 +18246,7 @@ int main(int argc, char** argv) {
     magnifierControlsPatchIndependentProperties();
     magnifierStylesPersistAndIgnoreSelectedEdits();
     magnifierStyleWheelsPersistCompletedSteps();
+    disabledSelectionOpacityRejectsWheelSteps();
     magnifierControlsRetranslateAndRenderPreviews();
     angleSettingsAndWheelPreserveIndependentProperties();
     distanceActualValueUpdatesTheCanvasAndUndo();

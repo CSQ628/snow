@@ -119,7 +119,7 @@ bool handleScreenshotStyleWheel(ScreenshotToolPalette& palette, SnowCanvasWidget
         return true;
     }
     accumulator.reset();
-    if (canvas.canvasTool() == SnowCanvasTool::Magnifier)
+    if (canvas.hasMagnifierAdjustmentTarget())
         return canvas.adjustMagnifierFromWheel(event);
     if (event.modifiers() != Qt::NoModifier)
         return false;

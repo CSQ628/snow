@@ -104,6 +104,31 @@ impl MagnifierData {
             ..self.source_rect()
         }
     }
+    /// The unpainted source/lens union used by group selection and layout commands.
+    /// Single-element editing continues to use the rotated source rectangle.
+    pub fn group_rect(self) -> RectangleData {
+        let source = rect_bounds(&self.source_rect());
+        let mut lens = self.magnified_rect();
+        lens.stroke_width = 0.0;
+        let lens = rect_bounds(&lens);
+        let bounds = DrawRect::new(
+            source.min_x.min(lens.min_x),
+            source.min_y.min(lens.min_y),
+            source.max_x.max(lens.max_x),
+            source.max_y.max(lens.max_y),
+        );
+        RectangleData {
+            center: Point::new(
+                f64::midpoint(bounds.min_x, bounds.max_x),
+                f64::midpoint(bounds.min_y, bounds.max_y),
+            ),
+            width: bounds.max_x - bounds.min_x,
+            height: bounds.max_y - bounds.min_y,
+            rotation: 0.0,
+            highlight_shape: HighlightShape::Rectangle,
+            ..self.source_rect()
+        }
+    }
     pub fn translated(mut self, delta: Point<f64>) -> Self {
         self.source_center.x += delta.x;
         self.source_center.y += delta.y;
@@ -354,6 +379,46 @@ fn contour_distance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn magnifier_group_rect_contains_rotated_regions_without_paint_overflow() {
+        let value = MagnifierData {
+            source_center: Point::new(0.0, 0.0),
+            magnified_center: Point::new(200.0, 100.0),
+            width: 100.0,
+            height: 80.0,
+            rotation: std::f64::consts::FRAC_PI_2,
+            factor: 2.0,
+            stroke_width: 72.0,
+            leader_arrowhead: Some(Arrowhead::Triangle),
+            arrow_ratio: 3.0,
+            ..Default::default()
+        };
+        let group = value.group_rect();
+        let bounds = rect_bounds(&group);
+        for (actual, expected) in [
+            (bounds.min_x, -40.0),
+            (bounds.min_y, -50.0),
+            (bounds.max_x, 280.0),
+            (bounds.max_y, 200.0),
+        ] {
+            assert!((actual - expected).abs() < 1e-9);
+        }
+        assert_eq!(group.rotation, 0.0);
+        assert_eq!(group.stroke_width, 0.0);
+        assert_eq!(
+            group,
+            MagnifierData {
+                stroke_width: 0.0,
+                show_leader: false,
+                ..value
+            }
+            .group_rect()
+        );
+        assert_eq!(value.source_rect().center, value.source_center);
+        assert_eq!(value.source_rect().width, value.width);
+        assert_eq!(value.source_rect().rotation, value.rotation);
+    }
 
     #[test]
     fn magnifier_leader_proportions_match_arrow_tool_geometry() {

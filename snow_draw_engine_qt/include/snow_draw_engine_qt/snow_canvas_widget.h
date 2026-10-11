@@ -79,6 +79,8 @@ class SnowCanvasWidget : public QWidget {
     bool setCanvasAngleStylePatch(const SnowCanvasAngleStyle& style, quint32 properties);
     // Adjusts the third-point preview, otherwise an angle-only selection, in radians.
     bool adjustAngleValue(double deltaRadians);
+    // Factor-wheel ownership follows the active tool or selection, including in host routers.
+    bool hasMagnifierAdjustmentTarget() const;
     // Accumulates wheel input for the active or selected magnifier independently of camera zoom.
     // Publishes completed factor edits so hosts can remember creation preferences.
     bool adjustMagnifierFromWheel(const QWheelEvent& event);

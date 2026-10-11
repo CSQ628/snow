@@ -1914,3 +1914,75 @@ fn magnifier_pending_eraser_preview_fades_lens_and_leader_without_changing_geome
         assert_eq!(scene_magnifiers(&engine, viewport), vec![original]);
     }
 }
+
+#[test]
+fn magnifier_alignment_history_restores_compound_bounds_and_single_source_editing() {
+    let (mut engine, viewport, id) = fixture(HighlightShape::Diamond, 2.0);
+    let mut original = *engine.model.magnifier(id).unwrap();
+    original.magnified_center = Point::new(200.0, 100.0);
+    original.rotation = std::f64::consts::FRAC_PI_3;
+    let companion_id = engine.model.peek_next_element_id();
+    let mut companion = original.source_rect();
+    companion.center = Point::new(500.0, 400.0);
+    companion.rotation = 0.0;
+    let mut transaction = Transaction::new("alignment fixture");
+    transaction.update_magnifier(id, original);
+    transaction.insert_rectangle(companion_id, Default::default(), companion);
+    engine
+        .apply_editor_command(
+            viewport,
+            EditorCommand::ApplyTransaction(ApplyTransactionCommand {
+                transaction,
+                history_undo_snapshot: None,
+            }),
+        )
+        .unwrap();
+    let snapshot = serde_json::from_value(serde_json::json!({
+        "selectedIds": [id, companion_id], "primaryId": id
+    }))
+    .unwrap();
+    engine
+        .editor
+        .restore_history_selection(&engine.model, &snapshot);
+    engine.refresh_all_viewports().unwrap();
+    let selection_bounds = |engine: &Engine| {
+        engine
+            .editor
+            .presentation_state(&engine.model, &engine.viewport_slot(viewport).unwrap().view)
+            .selection_bounds
+            .unwrap()
+    };
+    let before_bounds = selection_bounds(&engine);
+    engine
+        .align_selected_with_viewport_changes(viewport, 2)
+        .unwrap();
+    let aligned = *engine.model.magnifier(id).unwrap();
+    let aligned_companion = *engine.model.rectangle(companion_id).unwrap();
+    let aligned_bounds = selection_bounds(&engine);
+    assert_ne!(aligned, original);
+    assert!(
+        (aligned.group_rect().center.x + aligned.group_rect().width / 2.0
+            - (aligned_companion.center.x + aligned_companion.width / 2.0))
+            .abs()
+            < 1e-9
+    );
+    assert!(engine.undo().unwrap());
+    assert_eq!(*engine.model.magnifier(id).unwrap(), original);
+    assert_eq!(*engine.model.rectangle(companion_id).unwrap(), companion);
+    assert_eq!(engine.selected_ids(), vec![id, companion_id]);
+    assert_eq!(selection_bounds(&engine), before_bounds);
+    assert!(engine.redo().unwrap());
+    assert_eq!(*engine.model.magnifier(id).unwrap(), aligned);
+    assert_eq!(
+        *engine.model.rectangle(companion_id).unwrap(),
+        aligned_companion
+    );
+    assert_eq!(selection_bounds(&engine), aligned_bounds);
+
+    select(&mut engine, viewport, id);
+    let single = selection_bounds(&engine);
+    assert_eq!(single.center, aligned.source_center);
+    assert_eq!(single.width, aligned.width);
+    assert_eq!(single.height, aligned.height);
+    assert_eq!(single.rotation, aligned.rotation);
+}
