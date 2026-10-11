@@ -1323,10 +1323,10 @@ void ScreenshotCanvasRenderer::setSelection(const QRectF& selection, bool handle
     applySelectionState(next);
 }
 
-void ScreenshotCanvasRenderer::setSelectionRegion(const ScreenshotRegionGeometry& region,
-                                                  const ScreenshotRegionGeometry& confirmed,
-                                                  const QRectF& marquee, bool subtracting,
-                                                  const QColor& danger) {
+QRegion ScreenshotCanvasRenderer::setSelectionRegion(const ScreenshotRegionGeometry& region,
+                                                     const ScreenshotRegionGeometry& confirmed,
+                                                     const QRectF& marquee, bool subtracting,
+                                                     const QColor& danger) {
     auto state = m_selectionState;
     state.region = region;
     state.confirmedRegion = confirmed;
@@ -1337,10 +1337,10 @@ void ScreenshotCanvasRenderer::setSelectionRegion(const ScreenshotRegionGeometry
         QRectF(region.boundingRect()).united(QRectF(confirmed.boundingRect())).united(marquee);
     state.present = !state.bounds.isEmpty();
     state.handlesVisible = false;
-    applySelectionState(state);
+    return applySelectionState(state);
 }
 
-void ScreenshotCanvasRenderer::applySelectionState(const ScreenshotSelectionVisualState& state) {
+QRegion ScreenshotCanvasRenderer::applySelectionState(const ScreenshotSelectionVisualState& state) {
     ScreenshotSelectionVisualState next = state;
     next.bounds = next.bounds.normalized();
     next.present = next.present && next.bounds.isValid() && !next.bounds.isEmpty();
@@ -1350,7 +1350,7 @@ void ScreenshotCanvasRenderer::applySelectionState(const ScreenshotSelectionVisu
         next.shadowColor = QColor(0x33, 0x33, 0x33);
     }
     if (next == m_selectionState) {
-        return;
+        return {};
     }
     const ScreenshotSelectionVisualState previous = m_selectionState;
     m_selectionState = next;
@@ -1376,6 +1376,7 @@ void ScreenshotCanvasRenderer::applySelectionState(const ScreenshotSelectionVisu
     if (!dirtyRegion.isEmpty()) {
         m_canvas.update(dirtyRegion);
     }
+    return dirtyRegion;
 }
 
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
@@ -1410,13 +1411,13 @@ void ScreenshotCanvasRenderer::setSelectionToolbarHovered(bool hovered) {
     applySelectionState(next);
 }
 
-void ScreenshotCanvasRenderer::setSelectionBorderVisible(bool visible) {
+QRegion ScreenshotCanvasRenderer::setSelectionBorderVisible(bool visible) {
     ScreenshotSelectionVisualState next = m_selectionState;
     next.borderVisible = visible;
-    applySelectionState(next);
+    return applySelectionState(next);
 }
 
-void ScreenshotCanvasRenderer::clearSelection() {
+QRegion ScreenshotCanvasRenderer::clearSelection() {
     ScreenshotSelectionVisualState next = m_selectionState;
     next.region.reset();
     next.confirmedRegion = {};
@@ -1427,7 +1428,7 @@ void ScreenshotCanvasRenderer::clearSelection() {
     next.cornerRadius = 0;
     next.shadowWidth = 0;
     next.shadowColor = QColor(0x33, 0x33, 0x33);
-    applySelectionState(next);
+    return applySelectionState(next);
 }
 
 void ScreenshotCanvasRenderer::setOcrVisible(bool visible) {
@@ -2270,18 +2271,19 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
     painter.restore();
 }
 
-void ScreenshotCanvasRenderer::setSelectionDraft(const QPainterPath& path,
-                                                 const QVector<QPointF>& vertices) {
+QRegion ScreenshotCanvasRenderer::setSelectionDraft(const QPainterPath& path,
+                                                    const QVector<QPointF>& vertices) {
     auto next = m_selectionState;
     next.draftPath = path;
     next.draftVertices = vertices;
     if (next == m_selectionState)
-        return;
+        return {};
     const QRectF before = m_selectionState.draftPath.boundingRect();
-    applySelectionState(next);
+    const QRegion selectionDamage = applySelectionState(next);
     QRegion damage(m_canvas.canvasToViewTransform()
                        .mapRect(before.united(path.boundingRect()))
                        .adjusted(-5, -5, 5, 5)
                        .toAlignedRect());
     m_canvas.update(damage);
+    return (selectionDamage | damage).intersected(m_canvas.rect());
 }

@@ -153,14 +153,15 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     void clearGuideLines();
     void setSelection(const QRectF& selection, bool handlesVisible = true, int cornerRadius = 0,
                       int shadowWidth = 0, const QColor& shadowColor = QColor(0x33, 0x33, 0x33));
-    void setSelectionRegion(const ScreenshotRegionGeometry& region,
-                            const ScreenshotRegionGeometry& confirmed, const QRectF& marquee,
-                            bool subtracting, const QColor& danger);
-    void setSelectionDraft(const QPainterPath& path, const QVector<QPointF>& vertices);
-    void applySelectionState(const ScreenshotSelectionVisualState& state);
+    QRegion setSelectionRegion(const ScreenshotRegionGeometry& region,
+                               const ScreenshotRegionGeometry& confirmed, const QRectF& marquee,
+                               bool subtracting, const QColor& danger);
+    QRegion setSelectionDraft(const QPainterPath& path, const QVector<QPointF>& vertices);
+    // Return the exact widget-space region requested for this selection repaint.
+    QRegion applySelectionState(const ScreenshotSelectionVisualState& state);
     void setSelectionToolbarHovered(bool hovered);
-    void setSelectionBorderVisible(bool visible);
-    void clearSelection();
+    QRegion setSelectionBorderVisible(bool visible);
+    QRegion clearSelection();
     void setOcrPresentation(std::shared_ptr<ScreenshotOcrPresentation> presentation,
                             OcrPresentationMode mode = OcrPresentationMode::BackgroundAndText);
     // Suppress rendering without discarding the latest presentation or filtered image.

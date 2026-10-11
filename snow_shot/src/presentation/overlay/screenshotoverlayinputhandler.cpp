@@ -425,9 +425,22 @@ void ScreenshotOverlayInputHandler::handleMousePress(ScreenshotOverlayWindow* ov
                            : hitMode);
 }
 
+void ScreenshotOverlayInputHandler::prepareOverlayActivation() {
+    if (m_context.actions.prepareOverlayActivation)
+        m_context.actions.prepareOverlayActivation();
+}
+
 void ScreenshotOverlayInputHandler::beginExternalSelectionDrag(const QPointF& canvasPosition) {
     if (m_externalDragActive) {
         beginSelectionDrag(nullptr, canvasPosition, ScreenshotSelectionDragMode::Marquee);
+    }
+}
+
+void ScreenshotOverlayInputHandler::beginExternalSelectionDrag(const QPointF& canvasStart,
+                                                               const QPointF& canvasPosition) {
+    if (m_externalDragActive) {
+        beginSelectionDrag(nullptr, canvasStart, ScreenshotSelectionDragMode::Marquee,
+                           canvasPosition);
     }
 }
 
@@ -439,7 +452,8 @@ void ScreenshotOverlayInputHandler::updateExternalSelectionDrag(const QPointF& c
 
 void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* overlay,
                                                        const QPointF& virtualPosition,
-                                                       ScreenshotSelectionDragMode dragMode) {
+                                                       ScreenshotSelectionDragMode dragMode,
+                                                       std::optional<QPointF> currentPosition) {
     if (dragMode == ScreenshotSelectionDragMode::None) {
         return;
     }
@@ -487,10 +501,13 @@ void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* 
             snow_shot::presentation::kScreenshotSelectionMinimumSize));
     }
     m_context.selection.beginMoveDrag(virtualPosition);
+    if (currentPosition) {
+        updateSelectionDragGeometry(*currentPosition);
+    }
     m_context.actions.hideMainToolbar();
     m_context.actions.updateOverlayState();
-    m_context.actions.setOverlayCursor(overlay, dragMode);
-    m_context.actions.updateColorPickerForSelectionDrag(virtualPosition);
+    m_context.actions.setOverlayCursor(overlay, m_context.interaction.dragMode());
+    m_context.actions.updateColorPickerForSelectionDrag(currentPosition.value_or(virtualPosition));
 }
 
 void ScreenshotOverlayInputHandler::handleIntelligentSelectionPress(
@@ -630,7 +647,7 @@ void ScreenshotOverlayInputHandler::handleHoverMove(ScreenshotOverlayWindow* ove
     m_context.actions.updateColorPickerForOverlay(overlay, localPosition);
 }
 
-void ScreenshotOverlayInputHandler::updateSelectionDrag(const QPointF& virtualPosition) {
+void ScreenshotOverlayInputHandler::updateSelectionDragGeometry(const QPointF& virtualPosition) {
     const QRectF previousSelection = m_context.selection.normalizedSelection();
     m_lastMoveDragPosition = virtualPosition;
     if (m_keepSelectionAspectRatioShortcut && m_context.interaction.dragging()) {
@@ -654,6 +671,10 @@ void ScreenshotOverlayInputHandler::updateSelectionDrag(const QPointF& virtualPo
         static_cast<void>(
             m_context.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::All));
     }
+}
+
+void ScreenshotOverlayInputHandler::updateSelectionDrag(const QPointF& virtualPosition) {
+    updateSelectionDragGeometry(virtualPosition);
     if (m_context.actions.requestSelectionDragPresentation)
         m_context.actions.requestSelectionDragPresentation();
     else

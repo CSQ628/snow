@@ -425,6 +425,14 @@ void ScreenshotCaptureWorkflow::beginCapturePreparation(quint64 sessionId) {
         return;
     }
     if (preCapturePrepared && !m_state.presentationSuppressed &&
+        m_startMode == StartMode::ExternalDrag) {
+        // Window creation leaves backing-store pixels uninitialized. Queue optional
+        // warming during acquisition; capture-ready reveal supersedes remaining work.
+        m_context.runtime.prepareOverlaySurfaces(m_context.displaySession);
+        if (sessionId != m_state.sessionId || !m_state.captureInProgress)
+            return;
+    }
+    if (preCapturePrepared && !m_state.presentationSuppressed &&
         m_toolbarPreparation == ToolbarPreparation::Prewarm) {
         m_context.runtime.prewarmToolbarSurface(m_context.displaySession);
     }
@@ -631,16 +639,39 @@ void ScreenshotCaptureWorkflow::showCapturePresentationWhenReady(quint64 session
                                                : ScreenshotOverlayShowMode::CapturedImage;
     if (!m_state.presentationSuppressed)
         m_context.runtime.showOverlayWindows(m_context.displaySession, revealMode);
-    SNOW_SHOT_CAPTURE_PERF_FLUSH_COMPOSITION();
-    SNOW_SHOT_CAPTURE_PERF_MILESTONE("presentation.composited");
+    // Native show callbacks may cancel or replace the capture synchronously.
+    // Only the session whose surfaces were revealed may publish completion.
+    if (sessionId != m_state.sessionId || m_visiblePresentationSessionId != sessionId)
+        return;
+    if (revealMode == ScreenshotOverlayShowMode::CapturedImageFramePaced) {
+        // The first paint is still queued. Waiting for DWM here blocks drag input
+        // and cannot establish that the captured canvas has reached the screen.
+        SNOW_SHOT_CAPTURE_PERF_MILESTONE("presentation.reveal_queued");
+    } else {
+        SNOW_SHOT_CAPTURE_PERF_FLUSH_COMPOSITION();
+        SNOW_SHOT_CAPTURE_PERF_MILESTONE("presentation.composited");
+    }
     SNOW_SHOT_CAPTURE_PERF_FINISH(true);
     m_startup->phase = ScreenshotStartupContext::Phase::Revealed;
     if (!m_state.presentationSuppressed && m_context.presentation.updateColorPicker) {
         m_context.presentation.updateColorPicker();
     }
+    if (sessionId != m_state.sessionId || m_visiblePresentationSessionId != sessionId)
+        return;
+    if (m_startMode == StartMode::ExternalDrag && !m_state.presentationSuppressed &&
+        m_context.presentation.updateOverlayState) {
+        // Publish the revealed lifecycle without reapplying the drag endpoint
+        // that was initialized atomically before show. This boundary stays
+        // observable even when the external gesture is stationary.
+        m_context.presentation.updateOverlayState();
+        if (sessionId != m_state.sessionId || m_visiblePresentationSessionId != sessionId)
+            return;
+    }
     if (m_context.presentation.capturePresented) {
         m_context.presentation.capturePresented();
     }
+    if (sessionId != m_state.sessionId || m_visiblePresentationSessionId != sessionId)
+        return;
     if (!m_state.presentationSuppressed &&
         m_context.selection.regionType() == ScreenshotRegionType::Rectangle &&
         m_startMode != StartMode::ExternalDrag && !m_context.runtime.selectorReady() &&

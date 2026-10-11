@@ -14,6 +14,7 @@
 #include "snow_shot/presentation/screenshotoverlayuihost.h"
 #include "snow_shot/presentation/screenshotoverlayeventsink.h"
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
+#include "../src/presentation/overlay/screenshotoverlaycanvaswidget.h"
 #include "snow_shot/presentation/screenshotoverlaycoordinator.h"
 #include "snow_shot/presentation/screenshotoverlaycanvaspresenter.h"
 #include "snow_shot/presentation/screenshotdisplaysession.h"
@@ -31,27 +32,30 @@
 #include "widgets/detail/overlay_popup_surface.h"
 
 #include <QApplication>
-#include <QAbstractEventDispatcher>
 #include <QClipboard>
 #include <QBackingStore>
 #include <QDir>
 #include <QEnterEvent>
 #include <QHoverEvent>
+#include <QFocusEvent>
+#include <QKeyEvent>
 #include <QListView>
+#include <QMetaObject>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
 #include <QScreen>
-#include <QSet>
+#include <QResizeEvent>
 #include <QTemporaryDir>
 #include <QTranslator>
 #include <QLabel>
 #include <QWindow>
-#include <QTimerEvent>
 
 #include <cstdlib>
+#include <algorithm>
 #include <functional>
 #include <iostream>
+#include <memory>
 
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
@@ -65,11 +69,11 @@ void require(bool condition, const char* message) {
     }
 }
 
-const uchar* backingPixels(ScreenshotColorPickerWindow& picker) {
+const uchar* backingPixels(QWidget& picker) {
     QBackingStore* store = picker.backingStore();
     require(store != nullptr && store->size() == picker.size(),
             "hidden preparation must allocate the full logical backing-store size");
-    store->beginPaint(picker.rect());
+    store->beginPaint(QRegion());
     QPaintDevice* device = store->paintDevice();
     require(device != nullptr && device->devType() == QInternal::Image,
             "the raster backend must expose an image paint device");
@@ -81,10 +85,90 @@ const uchar* backingPixels(ScreenshotColorPickerWindow& picker) {
     return pixels;
 }
 
+void requireTransparentBackingPixels(QWidget& widget) {
+    QBackingStore* store = widget.backingStore();
+    require(store != nullptr, "hidden warming must create a raster backing store");
+    store->beginPaint(QRegion());
+    const QPaintDevice* device = store->paintDevice();
+    require(device != nullptr && device->devType() == QInternal::Image,
+            "hidden warming must expose a raster image during its paint lifetime");
+    const auto* image = static_cast<const QImage*>(device);
+    require(!image->isNull() && image->size() == widget.size() * widget.devicePixelRatioF(),
+            "hidden warming must initialize the full physical pixel allocation");
+    for (int y = 0; y < image->height(); ++y) {
+        for (int x = 0; x < image->width(); ++x) {
+            require(image->pixelColor(x, y).alpha() == 0,
+                    "optional warming must initialize every hidden alpha pixel transparently");
+        }
+    }
+    store->endPaint();
+}
+
+void poisonBackingPixels(QWidget& widget, const QColor& poison) {
+    QBackingStore* store = widget.backingStore();
+    require(store != nullptr, "the partial preparation fixture needs an allocated backing store");
+    store->beginPaint(widget.rect());
+    {
+        QPainter painter(store->paintDevice());
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(widget.rect(), poison);
+    }
+    store->endPaint();
+}
+
+int transparentPrefixRows(QWidget& widget, const QColor& poison, bool checkBudget = false) {
+    QBackingStore* store = widget.backingStore();
+    require(store != nullptr && store->size() == widget.size(),
+            "partial preparation must retain a full-size logical backing store");
+    store->beginPaint(QRegion());
+    const QPaintDevice* device = store->paintDevice();
+    require(device != nullptr && device->devType() == QInternal::Image,
+            "partial preparation must expose actual raster pixels during paint");
+    const auto* image = static_cast<const QImage*>(device);
+    require(!image->isNull(), "partial preparation must have allocated native pixels");
+    int prefixRows = 0;
+    bool unclearedRows = false;
+    for (int y = 0; y < image->height(); ++y) {
+        const bool transparent = image->pixelColor(0, y).alpha() == 0;
+        if (transparent) {
+            require(!unclearedRows, "bounded warming must cover rows without fractional-DPR gaps");
+            ++prefixRows;
+        } else {
+            unclearedRows = true;
+        }
+        for (int x = 0; x < image->width(); ++x) {
+            const QColor pixel = image->pixelColor(x, y);
+            require(
+                transparent ? pixel.alpha() == 0 : pixel == poison,
+                "one partial step must clear full-width rows and preserve the remaining pixels");
+        }
+    }
+    require(prefixRows > 0 && prefixRows < image->height(),
+            "the large fixture must require multiple bounded preparation steps");
+    if (checkBudget) {
+        require(static_cast<qint64>(prefixRows) * image->bytesPerLine() <= 1024 * 1024,
+                "the first bounded clear must request at most one MiB of physical raster rows");
+    }
+    store->endPaint();
+    return prefixRows;
+}
+
 class NoopOverlayEventSink final : public ScreenshotOverlayEventSink {
   public:
     ScreenshotOverlayRightClickResult rightClickResult = ScreenshotOverlayRightClickResult::Ignored;
     std::function<void()> cancel = [] {};
+    std::function<void()> prepareActivation = [] {};
+    std::function<void()> leaveEditors = [] {};
+    std::function<void()> cancelEffects = [] {};
+    void cancelEffectDrag() override {
+        cancelEffects();
+    }
+    void leaveEffectEditors() override {
+        leaveEditors();
+    }
+    void prepareOverlayActivation() override {
+        prepareActivation();
+    }
     void completeRightClickCancellation() override {
         cancel();
     }
@@ -118,8 +202,9 @@ class NoopOverlayEventSink final : public ScreenshotOverlayEventSink {
 class OverlayRevealFixture final {
   public:
     OverlayRevealFixture()
-        : primary(sink, new SnowCanvasWidget(runtime)),
-          secondary(sink, new SnowCanvasWidget(runtime)), coordinator(sink, runtime, shortcuts) {
+        : primary(sink, new ScreenshotOverlayCanvasWidget(runtime)),
+          secondary(sink, new ScreenshotOverlayCanvasWidget(runtime)),
+          coordinator(sink, runtime, shortcuts) {
         primary.setCaptureGeometry(QRect(0, 0, 160, 100));
         secondary.setCaptureGeometry(QRect(160, 0, 160, 100));
         for (auto* overlay : {&primary, &secondary}) {
@@ -258,61 +343,988 @@ void supersededSecondaryRevealCannotFocusTheNextPresentation() {
             "a retired secondary reveal must not activate the reused overlay's next presentation");
 }
 
-QSet<QObject*> registeredTimerOwners() {
-    QSet<QObject*> owners;
-    auto* dispatcher = QAbstractEventDispatcher::instance();
-    for (QObject* child : dispatcher->children()) {
-        if (!dispatcher->registeredTimers(child).isEmpty())
-            owners.insert(child);
+void firstPaintActivationCannotFocusTheNextPresentation() {
+    for (const bool retireAfterPaint : {false, true}) {
+        OverlayRevealFixture fixture;
+        int preparations = 0;
+        fixture.sink.prepareActivation = [&] { ++preparations; };
+        fixture.coordinator.showOverlayWindows(fixture.displays,
+                                               ScreenshotOverlayShowMode::CapturedImageFramePaced);
+        require(fixture.primary.keyboardActivationCountForTesting() == 0,
+                "a frame-paced reveal must not activate ahead of its first canvas paint");
+        if (retireAfterPaint) {
+            // Dispatch a real canvas paint synchronously, keeping its queued
+            // activation pending so cancellation can retire it deterministically.
+            QImage paintedFrame(fixture.primary.canvas()->size(),
+                                QImage::Format_ARGB32_Premultiplied);
+            paintedFrame.fill(Qt::transparent);
+            fixture.primary.canvas()->render(&paintedFrame);
+            require(fixture.primary.keyboardActivationCountForTesting() == 0,
+                    "the first paint must queue activation after painting, without blocking it");
+        }
+
+        fixture.primary.hide();
+        fixture.primary.show();
+        QWidget focusOwner(&fixture.primary);
+        focusOwner.setFocusPolicy(Qt::StrongFocus);
+        focusOwner.show();
+        focusOwner.setFocus(Qt::OtherFocusReason);
+        for (int pass = 0; pass < 3; ++pass) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::UpdateRequest);
+            QCoreApplication::sendPostedEvents(&fixture.primary, QEvent::MetaCall);
+        }
+        require(fixture.primary.focusWidget() == &focusOwner &&
+                    fixture.primary.keyboardActivationCountForTesting() == 0 && preparations == 0,
+                "an old first-paint activation must not focus a reused overlay presentation");
     }
-    return owners;
 }
 
-void delayedActivationCannotFocusTheNextPresentation() {
+void activationPreparationRunsOnceAfterFirstPaintAndBeforeKeyboardFocus() {
+    OverlayRevealFixture fixture;
+    int preparations = 0;
+    fixture.sink.prepareActivation = [&] {
+        ++preparations;
+        require(fixture.primary.keyboardActivationCountForTesting() == 0,
+                "pending frame preparation must precede native keyboard activation");
+    };
+    fixture.coordinator.showOverlayWindows(fixture.displays,
+                                           ScreenshotOverlayShowMode::CapturedImageFramePaced);
+    QCoreApplication::sendPostedEvents(&fixture.primary, QEvent::MetaCall);
+    require(preparations == 0 && fixture.primary.keyboardActivationCountForTesting() == 0,
+            "activation preparation must wait for the actual first canvas paint");
+
+    QImage paintedFrame(fixture.primary.canvas()->size(), QImage::Format_ARGB32_Premultiplied);
+    paintedFrame.fill(Qt::transparent);
+    fixture.primary.canvas()->render(&paintedFrame);
+    require(preparations == 0, "activation preparation must run after the first paint returns");
+    QCoreApplication::sendPostedEvents(&fixture.primary, QEvent::MetaCall);
+    require(preparations == 1 && fixture.primary.keyboardActivationCountForTesting() == 1,
+            "the preferred keyboard owner must prepare and activate exactly once");
+    fixture.primary.requestPresentationActivation(fixture.primary.presentationGeneration(), true);
+    fixture.primary.canvas()->render(&paintedFrame);
+    QCoreApplication::sendPostedEvents(&fixture.primary, QEvent::MetaCall);
+    require(preparations == 1 && fixture.primary.keyboardActivationCountForTesting() == 1,
+            "duplicate activation requests and later paints must not prepare again");
+}
+
+void activationPreparationCannotFocusARetiredOrReplacementPresentation() {
+    for (int retirement = 0; retirement < 3; ++retirement) {
+        OverlayRevealFixture fixture;
+        QWidget replacementFocus(&fixture.primary);
+        replacementFocus.setFocusPolicy(Qt::StrongFocus);
+        int preparations = 0;
+        fixture.sink.prepareActivation = [&] {
+            ++preparations;
+            require(fixture.primary.keyboardActivationCountForTesting() == 0,
+                    "a preparation callback must run before native activation");
+            if (retirement == 0) {
+                fixture.coordinator.hideOverlayWindowsImmediately(fixture.displays);
+            } else if (retirement == 1) {
+                fixture.primary.resetScreenshotRendering();
+            } else {
+                fixture.primary.hide();
+                fixture.primary.show();
+                replacementFocus.show();
+                replacementFocus.setFocus(Qt::OtherFocusReason);
+            }
+        };
+        fixture.coordinator.showOverlayWindows(fixture.displays,
+                                               ScreenshotOverlayShowMode::CapturedImageFramePaced);
+        QImage paintedFrame(fixture.primary.canvas()->size(), QImage::Format_ARGB32_Premultiplied);
+        paintedFrame.fill(Qt::transparent);
+        fixture.primary.canvas()->render(&paintedFrame);
+        QCoreApplication::sendPostedEvents(&fixture.primary, QEvent::MetaCall);
+        require(preparations == 1 && fixture.primary.keyboardActivationCountForTesting() == 0,
+                "retiring during pending frame preparation must prevent native activation");
+        if (retirement == 2) {
+            require(fixture.primary.focusWidget() == &replacementFocus,
+                    "pending frame preparation must preserve its replacement's keyboard owner");
+        }
+        QCoreApplication::sendPostedEvents(&fixture.primary, QEvent::MetaCall);
+        require(preparations == 1 && fixture.primary.keyboardActivationCountForTesting() == 0,
+                "a retired activation must not queue followup preparation or cursor work");
+    }
+}
+
+void activationPreparationCanDeleteItsOverlay() {
     NoopOverlayEventSink sink;
     SnowCanvasRuntime runtime;
-    ScreenshotOverlayWindow overlay(sink, new SnowCanvasWidget(runtime));
-    overlay.setCaptureGeometry(QRect(0, 0, 160, 100));
-    ScreenshotDisplaySession displays;
-    CapturedDisplayModel display;
-    display.logicalRect = overlay.captureGeometry();
-    display.active = true;
-    displays.appendDisplay(display, &overlay);
-    ScreenshotOverlayCanvasPresenter presenter({});
-    const QSet<QObject*> timersBefore = registeredTimerOwners();
-    presenter.showOverlayWindows(displays, ScreenshotOverlayShowMode::CapturedImageFramePaced);
-    const QSet<QObject*> activationTimers = registeredTimerOwners() - timersBefore;
-    require(activationTimers.size() == 1,
-            "frame-paced reveal must schedule one delayed activation on the Qt dispatcher");
-    QPointer<QObject> activationTimer(*activationTimers.constBegin());
-    const auto timers = QAbstractEventDispatcher::instance()->registeredTimers(activationTimer);
-    require(timers.size() == 1, "the activation callback must own one Qt timer registration");
-
-    overlay.hide();
-    overlay.show();
-    QWidget focusOwner(&overlay);
-    focusOwner.setFocusPolicy(Qt::StrongFocus);
-    focusOwner.show();
-    focusOwner.setFocus(Qt::OtherFocusReason);
-    require(overlay.focusWidget() == &focusOwner,
-            "the reused overlay must begin with its new keyboard owner");
-    // Deliver the real timer event deterministically, without a wall-clock sleep.
-    QTimerEvent timeout(timers.front().timerId);
-    QCoreApplication::sendEvent(activationTimer, &timeout);
-    require(activationTimer.isNull(), "the delayed one-shot activation must retire after delivery");
-    require(overlay.focusWidget() == &focusOwner,
-            "old delayed activation must not move focus after the pooled overlay is shown again");
+    auto overlay =
+        std::make_unique<ScreenshotOverlayWindow>(sink, new ScreenshotOverlayCanvasWidget(runtime));
+    overlay->setCaptureGeometry(QRect(0, 0, 160, 100));
+    const quint64 generation = overlay->beginPresentation();
+    require(overlay->showPreparedFrameForPresentation(generation, true),
+            "the deletion fixture must reveal a current paced presentation");
+    overlay->requestPresentationActivation(generation, true);
+    QImage paintedFrame(overlay->canvas()->size(), QImage::Format_ARGB32_Premultiplied);
+    paintedFrame.fill(Qt::transparent);
+    overlay->canvas()->render(&paintedFrame);
+    const QPointer<ScreenshotOverlayWindow> guard(overlay.get());
+    int preparations = 0;
+    sink.prepareActivation = [&] {
+        ++preparations;
+        require(overlay->keyboardActivationCountForTesting() == 0,
+                "deleting preparation must run before native activation");
+        overlay.reset();
+    };
+    QCoreApplication::sendPostedEvents(overlay.get(), QEvent::MetaCall);
+    require(preparations == 1 && guard == nullptr,
+            "deleting the overlay during frame preparation must safely stop queued activation");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    require(preparations == 1, "a deleted overlay must not retain queued preparation callbacks");
 }
 
-void currentSecondaryRevealStillShowsAndActivatesTheOverlay() {
-    OverlayRevealFixture fixture;
-    fixture.coordinator.showOverlayWindows(fixture.displays,
-                                           ScreenshotOverlayShowMode::CapturedImage);
+class SelectionActivationFenceFixture final {
+  public:
+    SelectionActivationFenceFixture() {
+        auto& owner = reveal.primary;
+        owner.show();
+        for (int pass = 0; pass < 3; ++pass)
+            QApplication::processEvents();
+        require(owner.windowHandle() != nullptr && owner.windowHandle()->isExposed(),
+                "the activation fence fixture must have a genuinely exposed native surface");
+        require(owner.canvas()->setViewportCamera(80, 50, 1),
+                "the activation fence fixture must use an identity selection transform");
+        owner.clearScreenshotGuideLines();
+        initial.bounds = QRectF(20, 20, 40, 35);
+        initial.present = true;
+        initial.handlesVisible = false;
+        moved = initial;
+        moved.bounds = QRectF(20, 20, 65, 45);
+        owner.setScreenshotSelectionState(initial);
+        for (int pass = 0; pass < 3; ++pass)
+            QApplication::processEvents();
+        generation = owner.beginPresentation();
+        require(owner.showPreparedFrameForPresentation(generation, true),
+                "the activation fence fixture must reserve a paced presentation");
+        paint(QRegion(owner.canvas()->rect()));
+        require(owner.keyboardActivationCountForTesting() == 0,
+                "the fixture must not activate before requesting keyboard ownership");
+    }
+
+    void request(bool framePaced = true) {
+        reveal.primary.requestPresentationActivation(generation, framePaced);
+    }
+
+    void dispatchActivation() {
+        QCoreApplication::sendPostedEvents(&reveal.primary, QEvent::MetaCall);
+    }
+
+    void paint(const QRegion& region) {
+        auto* canvas = reveal.primary.canvas();
+        QImage frame(canvas->size(), QImage::Format_ARGB32_Premultiplied);
+        frame.fill(Qt::transparent);
+        canvas->render(&frame, QPoint(), region);
+    }
+
+    QRegion movementDamage() const {
+        return planScreenshotSelectionDamage(initial, moved, reveal.primary.canvas()->rect(),
+                                             reveal.primary.canvas()->canvasToViewTransform(),
+                                             true);
+    }
+
+    OverlayRevealFixture reveal;
+    ScreenshotSelectionVisualState initial;
+    ScreenshotSelectionVisualState moved;
+    quint64 generation = 0;
+};
+
+void pacedActivationWaitsForTheExactOwnerSelectionPaintOnce() {
+    SelectionActivationFenceFixture fixture;
+    int preparations = 0;
+    fixture.reveal.sink.prepareActivation = [&] {
+        ++preparations;
+        auto state = fixture.moved;
+        if (preparations > 1)
+            state.bounds.setWidth(75);
+        fixture.reveal.primary.setScreenshotSelectionState(state);
+    };
+    fixture.request();
+    fixture.dispatchActivation();
+    require(preparations == 1 && fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+            "a due owner selection commit must paint before native activation");
+
+    const QRegion damage = fixture.movementDamage();
+    require(!damage.isEmpty() && !damage.contains(QRect(130, 80, 10, 10)),
+            "the fixture must have bounded selection damage away from the unrelated paint");
+    fixture.paint(QRegion(QRect(130, 80, 10, 10)));
+    fixture.dispatchActivation();
+    require(preparations == 1 && fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+            "an unrelated canvas paint must not satisfy the owner damage fence");
+    const QRect bounds = damage.boundingRect();
+    const QRegion firstHalf = damage.intersected(
+        QRect(bounds.topLeft(), QSize(std::max(1, bounds.width() / 2), bounds.height())));
+    const QRegion remaining = damage.subtracted(firstHalf);
+    require(!firstHalf.isEmpty() && !remaining.isEmpty(),
+            "the selection fixture must permit two distinct partial paints");
+    fixture.paint(firstHalf);
+    fixture.dispatchActivation();
+    require(preparations == 1 && fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+            "a partial owner paint must preserve the remaining exact damage");
+    auto later = fixture.moved;
+    later.bounds = QRectF(110, 75, 35, 20);
+    fixture.reveal.primary.setScreenshotSelectionState(later);
+    fixture.paint(remaining);
+    require(fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+            "native activation must remain queued until the covering paint returns");
+    fixture.dispatchActivation();
+    require(preparations == 2 && fixture.reveal.primary.keyboardActivationCountForTesting() == 1,
+            "one covering paint must release focus even if the next due hook commits more input");
+    fixture.request();
+    fixture.paint(QRegion(fixture.reveal.primary.canvas()->rect()));
+    fixture.dispatchActivation();
+    require(preparations == 2 && fixture.reveal.primary.keyboardActivationCountForTesting() == 1,
+            "a paced presentation must reserve the selection paint fence only once");
+}
+
+void selectionPaintFenceDeletionConsumesTheReentrantCleanupEvent() {
+    for (int receiver = 0; receiver < 3; ++receiver) {
+        NoopOverlayEventSink sink;
+        SnowCanvasRuntime runtime;
+        auto overlay = std::make_unique<ScreenshotOverlayWindow>(
+            sink, new ScreenshotOverlayCanvasWidget(runtime));
+        overlay->setCaptureGeometry(QRect(0, 0, 160, 100));
+        overlay->show();
+        for (int pass = 0; pass < 3; ++pass)
+            QApplication::processEvents();
+        require(overlay->windowHandle()->isExposed(),
+                "the deletion fixture must expose a canvas that can satisfy a paint fence");
+        require(overlay->canvas()->setViewportCamera(80, 50, 1),
+                "the deletion fixture must initialize its selection transform");
+        const quint64 generation = overlay->beginPresentation();
+        require(overlay->showPreparedFrameForPresentation(generation, true),
+                "the deletion fixture must reserve a frame-paced presentation");
+        QImage frame(overlay->canvas()->size(), QImage::Format_ARGB32_Premultiplied);
+        frame.fill(Qt::transparent);
+        overlay->canvas()->render(&frame);
+        int preparations = 0;
+        sink.prepareActivation = [&] {
+            ++preparations;
+            overlay->setScreenshotSelection(QRectF(20, 20, 65, 45), false, 0, 0, Qt::black);
+        };
+        overlay->requestPresentationActivation(generation, true);
+        QCoreApplication::sendPostedEvents(overlay.get(), QEvent::MetaCall);
+        require(preparations == 1 && overlay->keyboardActivationCountForTesting() == 0,
+                "the deletion fixture must be waiting on actual owner selection damage");
+        const QPointer<ScreenshotOverlayWindow> guard(overlay.get());
+        if (receiver == 1)
+            sink.cancelEffects = [&] { overlay.reset(); };
+        else
+            sink.leaveEditors = [&] { overlay.reset(); };
+        QObject* target = receiver == 0 ? static_cast<QObject*>(overlay->canvas()) : overlay.get();
+        QEvent cleanup(receiver == 0   ? QEvent::Leave
+                       : receiver == 1 ? QEvent::WindowDeactivate
+                                       : QEvent::Hide);
+        require(
+            QApplication::sendEvent(target, &cleanup) && guard == nullptr,
+            "deleting the watched canvas or window during cleanup must consume its event safely");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        require(preparations == 1,
+                "a deleted selection paint fence must retain no activation work");
+    }
+}
+
+void everyWindowSelectionMutationParticipatesInThePaintFence() {
+    for (int mutation = 0; mutation < 4; ++mutation) {
+        SelectionActivationFenceFixture fixture;
+        int preparations = 0;
+        fixture.reveal.sink.prepareActivation = [&] {
+            ++preparations;
+            auto& owner = fixture.reveal.primary;
+            if (mutation == 0)
+                owner.clearScreenshotSelection();
+            else if (mutation == 1)
+                owner.setScreenshotSelectionBorderVisible(false);
+            else if (mutation == 2)
+                owner.setScreenshotSelectionRegion(ScreenshotRegionGeometry(QRect(20, 20, 65, 45)),
+                                                   {}, {}, false, Qt::red);
+            else {
+                QPainterPath draft;
+                draft.moveTo(35, 35);
+                draft.lineTo(75, 65);
+                owner.setSelectionDraft(draft, {QPointF(35, 35), QPointF(75, 65)});
+            }
+        };
+        fixture.request();
+        fixture.dispatchActivation();
+        require(preparations == 1 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+                "clear, border, region and draft changes must retain their exact selection fence");
+        fixture.paint(QRegion(fixture.reveal.primary.canvas()->rect()));
+        fixture.dispatchActivation();
+        require(preparations == 2 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 1,
+                "each window selection mutation must release focus after its actual canvas paint");
+    }
+}
+
+void pacedActivationTracksSelectionCommitsBeforeItsRequestOrHook() {
+    for (const bool beforeRequest : {false, true}) {
+        SelectionActivationFenceFixture fixture;
+        int preparations = 0;
+        fixture.reveal.sink.prepareActivation = [&] { ++preparations; };
+        if (!beforeRequest)
+            fixture.request();
+        fixture.reveal.primary.setScreenshotSelectionState(fixture.moved);
+        if (beforeRequest)
+            fixture.request();
+        fixture.dispatchActivation();
+        require(preparations == 1 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+                "selection damage committed before the request or due hook must retain its fence");
+        fixture.paint(fixture.movementDamage());
+        fixture.dispatchActivation();
+        require(preparations == 2 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 1,
+                "the earlier selection commit must release focus after its actual paint");
+    }
+}
+
+void activationDoesNotWaitForStationarySecondaryOrClippedSelectionDamage() {
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        SelectionActivationFenceFixture fixture;
+        if (scenario == 2) {
+            fixture.initial.bounds = QRectF(-200, -200, 600, 500);
+            fixture.moved = fixture.initial;
+            fixture.moved.bounds = QRectF(-210, -210, 620, 520);
+            fixture.reveal.primary.setScreenshotSelectionState(fixture.initial);
+            fixture.paint(QRegion(fixture.reveal.primary.canvas()->rect()));
+            require(fixture.movementDamage().isEmpty(),
+                    "fully covering selections must have no clipped canvas damage");
+        }
+        int preparations = 0;
+        fixture.reveal.sink.prepareActivation = [&] {
+            ++preparations;
+            if (scenario == 1)
+                fixture.reveal.secondary.setScreenshotSelectionState(fixture.moved);
+            else
+                fixture.reveal.primary.setScreenshotSelectionState(scenario == 0 ? fixture.initial
+                                                                                 : fixture.moved);
+        };
+        fixture.request(scenario != 3);
+        fixture.dispatchActivation();
+        require(preparations == 1 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 1,
+                "stationary, secondary-only, clipped damage and normal activation must not wait");
+    }
+}
+
+void selectionPaintFencePreservesOccludedDamageUntilItBecomesVisible() {
+    SelectionActivationFenceFixture fixture;
+    QWidget cover(&fixture.reveal.primary);
+    cover.setAttribute(Qt::WA_OpaquePaintEvent);
+    cover.setGeometry(QRect(0, 0, 50, 100));
+    cover.show();
+    cover.raise();
+    int preparations = 0;
+    fixture.reveal.sink.prepareActivation = [&] {
+        ++preparations;
+        fixture.reveal.primary.setScreenshotSelectionState(fixture.moved);
+    };
+    fixture.request();
+    fixture.dispatchActivation();
+    require(preparations == 1 && fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+            "partly occluded owner damage must still fence its visible pixels");
+    const QRegion damage = fixture.movementDamage();
+    const QRegion initiallyVisible =
+        damage.intersected(fixture.reveal.primary.canvas()->visibleRegion());
+    const QRegion occluded = damage.subtracted(initiallyVisible);
+    require(!initiallyVisible.isEmpty() && !occluded.isEmpty(),
+            "the opaque sibling must split the pending owner damage");
+    cover.hide();
+    fixture.paint(initiallyVisible);
+    fixture.dispatchActivation();
+    require(preparations == 1 && fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+            "hiding an opaque sibling must preserve its newly exposed selection damage");
+    fixture.paint(occluded);
+    fixture.dispatchActivation();
+    require(preparations == 2 && fixture.reveal.primary.keyboardActivationCountForTesting() == 1,
+            "painting the newly exposed owner pixels must release the pending activation");
+}
+
+void selectionPaintFenceReleasesWhenOwnerPaintingBecomesImpossible() {
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        SelectionActivationFenceFixture fixture;
+        QWidget cover(&fixture.reveal.primary);
+        cover.setAttribute(Qt::WA_OpaquePaintEvent);
+        cover.setGeometry(fixture.reveal.primary.rect());
+        int preparations = 0;
+        fixture.reveal.sink.prepareActivation = [&] {
+            ++preparations;
+            fixture.reveal.primary.setScreenshotSelectionState(fixture.moved);
+        };
+        fixture.request();
+        fixture.dispatchActivation();
+        require(preparations == 1 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+                "the fixture must reserve activation for a pending visible selection paint");
+        if (scenario == 0)
+            fixture.reveal.primary.canvas()->hide();
+        else if (scenario == 1)
+            fixture.reveal.primary.canvas()->setUpdatesEnabled(false);
+        else if (scenario == 2)
+            fixture.reveal.primary.setUpdatesEnabled(false);
+        else {
+            cover.show();
+            cover.raise();
+        }
+        // The actual update queued by the selection setter remains posted even
+        // when Qt skips the disabled canvas or paints only an opaque sibling.
+        QCoreApplication::sendPostedEvents(&fixture.reveal.primary, QEvent::UpdateRequest);
+        fixture.dispatchActivation();
+        require(preparations == 2 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 1,
+                "hidden, disabled or fully occluded owner pixels must not strand keyboard focus");
+    }
+}
+
+void selectionPaintFenceInvalidatesItsViewportAndRetiresWithItsPresentation() {
+    for (int invalidation = 0; invalidation < 3; ++invalidation) {
+        SelectionActivationFenceFixture fixture;
+        fixture.reveal.sink.prepareActivation = [&] {
+            fixture.reveal.primary.setScreenshotSelectionState(fixture.moved);
+        };
+        fixture.request();
+        fixture.dispatchActivation();
+        if (invalidation == 0) {
+            fixture.reveal.primary.setCaptureGeometry(QRect(0, 0, 180, 120));
+            require(fixture.reveal.primary.canvas()->size() == QSize(180, 120),
+                    "the window layout must resize the actual fenced canvas viewport");
+        } else {
+            QEvent changed(invalidation == 1 ? QEvent::DevicePixelRatioChange
+                                             : QEvent::ScreenChangeInternal);
+            QApplication::sendEvent(&fixture.reveal.primary, &changed);
+        }
+        const QRect viewport = fixture.reveal.primary.canvas()->rect();
+        fixture.paint(
+            QRegion(QRect(viewport.topLeft(), QSize(viewport.width(), viewport.height() / 2))));
+        fixture.dispatchActivation();
+        require(fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+                "viewport invalidation must require the complete fresh canvas damage");
+        fixture.paint(QRegion(viewport));
+        fixture.dispatchActivation();
+        require(fixture.reveal.primary.keyboardActivationCountForTesting() == 1,
+                "the new viewport paint must release the existing one-time activation fence");
+    }
+    for (int retirement = 0; retirement < 4; ++retirement) {
+        SelectionActivationFenceFixture fixture;
+        int preparations = 0;
+        fixture.reveal.sink.prepareActivation = [&] {
+            ++preparations;
+            fixture.reveal.primary.setScreenshotSelectionState(fixture.moved);
+        };
+        fixture.request();
+        fixture.dispatchActivation();
+        require(preparations == 1 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+                "the retiring fixture must already be waiting for its selection paint");
+        if (retirement == 0)
+            fixture.reveal.primary.hide();
+        else if (retirement == 1)
+            fixture.reveal.primary.resetScreenshotRendering();
+        else if (retirement == 2) {
+            fixture.reveal.primary.releaseNativeSurface();
+            fixture.reveal.primary.restoreNativeSurface();
+        } else {
+            fixture.reveal.primary.hide();
+            fixture.reveal.primary.show();
+        }
+        fixture.paint(QRegion(fixture.reveal.primary.canvas()->rect()));
+        fixture.dispatchActivation();
+        require(preparations == 1 &&
+                    fixture.reveal.primary.keyboardActivationCountForTesting() == 0,
+                "retirement, recreation or replacement must invalidate the selection paint fence");
+    }
+}
+
+void screenshotCanvasFocusPreservesInputWithoutDirtyingTheCapturedFrame() {
+    SnowCanvasRuntime runtime;
+    QWidget host;
+    host.resize(360, 240);
+    ScreenshotOverlayCanvasWidget canvas(runtime, &host);
+    canvas.setGeometry(0, 0, 320, 200);
+    canvas.setInteractionEnabled(true);
+    QWidget unrelatedFocus(&host);
+    unrelatedFocus.setGeometry(320, 0, 32, 32);
+    unrelatedFocus.setFocusPolicy(Qt::StrongFocus);
+    host.show();
+    host.activateWindow();
+    unrelatedFocus.setFocus(Qt::OtherFocusReason);
     for (int pass = 0; pass < 3; ++pass)
-        QCoreApplication::sendPostedEvents(&fixture.secondary, QEvent::MetaCall);
-    require(fixture.secondary.isVisible() &&
-                fixture.secondary.focusWidget() == fixture.secondary.canvas(),
-            "a current deferred secondary reveal must still show and focus its canvas");
+        QApplication::processEvents();
+    require(QApplication::focusWidget() == &unrelatedFocus,
+            "the focus fixture must start with another real keyboard owner");
+
+    class CanvasEvents final : public QObject {
+      public:
+        int paints = 0;
+        int focusIn = 0;
+        int focusOut = 0;
+        int keys = 0;
+
+      protected:
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (event->type() == QEvent::Paint)
+                ++paints;
+            else if (event->type() == QEvent::FocusIn)
+                ++focusIn;
+            else if (event->type() == QEvent::FocusOut)
+                ++focusOut;
+            else if (event->type() == QEvent::KeyPress)
+                ++keys;
+            return false;
+        }
+    } events;
+    canvas.installEventFilter(&events);
+    canvas.setFocus(Qt::OtherFocusReason);
+    for (int pass = 0; pass < 3; ++pass)
+        QApplication::processEvents();
+    require(canvas.hasFocus() && QApplication::focusWidget() == &canvas && events.focusIn == 1,
+            "screenshot focus must retain Qt's real focus assignment and event delivery");
+    require(events.paints == 0,
+            "focus gain alone must not dirty the screenshot canvas's captured frame");
+
+    require(canvas.setCanvasTool(SnowCanvasTool::Text),
+            "the focused screenshot canvas must support the text tool");
+    for (const auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
+        const QPointF position(80, 80);
+        QMouseEvent mouse(
+            type, position, position, canvas.mapToGlobal(position.toPoint()), Qt::LeftButton,
+            type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &mouse);
+    }
+    require(QApplication::focusWidget() == &canvas,
+            "the screenshot canvas must own keyboard input for its text draft");
+    QKeyEvent textInput(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier, QStringLiteral("a"));
+    QApplication::sendEvent(QApplication::focusWidget(), &textInput);
+    require(events.keys == 1 && canvas.hasActiveTextEditing() &&
+                !canvas.canvasHistoryState().canUndo,
+            "keyboard input must still create an uncommitted text draft after focus gain");
+    unrelatedFocus.setFocus(Qt::OtherFocusReason);
+    for (int pass = 0; pass < 3; ++pass)
+        QApplication::processEvents();
+    require(events.focusOut == 1 && !canvas.hasActiveTextEditing() &&
+                canvas.canvasHistoryState().canUndo,
+            "inherited focus loss must still commit the screenshot canvas's text draft");
+}
+
+void capturedRevealActivatesOnlyThePreferredKeyboardOwner() {
+    for (const auto mode : {ScreenshotOverlayShowMode::CapturedImage,
+                            ScreenshotOverlayShowMode::CapturedImageFramePaced}) {
+        for (const bool preferSecondary : {false, true}) {
+            OverlayRevealFixture fixture;
+            fixture.displays.startup->logicalPosition =
+                preferSecondary ? QPoint(170, 10) : QPoint(10, 10);
+            auto& owner = preferSecondary ? fixture.secondary : fixture.primary;
+            auto& other = preferSecondary ? fixture.primary : fixture.secondary;
+            fixture.coordinator.showOverlayWindows(fixture.displays, mode);
+            const quint64 generation = owner.presentationGeneration();
+            owner.requestPresentationActivation(
+                generation, mode == ScreenshotOverlayShowMode::CapturedImageFramePaced);
+            if (mode == ScreenshotOverlayShowMode::CapturedImageFramePaced) {
+                QCoreApplication::sendPostedEvents(&owner, QEvent::MetaCall);
+                require(owner.keyboardActivationCountForTesting() == 0,
+                        "paced reveal must wait for actual paint, independent of queued dispatch");
+            }
+            for (int pass = 0; pass < 3; ++pass) {
+                // The platform's initial Expose must arrive before Qt can paint
+                // a fresh backing store; UpdateRequest delivery alone is insufficient.
+                QApplication::processEvents();
+            }
+            require(owner.isVisible() && other.isVisible(),
+                    "all current display overlays must still be revealed");
+            if (owner.keyboardActivationCountForTesting() != 1 ||
+                other.keyboardActivationCountForTesting() != 0 ||
+                owner.focusWidget() != owner.canvas()) {
+                std::cerr << "activation probe mode=" << static_cast<int>(mode)
+                          << " secondary=" << preferSecondary
+                          << " owner_requests=" << owner.keyboardActivationCountForTesting()
+                          << " other_requests=" << other.keyboardActivationCountForTesting()
+                          << " focused_canvas=" << (owner.focusWidget() == owner.canvas())
+                          << " focus=" << owner.focusWidget() << " canvas=" << owner.canvas()
+                          << " generation=" << generation
+                          << " current_generation=" << owner.presentationGeneration() << '\n';
+            }
+            require(owner.keyboardActivationCountForTesting() == 1 &&
+                        other.keyboardActivationCountForTesting() == 0 &&
+                        owner.focusWidget() == owner.canvas(),
+                    "the cursor display must be the group's sole keyboard activation owner");
+            owner.requestPresentationActivation(generation);
+            QCoreApplication::sendPostedEvents(&owner, QEvent::MetaCall);
+            require(owner.keyboardActivationCountForTesting() == 1,
+                    "repeated requests must not negotiate keyboard activation twice");
+        }
+    }
+}
+
+void hiddenOverlayPreparationTracksGeometryDprAndNativeRetirement() {
+    OverlayRevealFixture fixture;
+    fixture.coordinator.prepareOverlaySurfaces(fixture.displays);
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::sendPostedEvents();
+    for (auto* overlay : {&fixture.primary, &fixture.secondary}) {
+        require(overlay->isHidden() && overlay->internalWinId() != 0 &&
+                    overlay->nativeSurfacePreparationCountForTesting() == 1 &&
+                    overlay->keyboardActivationCountForTesting() == 0,
+                "preparation must allocate every active display without showing or activating");
+        requireTransparentBackingPixels(*overlay);
+        const uchar* initialPixels = backingPixels(*overlay);
+        overlay->prepareNativeSurface();
+        require(overlay->nativeSurfacePreparationCountForTesting() == 1 &&
+                    backingPixels(*overlay) == initialPixels,
+                "unchanged hidden geometry and DPR must reuse the allocated pixels");
+
+        overlay->setCaptureGeometry(overlay->captureGeometry().adjusted(0, 0, 32, 16));
+        overlay->prepareNativeSurface();
+        require(overlay->nativeSurfacePreparationCountForTesting() == 2,
+                "changed capture geometry must prepare the resized backing store");
+        static_cast<void>(backingPixels(*overlay));
+        QEvent dprChange(QEvent::DevicePixelRatioChange);
+        QCoreApplication::sendEvent(overlay, &dprChange);
+        overlay->prepareNativeSurface();
+        require(overlay->nativeSurfacePreparationCountForTesting() == 3,
+                "a native DPR change must invalidate hidden pixel preparation");
+        QEvent screenChange(QEvent::ScreenChangeInternal);
+        QCoreApplication::sendEvent(overlay, &screenChange);
+        overlay->prepareNativeSurface();
+        require(overlay->nativeSurfacePreparationCountForTesting() == 4,
+                "display topology changes must invalidate hidden pixel preparation");
+
+        overlay->releaseNativeSurface();
+        require(overlay->internalWinId() == 0,
+                "prepared backing pixels must still be retired at capture teardown");
+        overlay->restoreNativeSurface();
+        overlay->prepareNativeSurface();
+        require(overlay->nativeSurfacePreparationCountForTesting() == 5 && overlay->isHidden(),
+                "native-surface retirement must invalidate preparation for the next capture");
+        static_cast<void>(backingPixels(*overlay));
+    }
+}
+
+void captureReadyRevealSupersedesOptionalSurfaceWarming() {
+    OverlayRevealFixture fixture;
+    const quint64 primaryGeneration = fixture.primary.presentationGeneration();
+    const quint64 secondaryGeneration = fixture.secondary.presentationGeneration();
+    fixture.coordinator.prepareOverlaySurfaces(fixture.displays);
+    require(fixture.primary.presentationGeneration() == primaryGeneration &&
+                fixture.secondary.presentationGeneration() == secondaryGeneration,
+            "scheduling optional warming must not reserve a new presentation");
+    bool revealed = false;
+    QMetaObject::invokeMethod(
+        &fixture.primary,
+        [&] {
+            revealed = true;
+            fixture.coordinator.showOverlayWindows(
+                fixture.displays, ScreenshotOverlayShowMode::CapturedImageFramePaced);
+        },
+        Qt::QueuedConnection);
+    // Deliver the mixed posted-event queue normally. Filtering for the warm event
+    // would bypass the priority ordering this test must exercise.
+    QCoreApplication::sendPostedEvents();
+    require(revealed && fixture.primary.isVisible() &&
+                fixture.primary.nativeSurfacePreparationCountForTesting() == 0 &&
+                fixture.secondary.nativeSurfacePreparationCountForTesting() == 0,
+            "normal-priority capture-ready reveal must outrank and suppress optional warming");
+    QApplication::processEvents();
+    require(fixture.primary.isVisible() && fixture.secondary.isVisible() &&
+                fixture.primary.nativeSurfacePreparationCountForTesting() == 0 &&
+                fixture.secondary.nativeSurfacePreparationCountForTesting() == 0,
+            "a ready capture must reveal every display without waiting for hidden preparation");
+}
+
+void optionalSurfaceWarmingYieldsBetweenDisplays() {
+    for (const bool preferSecondary : {false, true}) {
+        for (int supersession = 0; supersession < 3; ++supersession) {
+            OverlayRevealFixture fixture;
+            fixture.displays.startup->logicalPosition =
+                preferSecondary ? QPoint(170, 10) : QPoint(10, 10);
+            auto& owner = preferSecondary ? fixture.secondary : fixture.primary;
+            auto& other = preferSecondary ? fixture.primary : fixture.secondary;
+            fixture.coordinator.prepareOverlaySurfaces(fixture.displays);
+            require(owner.nativeSurfacePreparationCountForTesting() == 0 &&
+                        other.nativeSurfacePreparationCountForTesting() == 0,
+                    "optional preparation must return before allocating any display pixels");
+            QCoreApplication::sendPostedEvents();
+            require(owner.nativeSurfacePreparationCountForTesting() == 1 &&
+                        other.nativeSurfacePreparationCountForTesting() == 0 && owner.isHidden() &&
+                        other.isHidden(),
+                    "one event dispatch must warm only the preferred display");
+            requireTransparentBackingPixels(owner);
+            if (supersession == 1) {
+                fixture.coordinator.hideOverlayWindowsImmediately(fixture.displays);
+            } else if (supersession == 2) {
+                // A public show of any group member invalidates the whole task,
+                // even when the preferred overlay is still hidden.
+                other.show();
+            }
+            QCoreApplication::sendPostedEvents();
+            require(owner.nativeSurfacePreparationCountForTesting() == 1 &&
+                        other.nativeSurfacePreparationCountForTesting() ==
+                            (supersession == 0 ? 1 : 0),
+                    "reveal or cancellation between dispatches must suppress remaining warming");
+            if (supersession == 0)
+                requireTransparentBackingPixels(other);
+        }
+    }
+}
+
+void boundedPreparationStepsRespectPhysicalBytesAndCompletion() {
+    OverlayRevealFixture fixture;
+    auto& overlay = fixture.primary;
+    overlay.setCaptureGeometry(QRect(0, 0, 1024, 1024));
+    overlay.prepareNativeSurface();
+    require(overlay.nativeSurfacePreparationCountForTesting() == 1,
+            "the direct preparation API must still complete a full region in one call");
+    const QColor poison(255, 0, 255);
+    poisonBackingPixels(overlay, poison);
+    QEvent invalidate(QEvent::DevicePixelRatioChange);
+    QCoreApplication::sendEvent(&overlay, &invalidate);
+    require(!overlay.prepareNativeSurfaceStep() &&
+                overlay.nativeSurfacePreparationCountForTesting() == 1,
+            "partial warming must not publish a complete preparation cache or counter");
+    const int firstRows = transparentPrefixRows(overlay, poison, true);
+    const uchar* preparedPixels = backingPixels(overlay);
+    require(!overlay.prepareNativeSurfaceStep(),
+            "the large surface must retain work after its second bounded step");
+    require(transparentPrefixRows(overlay, poison) > firstRows,
+            "successive steps must continue coverage on the same native allocation");
+    bool complete = false;
+    for (int pass = 0; pass < overlay.height() && !complete; ++pass) {
+        complete = overlay.prepareNativeSurfaceStep();
+        require(overlay.nativeSurfacePreparationCountForTesting() == (complete ? 2 : 1),
+                "completed-window accounting must advance only after the last strip");
+    }
+    require(complete && backingPixels(overlay) == preparedPixels,
+            "bounded warming must finish and retain its initial allocation");
+    requireTransparentBackingPixels(overlay);
+    require(overlay.prepareNativeSurfaceStep() &&
+                overlay.nativeSurfacePreparationCountForTesting() == 2,
+            "repeated complete steps must reuse the preparation cache");
+}
+
+void partialPreparationRestartsAfterSurfaceInvalidation() {
+    for (const QEvent::Type type :
+         {QEvent::Resize, QEvent::DevicePixelRatioChange, QEvent::ScreenChangeInternal}) {
+        OverlayRevealFixture fixture;
+        auto& overlay = fixture.primary;
+        overlay.setCaptureGeometry(QRect(0, 0, 1024, 1024));
+        overlay.prepareNativeSurface();
+        const QColor poison(255, 0, 255);
+        poisonBackingPixels(overlay, poison);
+        QEvent invalidate(QEvent::DevicePixelRatioChange);
+        QCoreApplication::sendEvent(&overlay, &invalidate);
+        require(!overlay.prepareNativeSurfaceStep(), "the invalidation fixture must be partial");
+        const int firstRows = transparentPrefixRows(overlay, poison);
+        // Keep size, DPR and pointer identity unchanged so this proves that the
+        // invalidation epoch also rejects progress after native topology events.
+        poisonBackingPixels(overlay, poison);
+        if (type == QEvent::Resize) {
+            QResizeEvent resize(overlay.size(), overlay.size());
+            QCoreApplication::sendEvent(&overlay, &resize);
+        } else {
+            QEvent change(type);
+            QCoreApplication::sendEvent(&overlay, &change);
+        }
+        require(!overlay.prepareNativeSurfaceStep() &&
+                    transparentPrefixRows(overlay, poison) == firstRows &&
+                    overlay.nativeSurfacePreparationCountForTesting() == 1,
+                "size, DPR and screen invalidation must restart bounded coverage at the first row");
+        overlay.prepareNativeSurface();
+        require(overlay.nativeSurfacePreparationCountForTesting() == 2,
+                "direct full preparation must finish an invalidated partial surface");
+        requireTransparentBackingPixels(overlay);
+    }
+
+    OverlayRevealFixture fixture;
+    auto& overlay = fixture.primary;
+    overlay.setCaptureGeometry(QRect(0, 0, 1024, 1024));
+    require(!overlay.prepareNativeSurfaceStep(), "geometry invalidation fixture must be partial");
+    overlay.setCaptureGeometry(QRect(0, 0, 1040, 1056));
+    require(!overlay.prepareNativeSurfaceStep() &&
+                overlay.backingStore()->size() == overlay.size() &&
+                overlay.nativeSurfacePreparationCountForTesting() == 0,
+            "resizing a partial surface must allocate and restart at the new logical extent");
+    overlay.releaseNativeSurface();
+    overlay.restoreNativeSurface();
+    require(!overlay.prepareNativeSurfaceStep() &&
+                overlay.backingStore()->size() == overlay.size() &&
+                overlay.nativeSurfacePreparationCountForTesting() == 0,
+            "native retirement must discard partial progress even when the widget is pooled");
+    overlay.prepareNativeSurface();
+    require(overlay.nativeSurfacePreparationCountForTesting() == 1,
+            "only the completely prepared restored surface may advance completion accounting");
+    requireTransparentBackingPixels(overlay);
+}
+
+void optionalSurfaceWarmingYieldsAndCancelsBetweenStrips() {
+    for (const bool cancel : {false, true}) {
+        OverlayRevealFixture fixture;
+        auto& overlay = fixture.primary;
+        overlay.setCaptureGeometry(QRect(0, 0, 1024, 1024));
+        overlay.prepareNativeSurface();
+        const QColor poison(255, 0, 255);
+        poisonBackingPixels(overlay, poison);
+        QEvent invalidate(QEvent::DevicePixelRatioChange);
+        QCoreApplication::sendEvent(&overlay, &invalidate);
+        fixture.coordinator.prepareOverlaySurfaces(fixture.displays);
+        QCoreApplication::sendPostedEvents();
+        require(overlay.nativeSurfacePreparationCountForTesting() == 1 &&
+                    fixture.secondary.nativeSurfacePreparationCountForTesting() == 0,
+                "one optional event must leave a large preferred display partially prepared");
+        const int firstRows = transparentPrefixRows(overlay, poison, true);
+        if (cancel) {
+            QMetaObject::invokeMethod(
+                &overlay,
+                [&] { fixture.coordinator.hideOverlayWindowsImmediately(fixture.displays); },
+                Qt::QueuedConnection);
+            QCoreApplication::sendPostedEvents();
+            QCoreApplication::sendPostedEvents();
+            require(overlay.nativeSurfacePreparationCountForTesting() == 1 &&
+                        fixture.secondary.nativeSurfacePreparationCountForTesting() == 0 &&
+                        transparentPrefixRows(overlay, poison) == firstRows,
+                    "normal-priority cancellation must suppress the next strip and later displays");
+        } else {
+            for (int pass = 0;
+                 pass < overlay.height() && overlay.nativeSurfacePreparationCountForTesting() == 1;
+                 ++pass) {
+                QCoreApplication::sendPostedEvents();
+                require(fixture.secondary.nativeSurfacePreparationCountForTesting() == 0,
+                        "optional warming must finish the preferred display before moving on");
+            }
+            require(overlay.nativeSurfacePreparationCountForTesting() == 2,
+                    "one strip per posted pass must eventually finish the preferred display");
+            requireTransparentBackingPixels(overlay);
+            QCoreApplication::sendPostedEvents();
+            require(fixture.secondary.nativeSurfacePreparationCountForTesting() == 1,
+                    "the following dispatch may warm the next display after full completion");
+        }
+    }
+}
+
+void cancellationDuringNativePreparationRetiresTheWholeSurfaceGroup() {
+    OverlayRevealFixture fixture;
+    fixture.primary.releaseNativeSurface();
+    fixture.secondary.releaseNativeSurface();
+    class CancelOnNativeCreate final : public QObject {
+      public:
+        std::function<void()> cancel;
+        bool canceled = false;
+
+      protected:
+        bool eventFilter(QObject* watched, QEvent* event) override {
+            if (!canceled && event->type() == QEvent::WinIdChange &&
+                static_cast<QWidget*>(watched)->internalWinId() != 0) {
+                canceled = true;
+                cancel();
+            }
+            return false;
+        }
+    } cancellation;
+    cancellation.cancel = [&] {
+        fixture.coordinator.hideOverlayWindowsImmediately(fixture.displays);
+        // Replacing the display slots also invalidates the group's model pointers.
+        // Continuing preparation must rely only on its guarded surface reservations.
+        fixture.displays.clear();
+    };
+    fixture.primary.installEventFilter(&cancellation);
+    fixture.coordinator.prepareOverlaySurfaces(fixture.displays);
+    QCoreApplication::sendPostedEvents();
+    require(cancellation.canceled,
+            "native surface creation must dispatch the deterministic cancellation callback");
+    require(fixture.primary.nativeSurfacePreparationCountForTesting() == 0 &&
+                fixture.secondary.nativeSurfacePreparationCountForTesting() == 0 &&
+                fixture.primary.isHidden() && fixture.secondary.isHidden() &&
+                fixture.secondary.internalWinId() == 0,
+            "cancellation during native creation must retire all remaining pixel preparation");
+    QBackingStore* store = fixture.primary.backingStore();
+    require(store == nullptr || store->size().isEmpty(),
+            "the retired native-create stack must not allocate backing pixels after cancellation");
+    fixture.primary.releaseNativeSurface();
+    fixture.secondary.releaseNativeSurface();
+    require(fixture.primary.internalWinId() == 0 && fixture.secondary.internalWinId() == 0,
+            "canceled preparation must support complete native memory retirement");
+}
+
+void preparedOverlayFirstPaintPublishesFreshCapturedPixels() {
+    for (const bool partialPreparation : {false, true}) {
+        OverlayRevealFixture fixture;
+        auto& overlay = fixture.primary;
+        if (partialPreparation)
+            overlay.setCaptureGeometry(QRect(0, 0, 1024, 1024));
+        fixture.displays.forEachMutableDisplay(
+            [](qsizetype index, CapturedDisplayModel& display) { display.active = index == 0; });
+        for (const QColor frameColor : {QColor(Qt::red), QColor(Qt::green)}) {
+            overlay.restoreNativeSurface();
+            const quint64 preparations = overlay.nativeSurfacePreparationCountForTesting();
+            fixture.coordinator.prepareOverlaySurfaces(fixture.displays);
+            QCoreApplication::sendPostedEvents();
+            require(overlay.nativeSurfacePreparationCountForTesting() ==
+                        preparations + (partialPreparation ? 0 : 1),
+                    "first-frame fixtures must cover both complete and partial hidden preparation");
+            QBackingStore* store = overlay.backingStore();
+            require(store != nullptr, "hidden allocation must create a raster backing store");
+            const QColor uninitializedPixel(255, 0, 255);
+            // Poison all warmed hidden pixels and prove the reveal overwrites every one before
+            // the prepared surface is published. This paint is never flushed or shown.
+            store->beginPaint(overlay.rect());
+            {
+                QPainter painter(store->paintDevice());
+                painter.setCompositionMode(QPainter::CompositionMode_Source);
+                painter.fillRect(overlay.rect(), uninitializedPixel);
+            }
+            const QPaintDevice* preparedPaintDevice = store->paintDevice();
+            require(preparedPaintDevice != nullptr &&
+                        preparedPaintDevice->devType() == QInternal::Image,
+                    "hidden allocation must expose a raster image during its paint lifetime");
+            const auto* preparedDevice = static_cast<const QImage*>(preparedPaintDevice);
+            const uchar* preparedPixels = preparedDevice->constBits();
+            store->endPaint();
+            const QSize canvasSize = overlay.captureGeometry().size();
+            require(overlay.canvas()->setViewportCamera(canvasSize.width() / 2.0,
+                                                        canvasSize.height() / 2.0, 1.0),
+                    "prepared-frame fixture must align the canvas with its capture pixels");
+            QImage frame(canvasSize, QImage::Format_ARGB32_Premultiplied);
+            frame.fill(frameColor);
+            overlay.setScreenshotImage(frame, QRectF(QPointF(), QSizeF(canvasSize)));
+            overlay.setScreenshotMaskVisible(false);
+            overlay.setScreenshotSelection(QRectF(20, 20, 80, 50), false, 0);
+            fixture.coordinator.showOverlayWindows(
+                fixture.displays, ScreenshotOverlayShowMode::CapturedImageFramePaced);
+            QApplication::processEvents();
+            require(overlay.nativeSurfacePreparationCountForTesting() ==
+                        preparations + (partialPreparation ? 0 : 1),
+                    "a fresh reveal must suppress any unfinished optional strips");
+            require(overlay.backingStore() == store,
+                    "the revealed overlay must retain its prepared raster store");
+            // An empty paint region preserves the actual frame while respecting the
+            // paint device's lifetime contract between beginPaint() and endPaint().
+            store->beginPaint(QRegion());
+            const QPaintDevice* device = store->paintDevice();
+            require(device != nullptr && device->devType() == QInternal::Image,
+                    "the first-frame regression must inspect actual raster backing pixels");
+            const auto* image = static_cast<const QImage*>(device);
+            require(image->constBits() == preparedPixels,
+                    "first show must reuse prepared pixels without another backing allocation");
+            const auto capturedPixel = [&](const QPoint& canvasPoint) {
+                const QPoint local = overlay.mapFrom(overlay.canvas(), canvasPoint);
+                const qreal dpr = image->devicePixelRatio();
+                return image->pixelColor(qRound(local.x() * dpr), qRound(local.y() * dpr));
+            };
+            require(capturedPixel(QPoint(5, 5)) == frameColor &&
+                        capturedPixel(QPoint(50, 40)) == frameColor &&
+                        overlay.hasScreenshotSelection(),
+                    "the first queued paint must replace prepared pixels with the fresh capture");
+            for (int y = 0; y < image->height(); ++y) {
+                for (int x = 0; x < image->width(); ++x) {
+                    require(
+                        image->pixelColor(x, y) != uninitializedPixel,
+                        "first visible paint must initialize every allocated pixel before reveal");
+                }
+            }
+            store->endPaint();
+            overlay.releaseNativeSurface();
+        }
+    }
 }
 
 class StyleToolbarCommands final : public ScreenshotToolbarCommandSink,
@@ -1914,8 +2926,28 @@ int main(int argc, char** argv) {
             cancellationDuringFirstShowRetiresTheWholeRevealGroup();
             reentrantPublicShowOwnsANewPresentation();
             supersededSecondaryRevealCannotFocusTheNextPresentation();
-            delayedActivationCannotFocusTheNextPresentation();
-            currentSecondaryRevealStillShowsAndActivatesTheOverlay();
+            firstPaintActivationCannotFocusTheNextPresentation();
+            activationPreparationRunsOnceAfterFirstPaintAndBeforeKeyboardFocus();
+            activationPreparationCannotFocusARetiredOrReplacementPresentation();
+            activationPreparationCanDeleteItsOverlay();
+            pacedActivationWaitsForTheExactOwnerSelectionPaintOnce();
+            pacedActivationTracksSelectionCommitsBeforeItsRequestOrHook();
+            activationDoesNotWaitForStationarySecondaryOrClippedSelectionDamage();
+            selectionPaintFencePreservesOccludedDamageUntilItBecomesVisible();
+            selectionPaintFenceReleasesWhenOwnerPaintingBecomesImpossible();
+            selectionPaintFenceInvalidatesItsViewportAndRetiresWithItsPresentation();
+            selectionPaintFenceDeletionConsumesTheReentrantCleanupEvent();
+            everyWindowSelectionMutationParticipatesInThePaintFence();
+            screenshotCanvasFocusPreservesInputWithoutDirtyingTheCapturedFrame();
+            capturedRevealActivatesOnlyThePreferredKeyboardOwner();
+            hiddenOverlayPreparationTracksGeometryDprAndNativeRetirement();
+            captureReadyRevealSupersedesOptionalSurfaceWarming();
+            optionalSurfaceWarmingYieldsBetweenDisplays();
+            boundedPreparationStepsRespectPhysicalBytesAndCompletion();
+            partialPreparationRestartsAfterSurfaceInvalidation();
+            optionalSurfaceWarmingYieldsAndCancelsBetweenStrips();
+            cancellationDuringNativePreparationRetiresTheWholeSurfaceGroup();
+            preparedOverlayFirstPaintPublishesFreshCapturedPixels();
             storage.shutdown();
         }
         overlayPreparationCachesContentAndInvalidatesTranslations();

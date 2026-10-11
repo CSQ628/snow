@@ -54,6 +54,7 @@ class ScreenshotCaptureRuntimeAdapter final : public ScreenshotCaptureRuntimePor
     void applyDisplayModels(ScreenshotDisplaySession& displaySession) override;
     [[nodiscard]] bool
     preparePreCaptureOverlayWindows(ScreenshotDisplaySession& displaySession) override;
+    void prepareOverlaySurfaces(const ScreenshotDisplaySession& displaySession) override;
     void showOverlayWindows(const ScreenshotDisplaySession& displaySession,
                             ScreenshotOverlayShowMode mode) override;
     void hideOverlayWindowsImmediately(const ScreenshotDisplaySession& displaySession) override;

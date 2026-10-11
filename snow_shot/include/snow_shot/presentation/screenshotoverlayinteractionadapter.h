@@ -21,6 +21,7 @@ class ScreenshotOverlayEventAdapter final : public ScreenshotOverlayEventSink {
     void clearEventTargets();
     bool acceptOverlayInput(bool genuine) override;
     bool presentOverlayPointer(ScreenshotOverlayWindow*, const QPointF&) override;
+    void prepareOverlayActivation() override;
 
     [[nodiscard]] bool shouldHandleOverlayMouseEvent(const ScreenshotOverlayWindow* overlay,
                                                      const QPointF& localPosition,

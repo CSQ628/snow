@@ -20,10 +20,10 @@ void configureTrace(const QString& path);
 void beginSample(const char* scenario, qint64 width, qint64 height);
 void milestone(const char* name);
 void counter(const char* name, qint64 value = 1);
-// Blocks until the desktop compositor has presented the next frame. Used to
-// timestamp when a revealed overlay window actually reached the screen; an
-// empty stub unless SNOW_SHOT_CAPTURE_PERF_INSTRUMENTATION is defined.
-void flushDesktopComposition();
+// Requests the next compositor frame only for an active trace. Returns whether
+// a wait was requested, not whether the compositor presented the canvas.
+// Queued external-drag reveals must not call this before their first paint.
+bool flushDesktopComposition();
 
 class Scope final {
   public:

@@ -3507,6 +3507,20 @@ if(SNOW_SHOT_BUILD_TESTS)
         NAME snow-shot-capture-workflow-tests
         COMMAND snow-shot-capture-workflow-tests
     )
+    if(WIN32)
+        add_executable(snow-shot-capture-performance-instrumentation-tests
+            tests/screenshot_capture_performance_instrumentation_tests.cpp
+            src/presentation/capture/screenshotcaptureperfinstrumentation.cpp)
+        target_compile_definitions(snow-shot-capture-performance-instrumentation-tests PRIVATE
+            SNOW_SHOT_CAPTURE_PERF_INSTRUMENTATION=1)
+        target_link_libraries(snow-shot-capture-performance-instrumentation-tests PRIVATE
+            Qt6::Core dwmapi)
+        add_test(NAME snow-shot-capture-instrumentation-tests
+            COMMAND snow-shot-capture-performance-instrumentation-tests)
+        set_tests_properties(snow-shot-capture-instrumentation-tests PROPERTIES
+            LABELS "unit;windows" TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
 
     add_executable(snow-shot-capture-modal-closer-tests
         tests/screenshot_capture_modal_closer_tests.cpp
@@ -3793,6 +3807,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-selection-aspect-ratio-confirmation-tests
         COMMAND snow-shot-screenshot-history-tests --selection-aspect-ratio-only)
+    add_test(NAME snow-shot-external-selection-startup-tests
+        COMMAND snow-shot-screenshot-history-tests --external-selection-startup-only -platform offscreen)
+    set_tests_properties(snow-shot-external-selection-startup-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-screenshot-eraser-wheel-tests
         COMMAND snow-shot-screenshot-history-tests --eraser-wheel-only -platform offscreen)
     set_tests_properties(snow-shot-screenshot-eraser-wheel-tests PROPERTIES LABELS "unit" TIMEOUT 60
@@ -6201,6 +6221,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-selection-presentation-tests -platform offscreen)
     add_test(NAME snow-shot-overlay-preparation-tests
         COMMAND snow-shot-color-picker-lifecycle-tests --overlay-preparation-only -platform offscreen)
+    add_test(NAME snow-shot-overlay-preparation-fractional-dpr-tests
+        COMMAND snow-shot-color-picker-lifecycle-tests --overlay-preparation-only -platform offscreen)
     add_test(NAME snow-shot-pointer-presentation-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --pointer-presentation-only -platform offscreen)
     add_test(NAME snow-shot-background-coverage-tests
@@ -6208,12 +6230,50 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-rectangular-selection-rendering-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --rectangular-selection-rendering-only -platform offscreen)
     set_tests_properties(snow-shot-selection-presentation-tests snow-shot-overlay-preparation-tests
+        snow-shot-overlay-preparation-fractional-dpr-tests
         snow-shot-background-coverage-tests snow-shot-pointer-presentation-tests
         snow-shot-rectangular-selection-rendering-tests
         PROPERTIES LABELS "unit" TIMEOUT 60
         SNOW_TEST_CROSS_PLATFORM TRUE ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(snow-shot-overlay-preparation-fractional-dpr-tests PROPERTIES
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT};QT_SCALE_FACTOR=1.25")
     if(SNOW_SHOT_BUILD_BENCHMARKS)
+        add_executable(snow-shot-external-drag-startup-benchmark
+            tests/screenshot_external_drag_startup_performance_benchmark.cpp
+            include/snow_shot/presentation/globalmousemanager.h
+            src/presentation/services/globalmousemanager.cpp
+            src/presentation/services/globalmousegesture.cpp)
+        target_link_libraries(snow-shot-external-drag-startup-benchmark PRIVATE
+            snow-shot-selection-presentation-runtime)
+        snow_shot_import_offscreen_platform(snow-shot-external-drag-startup-benchmark)
+        if(WIN32)
+            add_test(NAME snow-shot-external-drag-startup-benchmark
+                COMMAND snow-shot-external-drag-startup-benchmark
+                    --iterations 1 --duration-ms 180 -platform windows)
+            set_tests_properties(snow-shot-external-drag-startup-benchmark PROPERTIES
+                LABELS "benchmark;interactive;windows" RUN_SERIAL TRUE TIMEOUT 120
+                ENVIRONMENT "QT_QPA_PLATFORM=windows"
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endif()
+        set(SNOW_SHOT_DRAG_STARTUP_BASELINE_DIR "" CACHE PATH
+            "Optional original snow_shot source directory for the same native startup benchmark")
+        if(SNOW_SHOT_DRAG_STARTUP_BASELINE_DIR)
+            snow_shot_selection_presentation_runtime(snow-shot-drag-startup-baseline-runtime
+                "${SNOW_SHOT_DRAG_STARTUP_BASELINE_DIR}" snow_draw_engine_qt_canvas)
+            target_sources(snow-shot-drag-startup-baseline-runtime PRIVATE
+                "${SNOW_SHOT_DRAG_STARTUP_BASELINE_DIR}/src/presentation/services/screenshotpresentationframescheduler.cpp")
+            add_executable(snow-shot-external-drag-startup-baseline-benchmark
+                tests/screenshot_external_drag_startup_performance_benchmark.cpp
+                "${SNOW_SHOT_DRAG_STARTUP_BASELINE_DIR}/include/snow_shot/presentation/globalmousemanager.h"
+                "${SNOW_SHOT_DRAG_STARTUP_BASELINE_DIR}/src/presentation/services/globalmousemanager.cpp"
+                "${SNOW_SHOT_DRAG_STARTUP_BASELINE_DIR}/src/presentation/services/globalmousegesture.cpp")
+            target_compile_definitions(snow-shot-external-drag-startup-baseline-benchmark PRIVATE
+                SNOW_SHOT_DRAG_STARTUP_BASELINE=1)
+            target_link_libraries(snow-shot-external-drag-startup-baseline-benchmark PRIVATE
+                snow-shot-drag-startup-baseline-runtime)
+            snow_shot_import_offscreen_platform(snow-shot-external-drag-startup-baseline-benchmark)
+        endif()
         add_executable(snow-shot-global-mouse-presentation-benchmark
             tests/global_mouse_presentation_performance_benchmark.cpp
             src/presentation/capture/screenshotglobalmousedrag.cpp)

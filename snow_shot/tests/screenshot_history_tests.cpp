@@ -1671,6 +1671,175 @@ void moveToolResizesSelectionFromOutsidePress() {
             "outside resize did not confirm exactly once on release");
 }
 
+void externalSelectionStartupPublishesCompleteGeometry() {
+    ScreenshotCaptureState captureState;
+    ScreenshotDisplaySession displays;
+    for (int index = 0; index < 2; ++index) {
+        displays.appendDisplay(display(QString::number(index), QString::number(index),
+                                       QRect(index * 500, 0, 500, 500),
+                                       solidImage(QSize(500, 500), Qt::black)));
+    }
+    ScreenshotGeometryMapper geometry;
+    geometry.rebuild(displays);
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    QVector<QRectF> publishedSelections;
+    QVector<QPointF> pickerPositions;
+    int dragRequests = 0;
+    int confirmations = 0;
+    ScreenshotOverlayInputActions actions;
+    actions.updateOverlayState = [&] {
+        publishedSelections.append(selection.normalizedSelection());
+    };
+    actions.requestSelectionDragPresentation = [&] { ++dragRequests; };
+    actions.updateColorPickerForSelectionDrag = [&](const QPointF& point) {
+        pickerPositions.append(point);
+    };
+    actions.selectionConfirmed = [&] { ++confirmations; };
+    ScreenshotOverlayInputHandler handler(
+        {captureState, interaction, selection, intelligent, geometry, displays, actions});
+
+    struct Gesture {
+        QPointF start;
+        QPointF end;
+        QRectF expected;
+    };
+    const Gesture gestures[] = {
+        {{100, 100}, {160, 140}, {100, 100, 61, 41}},
+        {{160, 140}, {100, 100}, {100, 100, 61, 41}},
+        {{100, 140}, {160, 100}, {100, 100, 61, 41}},
+        {{160, 100}, {100, 140}, {100, 100, 61, 41}},
+        {{100.9, 100.1}, {160.2, 140.7}, {101, 100, 60, 42}},
+        {{490, 100}, {620, 140}, {490, 100, 131, 41}},
+        {{-20, -30}, {1100, 600}, {0, 0, 1000, 500}},
+        {{100, 100}, {160, 100}, {100, 100, 61, 1}},
+        {{100, 100}, {100, 100}, {100, 100, 0, 0}},
+    };
+    for (const Gesture& gesture : gestures) {
+        selection.reset();
+        selection.setSelectionRect(QRectF(20, 30, 80, 90));
+        interaction.enterOverlayVisible(false);
+        publishedSelections.clear();
+        pickerPositions.clear();
+        dragRequests = 0;
+        handler.setExternalDragActive(true);
+        handler.beginExternalSelectionDrag(gesture.start, gesture.end);
+        require(publishedSelections == QVector<QRectF>{gesture.expected} && dragRequests == 0,
+                "external startup must publish only the complete latest selection once");
+        require(pickerPositions == QVector<QPointF>{gesture.end},
+                "external startup must sample only the latest endpoint once");
+        require(interaction.dragging() &&
+                    interaction.dragMode() == ScreenshotSelectionDragMode::Marquee &&
+                    captureState.sessionState == ScreenshotSessionState::OverlayVisible,
+                "external startup must retain an unconfirmed shared marquee transaction");
+        const QRect expectedPixels = selection.pixelSelection();
+        interaction.finishDrag();
+        handler.setExternalDragActive(false);
+        const int previousConfirmations = confirmations;
+        handler.confirmSelection();
+        require(selection.pixelSelection() == expectedPixels &&
+                    confirmations == previousConfirmations + (gesture.expected.isEmpty() ? 0 : 1),
+                "a buffered release must preserve the exact initialized pointer cells");
+    }
+
+    selection.reset();
+    interaction.enterOverlayVisible(false);
+    handler.setExternalDragActive(true);
+    handler.beginExternalSelectionDrag(QPointF(100, 100), QPointF(160, 140));
+    publishedSelections.clear();
+    pickerPositions.clear();
+    dragRequests = 0;
+    handler.updateExternalSelectionDrag(QPointF(180, 170));
+    require(selection.normalizedSelection() == QRectF(100, 100, 81, 71) &&
+                publishedSelections.isEmpty() && dragRequests == 1 &&
+                pickerPositions == QVector<QPointF>{QPointF(180, 170)},
+            "subsequent external movement must keep its original anchor and paced presentation");
+    interaction.finishDrag();
+    handler.setExternalDragActive(false);
+    publishedSelections.clear();
+    pickerPositions.clear();
+    handler.beginExternalSelectionDrag(QPointF(10, 10), QPointF(200, 200));
+    require(publishedSelections.isEmpty() && pickerPositions.isEmpty() && !interaction.dragging(),
+            "a cancelled external transaction must ignore later initialization");
+}
+
+void externalSelectionStartupPreservesConstraintsAndRegions() {
+    ScreenshotCaptureState captureState;
+    ScreenshotDisplaySession displays;
+    displays.appendDisplay(display(QStringLiteral("startup"), QStringLiteral("startup"),
+                                   QRect(0, 0, 500, 500), solidImage(QSize(500, 500), Qt::black)));
+    ScreenshotGeometryMapper geometry;
+    geometry.rebuild(displays);
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    QVector<QRectF> publishedSelections;
+    ScreenshotOverlayInputActions actions;
+    actions.updateOverlayState = [&] {
+        publishedSelections.append(selection.normalizedSelection());
+    };
+    ScreenshotOverlayInputHandler handler(
+        {captureState, interaction, selection, intelligent, geometry, displays, actions});
+    const auto prepare = [&] {
+        handler.setExternalDragActive(false);
+        selection.reset();
+        interaction.enterOverlayVisible(false);
+        handler.setExternalDragActive(true);
+        require(interaction.enterSelectionDrag(ScreenshotSelectionDragMode::Marquee),
+                "external startup fixture must arm the pending marquee");
+        publishedSelections.clear();
+    };
+
+    prepare();
+    require(selection.setAspectRatioPreset(ScreenshotSelectionAspectRatioPreset::Landscape16x9, {},
+                                           1.0),
+            "external startup must be able to retain a remembered ratio");
+    handler.beginExternalSelectionDrag(QPointF(100, 100), QPointF(179, 144));
+    require(publishedSelections == QVector<QRectF>{QRectF(100, 100, 80, 45)},
+            "the first external presentation must apply the remembered ratio");
+
+    prepare();
+    require(handler.activateKeepSelectionAspectRatioShortcut(false),
+            "Shift must arm before the pending external selection is initialized");
+    handler.beginExternalSelectionDrag(QPointF(100, 100), QPointF(160, 140));
+    require(publishedSelections == QVector<QRectF>{QRectF(100, 100, 61, 61)},
+            "the first external presentation must apply an already held aspect shortcut");
+
+    prepare();
+    require(handler.activateMoveEntireSelectionShortcut(),
+            "Space must arm before the pending external selection is initialized");
+    handler.beginExternalSelectionDrag(QPointF(100, 100), QPointF(160, 140));
+    require(publishedSelections == QVector<QRectF>{QRectF(100, 100, 61, 41)} &&
+                interaction.dragMode() == ScreenshotSelectionDragMode::All,
+            "held Space must use the latest initialized rectangle as its move origin");
+    handler.updateExternalSelectionDrag(QPointF(180, 170));
+    require(selection.normalizedSelection() == QRectF(120, 130, 61, 41),
+            "held Space must translate the initialized external selection");
+    require(handler.releaseMoveEntireSelectionShortcut(),
+            "external startup movement modifier must release");
+    handler.updateExternalSelectionDrag(QPointF(200, 180));
+    require(selection.normalizedSelection() == QRectF(120, 130, 81, 51),
+            "releasing Space must retain the translated external marquee anchor");
+
+    for (const auto operation : {ScreenshotSelectionModel::RegionOperation::Add,
+                                 ScreenshotSelectionModel::RegionOperation::Subtract}) {
+        prepare();
+        selection.setSelectionRect(QRectF(10, 10, 80, 60));
+        const auto original = selection.selectionRegion();
+        selection.beginRegionOperation(operation);
+        handler.beginExternalSelectionDrag(QPointF(20, 20), QPointF(100, 70));
+        require(selection.confirmedRegion() == original && selection.regionOperationActive() &&
+                    selection.pendingMarquee() == QRectF(20, 20, 81, 51) &&
+                    publishedSelections == QVector<QRectF>{QRectF(20, 20, 81, 51)},
+                "atomic external startup must preserve the committed region and latest operand");
+        selection.cancelRegionOperation();
+        require(selection.selectionRegion() == original,
+                "cancelling an initialized external region edit must restore committed geometry");
+    }
+    handler.setExternalDragActive(false);
+}
+
 void externalSelectionSupportsHeldShortcuts() {
     ScreenshotCaptureState captureState;
     ScreenshotDisplaySession displays;
@@ -1695,8 +1864,7 @@ void externalSelectionSupportsHeldShortcuts() {
                                  Qt::MetaModifier, Qt::ShiftModifier}) {
         interaction.enterOverlayVisible(false);
         handler.setExternalDragActive(true);
-        handler.beginExternalSelectionDrag(QPointF(100, 100));
-        handler.updateExternalSelectionDrag(QPointF(160, 140));
+        handler.beginExternalSelectionDrag(QPointF(100, 100), QPointF(160, 140));
         require(selection.normalizedSelection() == QRectF(100, 100, 61, 41),
                 "external drag must initialize a shared marquee");
         require(dispatchShortcut(window, Qt::Key_Space, modifiers),
@@ -6767,6 +6935,8 @@ int main(int argc, char** argv) {
         rightClickSeparatesDismissalFromSelectionChanges();
         areaTypesExitFromPreselectionButKeepDraftCancellation();
         scrollingCaptureRoutesEveryToolbarShortcut();
+        externalSelectionStartupPublishesCompleteGeometry();
+        externalSelectionStartupPreservesConstraintsAndRegions();
         externalSelectionSupportsHeldShortcuts();
         colorCopyEndsCaptureOnlyAfterSuccessfulCopy();
         sharedShiftShortcutChoosesResizeOrColorFormat();
@@ -6781,6 +6951,14 @@ int main(int argc, char** argv) {
         toolbarSelectionPreparationRejectsIncompleteRegions();
         explicitToolbarCommandFinishesCanvasResize();
         selectionToolbarCommandsDoNotReopenRetiredCaptures();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (QCoreApplication::arguments().contains(
+            QStringLiteral("--external-selection-startup-only"))) {
+        externalSelectionStartupPublishesCompleteGeometry();
+        externalSelectionStartupPreservesConstraintsAndRegions();
+        externalSelectionSupportsHeldShortcuts();
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -6828,6 +7006,8 @@ int main(int argc, char** argv) {
     eraserWheelUsesBrushCreationWidthOnly();
     smartSelectionWheelAccumulatesMovement();
     completionGesturesUseSharedEligibilityAcrossTools();
+    externalSelectionStartupPublishesCompleteGeometry();
+    externalSelectionStartupPreservesConstraintsAndRegions();
     externalSelectionSupportsHeldShortcuts();
     colorCopyEndsCaptureOnlyAfterSuccessfulCopy();
     sharedShiftShortcutChoosesResizeOrColorFormat();

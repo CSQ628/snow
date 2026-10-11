@@ -16,6 +16,7 @@
 #include <optional>
 
 class QEvent;
+class QBackingStore;
 class CanvasStatusReadout;
 class QImage;
 class QKeyEvent;
@@ -110,9 +111,17 @@ class ScreenshotOverlayWindow final : public QWidget {
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
     [[nodiscard]] quint64 windowMaskApplicationCountForTesting() const;
     [[nodiscard]] quint64 transparentClearCountForTesting() const;
+    [[nodiscard]] quint64 nativeSurfacePreparationCountForTesting() const;
+    [[nodiscard]] quint64 keyboardActivationCountForTesting() const;
     [[nodiscard]] ScreenshotCanvasRenderer* screenshotRendererForTesting() const;
 #endif
     void warmPresentationSurface();
+    // Allocate and clear hidden pixels without showing or flushing.
+    // The first visible paint replaces them with the complete captured frame.
+    void prepareNativeSurface();
+    // Clear a bounded region and report whether this hidden window is finished.
+    // Initial platform allocation can still require work beyond the region budget.
+    [[nodiscard]] bool prepareNativeSurfaceStep();
     void showPreparedFrame(bool deferFirstPaint = false);
     // Deferred reveal/focus work belongs to a presentation, not the pooled widget lifetime.
     [[nodiscard]] quint64 beginPresentation();
@@ -120,6 +129,8 @@ class ScreenshotOverlayWindow final : public QWidget {
     [[nodiscard]] bool isPresentationCurrent(quint64 generation) const;
     [[nodiscard]] bool showPreparedFrameForPresentation(quint64 generation,
                                                         bool deferFirstPaint = false);
+    // Only the chosen keyboard owner requests activation. A paced reveal waits for its paint.
+    void requestPresentationActivation(quint64 generation, bool afterFirstPaint = false);
     void setVisible(bool visible) override;
     // Release the native window and backing store while retaining the QObject,
     // canvas, renderer, and signal wiring for the next capture.
@@ -151,6 +162,22 @@ class ScreenshotOverlayWindow final : public QWidget {
     void updateScrollingInputTransparency();
     void updateScrollingResultPreviewReadout();
     void retirePresentation();
+    void queuePresentationActivation(quint64 generation, bool framePaced);
+    void trackSelectionPaintDamage(const QRegion& damage);
+    [[nodiscard]] bool hasUnpaintedVisibleSelectionDamage() const;
+    void resumePresentationActivationAfterSelectionPaint();
+    void invalidateSelectionActivationPaint();
+    [[nodiscard]] bool prepareNativeSurfacePixels(bool fullRegion);
+    void invalidateNativeSurfacePreparation();
+
+    struct NativeSurfacePreparationProgress {
+        QBackingStore* store = nullptr;
+        QSize logicalSize;
+        qreal devicePixelRatio = 0.0;
+        qint64 bytesPerPhysicalRow = 0;
+        int nextLogicalRow = 0;
+        quint64 epoch = 0;
+    };
 
     ScreenshotOverlayEventSink& m_eventSink;
     QMargins m_captureFrameMargins;
@@ -176,9 +203,20 @@ class ScreenshotOverlayWindow final : public QWidget {
     quint64 m_presentationGeneration = 0;
     bool m_presentationActive = false;
     bool m_showingPreparedFrame = false;
+    NativeSurfacePreparationProgress m_nativeSurfacePreparation;
+    quint64 m_nativeSurfacePreparationEpoch = 0;
+    quint64 m_firstCanvasPaintGeneration = 0;
+    quint64 m_activationRequestedGeneration = 0;
+    quint64 m_pendingActivationGeneration = 0;
+    quint64 m_selectionPaintFenceGeneration = 0;
+    quint64 m_nativeActivationStartedGeneration = 0;
+    bool m_framePacedPresentation = false;
+    QRegion m_pendingSelectionPaintDamage;
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
     quint64 m_windowMaskApplicationCount = 0;
     quint64 m_transparentClearCount = 0;
+    quint64 m_nativeSurfacePreparationCount = 0;
+    quint64 m_keyboardActivationCount = 0;
 #endif
 };
 

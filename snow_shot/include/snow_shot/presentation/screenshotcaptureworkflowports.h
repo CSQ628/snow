@@ -51,6 +51,7 @@ class ScreenshotCaptureRuntimePort {
     virtual void applyDisplayModels(ScreenshotDisplaySession& displaySession) = 0;
     [[nodiscard]] virtual bool
     preparePreCaptureOverlayWindows(ScreenshotDisplaySession& displaySession) = 0;
+    virtual void prepareOverlaySurfaces(const ScreenshotDisplaySession& displaySession) = 0;
     virtual void showOverlayWindows(const ScreenshotDisplaySession& displaySession,
                                     ScreenshotOverlayShowMode mode) = 0;
     virtual void hideOverlayWindowsImmediately(const ScreenshotDisplaySession& displaySession) = 0;

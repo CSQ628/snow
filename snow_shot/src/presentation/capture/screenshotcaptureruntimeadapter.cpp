@@ -168,6 +168,11 @@ bool ScreenshotCaptureRuntimeAdapter::preparePreCaptureOverlayWindows(
     return m_context.overlayCoordinator.preparePreCaptureOverlayWindows(displaySession);
 }
 
+void ScreenshotCaptureRuntimeAdapter::prepareOverlaySurfaces(
+    const ScreenshotDisplaySession& displaySession) {
+    m_context.overlayCoordinator.prepareOverlaySurfaces(displaySession);
+}
+
 void ScreenshotCaptureRuntimeAdapter::showOverlayWindows(
     const ScreenshotDisplaySession& displaySession, ScreenshotOverlayShowMode mode) {
     m_context.overlayCoordinator.showOverlayWindows(displaySession, mode);

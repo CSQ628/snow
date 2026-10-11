@@ -26,6 +26,11 @@ class ScreenshotOverlayCanvasPresenter final {
 
     void clearOverlayCanvas(ScreenshotOverlayWindow* overlay) const;
     void prepareDisplayModels(ScreenshotDisplaySession& displaySession) const;
+    // Optional hidden warming runs bounded regions per low-priority event and yields to reveal.
+    void prepareOverlaySurfaces(const ScreenshotDisplaySession& displaySession) const;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    [[nodiscard]] static int surfacePreparationEventTypeForTesting();
+#endif
     void applyDisplayModels(ScreenshotDisplaySession& displaySession) const;
     void showOverlayWindows(const ScreenshotDisplaySession& displaySession,
                             ScreenshotOverlayShowMode mode) const;

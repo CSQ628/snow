@@ -27,6 +27,13 @@ ScreenshotOverlayCanvasWidget::ScreenshotOverlayCanvasWidget(SnowCanvasRuntime& 
 #endif
 }
 
+void ScreenshotOverlayCanvasWidget::focusInEvent(QFocusEvent* event) {
+    Q_UNUSED(event);
+    // Screenshot rendering has no focus-gained visuals. QWidget's default
+    // handler dirties the entire captured frame during native activation.
+    // Keep QWidget::event bookkeeping and SnowCanvasWidget's focus-loss cleanup.
+}
+
 void ScreenshotOverlayCanvasWidget::paintEvent(QPaintEvent* event) {
     SNOW_SHOT_CAPTURE_PERF_SCOPE("presentation.window.canvas.paint_event");
     SNOW_SHOT_CAPTURE_PERF_COUNTER("presentation.window.canvas.paint_events", 1);

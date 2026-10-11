@@ -4,6 +4,7 @@
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 
 class QPaintEvent;
+class QFocusEvent;
 class SnowCanvasRuntime;
 
 class ScreenshotOverlayCanvasWidget final : public SnowCanvasWidget {
@@ -11,6 +12,7 @@ class ScreenshotOverlayCanvasWidget final : public SnowCanvasWidget {
     explicit ScreenshotOverlayCanvasWidget(SnowCanvasRuntime& runtime, QWidget* parent = nullptr);
 
   protected:
+    void focusInEvent(QFocusEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 };
 

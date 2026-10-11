@@ -323,6 +323,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
         PendingSelectionAction action = PendingSelectionAction::None,
         ScreenshotCaptureWorkflow::StartMode mode = ScreenshotCaptureWorkflow::StartMode::Normal);
     void applyGlobalMouseDrag(bool finishReleased);
+    void completeGlobalMouseDrag(bool finishReleased);
     void refreshGlobalMouseDragFromLiveCursor();
     QPointF globalMouseCanvasPosition(const QPointF& point) const;
     void endGlobalMouseDrag();
@@ -1646,7 +1647,20 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
             ScreenshotCapturePresentationCallbacks{
                 [this]() { m_presentationServices->hideToolbar(); },
                 [this]() { m_presentationServices->updateOverlayState(); },
-                [this]() { updateColorPickerAtCurrentCursor(); },
+                [this]() {
+                    m_presentationServices->discardColorPickerPresentation();
+                    if (m_globalMouseDrag.active() && m_globalMouseDrag.ready() &&
+                        m_interaction.manualSelecting() && m_interaction.dragging()) {
+                        // The capture's drag owns its buffered endpoint. Restore its
+                        // picker directly instead of briefly sampling an independent
+                        // live cursor before returning to that endpoint.
+                        m_presentationServices->requestSelectionDragColorPickerPresentation(
+                            globalMouseCanvasPosition(m_globalMouseDrag.end()));
+                    } else {
+                        m_colorPickerController->updateAtCurrentCursor(
+                            m_presentationServices->colorPickerContext());
+                    }
+                },
                 [this]() { handleCapturePresented(); },
                 [this]() {
                     if (m_globalMouseDrag.active()) {
@@ -1658,8 +1672,9 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
                         m_globalMouseDrag.setReady();
                         refreshGlobalMouseDragFromLiveCursor();
                         m_overlayInputHandler->beginExternalSelectionDrag(
-                            globalMouseCanvasPosition(m_globalMouseDrag.start()));
-                        applyGlobalMouseDrag(false);
+                            globalMouseCanvasPosition(m_globalMouseDrag.start()),
+                            globalMouseCanvasPosition(m_globalMouseDrag.end()));
+                        completeGlobalMouseDrag(false);
                     }
                 },
                 [this]() { m_presentationServices->resetPresentation(); },
@@ -1834,7 +1849,7 @@ void ScreenshotController::Impl::handleCapturePresented() {
     }
 
     if (m_globalMouseDrag.active()) {
-        applyGlobalMouseDrag(true);
+        completeGlobalMouseDrag(true);
         return;
     }
     if (ensureExportFeature() && m_selectionExportUiServices != nullptr) {
@@ -2078,6 +2093,13 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
         };
     actions.requestSelectionDragPresentation = [this] {
         m_presentationServices->requestSelectionDragPresentation();
+    };
+    actions.prepareOverlayActivation = [this] {
+        // Native activation can run before the queued hook notification. Install
+        // the validated mailbox provider without bypassing the frame deadline.
+        if (m_globalMouseDrag.active())
+            owner.requestGlobalMouseCaptureFrame(m_globalMouseDrag.id());
+        m_presentationServices->flushDueSelectionDragInput();
     };
     m_overlayInputHandler =
         std::make_unique<ScreenshotOverlayInputHandler>(ScreenshotOverlayInputHandlerContext{
@@ -5647,7 +5669,11 @@ void ScreenshotController::Impl::applyGlobalMouseDrag(bool finishReleased) {
         return;
     const QPointF end = globalMouseCanvasPosition(m_globalMouseDrag.end());
     m_overlayInputHandler->updateExternalSelectionDrag(end);
-    if (!m_globalMouseDrag.released())
+    completeGlobalMouseDrag(finishReleased);
+}
+
+void ScreenshotController::Impl::completeGlobalMouseDrag(bool finishReleased) {
+    if (!m_globalMouseDrag.active() || !m_globalMouseDrag.ready() || !m_globalMouseDrag.released())
         return;
     if (!m_selection.hasPixelSelection()) {
         cancelCapture();

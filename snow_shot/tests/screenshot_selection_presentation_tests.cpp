@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/screenshotcolorpickercontroller.h"
 #include "snow_shot/presentation/screenshotpresentationframescheduler.h"
 #include "snow_shot/presentation/screenshotoverlayinputhandler.h"
+#include "snow_shot/presentation/screenshotoverlayinteractionadapter.h"
 #include "snow_shot/presentation/screenshotselectionlimits.h"
 
 #include <QPainter>
@@ -12,6 +13,7 @@
 #include <QPointer>
 #include <QTimer>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -284,6 +286,229 @@ void deferredSelectionDragInputSamplesTheLatestPositionAtOneFrame() {
             fixture.stateNotifications == 1 && fixture.paintObserver.canvasPaints == 1 &&
             picker->workCounters().samples == 1 && picker->workCounters().previews == 1,
         "one frame must consume the latest input, prepare geometry, and sample the picker once");
+}
+
+void activationBoundaryOnlyConsumesDueSelectionDragInput() {
+    Fixture fixture(QSize(1200, 800), false, true,
+                    selection_presentation_test::FrameBackend::QtTimer);
+    fixture.interaction.confirmSelection();
+    require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::BottomRight),
+            "activation input requires a real selection drag");
+    fixture.services->updateOverlayState();
+    fixture.processEvents();
+    fixture.resetCounters();
+
+    ScreenshotOverlayInputActions actions;
+    actions.prepareOverlayActivation = [&] { fixture.services->flushDueSelectionDragInput(); };
+    ScreenshotOverlayInputHandler input({fixture.captureState, fixture.interaction,
+                                         fixture.selection, fixture.intelligentSelection,
+                                         fixture.geometry, fixture.displays, std::move(actions)});
+    ScreenshotOverlayEventAdapter adapter;
+    adapter.setEventTargets(input, [] {});
+    ScreenshotOverlayEventSink& events = adapter;
+    const QRectF initial = fixture.displayedSelection();
+    QRectF latest = initial;
+    int inputCalls = 0;
+    for (int request = 1; request <= 16; ++request) {
+        latest = initial.adjusted(0, 0, request * 4.0, request * 2.0);
+        fixture.services->requestSelectionDragInput([&] {
+            ++inputCalls;
+            fixture.selection.setDraggedSelectionRect(latest,
+                                                      ScreenshotSelectionDragMode::BottomRight);
+            fixture.services->requestSelectionDragPresentation();
+            events.prepareOverlayActivation();
+            require(fixture.stateNotifications == 0,
+                    "activation input must join the current frame without recursively committing");
+        });
+    }
+    QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+    if (!screen)
+        screen = fixture.overlay.screen();
+    const qreal reportedRate = screen ? screen->refreshRate() : 60.0;
+    const qreal rate = std::isfinite(reportedRate) && reportedRate > 1.0 ? reportedRate : 60.0;
+    const qint64 period = qRound64(1000000000.0 / rate);
+    fixture.nowNanoseconds += period - 1;
+    events.prepareOverlayActivation();
+    require(inputCalls == 0 && fixture.displayedSelection() == initial &&
+                fixture.services->frameSchedulerForTesting().active(),
+            "activation before the existing deadline must preserve the pending input and wakeup");
+
+    // A notification stores the provider; read movement arriving after it at the due boundary.
+    latest.adjust(0, 0, 12, 6);
+    ++fixture.nowNanoseconds;
+    events.prepareOverlayActivation();
+    fixture.processEvents();
+    require(
+        inputCalls == 1 && fixture.displayedSelection() == latest &&
+            fixture.stateNotifications == 1 && fixture.paintObserver.canvasPaints == 1 &&
+            !fixture.services->frameSchedulerForTesting().active(),
+        "activation at the deadline must commit the latest input once before focus can repaint");
+
+    QObject* wakeup = fixture.services->frameSchedulerForTesting().wakeupObject();
+    require(wakeup && QMetaObject::invokeMethod(wakeup, "timeout", Qt::DirectConnection),
+            "the retained Qt backend must permit delivery of a superseded timer wakeup");
+    events.prepareOverlayActivation();
+    fixture.processEvents();
+    require(inputCalls == 1 && fixture.stateNotifications == 1 &&
+                fixture.paintObserver.canvasPaints == 1,
+            "a superseded wakeup and repeated activation must not replay consumed input");
+
+    fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+    events.prepareOverlayActivation();
+    require(inputCalls == 1,
+            "activation must preserve the next display deadline after committing a due frame");
+    fixture.nowNanoseconds += period;
+    events.prepareOverlayActivation();
+    require(inputCalls == 2 && !fixture.services->frameSchedulerForTesting().active(),
+            "the next eligible activation must consume its pending input once");
+    adapter.clearEventTargets();
+    fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+    fixture.nowNanoseconds += period;
+    events.prepareOverlayActivation();
+    require(inputCalls == 2,
+            "a detached event adapter must stop forwarding activation to the old input handler");
+    fixture.services->discardSelectionDragInput();
+}
+
+void activationBoundaryPullsDueInputBeforeItsQueuedNotification() {
+    Fixture fixture(QSize(1200, 800), false);
+    fixture.interaction.confirmSelection();
+    require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::BottomRight),
+            "activation mailbox input requires a real selection drag");
+    fixture.services->updateOverlayState();
+    fixture.processEvents();
+    fixture.resetCounters();
+    const QRectF initial = fixture.displayedSelection();
+    QRectF mailbox = initial.adjusted(0, 0, 20, 10);
+    bool unread = true;
+    bool gestureReady = false;
+    int providerReads = 0;
+    int appliedSamples = 0;
+    const auto readMailbox = [&] {
+        ++providerReads;
+        if (!unread)
+            return;
+        unread = false;
+        ++appliedSamples;
+        fixture.selection.setDraggedSelectionRect(mailbox,
+                                                  ScreenshotSelectionDragMode::BottomRight);
+        fixture.services->requestSelectionDragPresentation();
+    };
+    ScreenshotOverlayInputActions actions;
+    actions.prepareOverlayActivation = [&] {
+        // Match the controller's validated request followed by its due-frame flush.
+        if (gestureReady)
+            fixture.services->requestSelectionDragInput(readMailbox);
+        fixture.services->flushDueSelectionDragInput();
+    };
+    ScreenshotOverlayInputHandler input({fixture.captureState, fixture.interaction,
+                                         fixture.selection, fixture.intelligentSelection,
+                                         fixture.geometry, fixture.displays, std::move(actions)});
+    ScreenshotOverlayEventAdapter adapter;
+    adapter.setEventTargets(input, [] {});
+    ScreenshotOverlayEventSink& events = adapter;
+    events.prepareOverlayActivation();
+    require(providerReads == 0 && !fixture.services->frameSchedulerForTesting().active(),
+            "activation without a ready external gesture must not arm a mailbox request");
+
+    gestureReady = true;
+    events.prepareOverlayActivation();
+    require(providerReads == 0 && unread && fixture.displayedSelection() == initial &&
+                fixture.services->frameSchedulerForTesting().active(),
+            "activation must install pending mailbox input without reading before its deadline");
+    // No GUI notification has arrived; the source independently replaces its unread sample.
+    mailbox = initial.adjusted(0, 0, 40, 30);
+    fixture.advanceClock(100);
+    events.prepareOverlayActivation();
+    fixture.processEvents();
+    require(providerReads == 1 && appliedSamples == 1 && !unread &&
+                fixture.displayedSelection() == mailbox && fixture.stateNotifications == 1 &&
+                fixture.paintObserver.canvasPaints == 1,
+            "due activation must pull the newest mailbox sample before its notification dispatch");
+
+    // The notification already posted for that sample may still arrive afterward.
+    fixture.services->requestSelectionDragInput(readMailbox);
+    events.prepareOverlayActivation();
+    require(providerReads == 1,
+            "a late notification must still wait for the next deadline after activation commits");
+    fixture.advanceClock(100);
+    fixture.services->flushDueSelectionDragInput();
+    fixture.processEvents();
+    require(providerReads == 2 && appliedSamples == 1 && fixture.stateNotifications == 1 &&
+                fixture.paintObserver.canvasPaints == 1 &&
+                !fixture.services->frameSchedulerForTesting().active(),
+            "a late notification for a consumed mailbox must not duplicate geometry or painting");
+    adapter.clearEventTargets();
+}
+
+void activationBoundaryRejectsRetiredAndReentrantSelectionDragInput() {
+    for (int boundary = 0; boundary < 5; ++boundary) {
+        Fixture fixture(QSize(1200, 800), false);
+        fixture.interaction.confirmSelection();
+        require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::BottomRight),
+                "activation cancellation requires a real selection drag");
+        fixture.services->updateOverlayState();
+        int inputCalls = 0;
+        fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+        fixture.advanceClock(100);
+        switch (boundary) {
+        case 0:
+            fixture.services->resetPresentation();
+            break;
+        case 1:
+            ++fixture.captureState.sessionId;
+            break;
+        case 2:
+            fixture.captureState.presentationSuppressed = true;
+            break;
+        case 3:
+            fixture.interaction.finishDrag();
+            break;
+        case 4:
+            fixture.interaction.reset();
+            break;
+        }
+        fixture.services->flushDueSelectionDragInput();
+        require(
+            inputCalls == 0,
+            "retired, suppressed, released and inactive gestures must not sample at activation");
+        fixture.services->resetPresentation();
+    }
+
+    Fixture fixture(QSize(1200, 800), false);
+    fixture.interaction.confirmSelection();
+    require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::BottomRight),
+            "reentrant activation requires a real selection drag");
+    fixture.services->updateOverlayState();
+    int inputCalls = 0;
+    fixture.services->requestSelectionDragInput([&] {
+        ++inputCalls;
+        fixture.services->resetPresentation();
+        fixture.services->flushDueSelectionDragInput();
+    });
+    fixture.advanceClock(100);
+    fixture.services->flushDueSelectionDragInput();
+    require(inputCalls == 1 && !fixture.services->frameSchedulerForTesting().active(),
+            "activation input that cancels presentation must release the frame guard and wakeup");
+
+    fixture.services->updateOverlayState();
+    fixture.services->requestSelectionDragInput([&] {
+        ++inputCalls;
+        ++fixture.captureState.sessionId;
+        fixture.displays.startup->sessionId = fixture.captureState.sessionId;
+        fixture.services->updateOverlayState();
+        fixture.services->requestSelectionDragInput([&] { ++inputCalls; });
+        fixture.services->flushDueSelectionDragInput();
+    });
+    fixture.advanceClock(100);
+    fixture.services->flushDueSelectionDragInput();
+    require(inputCalls == 2 && fixture.services->frameSchedulerForTesting().active(),
+            "replacement input must not join the retiring activation frame reentrantly");
+    fixture.services->flushDueSelectionDragInput();
+    require(inputCalls == 3 && !fixture.services->frameSchedulerForTesting().active(),
+            "a replacement session must retain its own due input after the old frame retires");
+    fixture.services->flushDueSelectionDragInput();
+    require(inputCalls == 3, "replacement activation input must never be replayed");
 }
 
 void terminalSelectionDragInputKeepsItsExactPosition() {
@@ -1117,6 +1342,80 @@ ScreenshotOverlayInputActions pickerInputActions(Fixture& fixture) {
     return actions;
 }
 
+void captureRevealPickerKeepsItsLatchedDragEndpoint() {
+    Fixture fixture(QSize(1200, 800), false);
+    fixture.displays.startup->anchorCursor = false;
+    fixture.displays.startup->phase = ScreenshotStartupContext::Phase::Preparing;
+    const QPointF end(400, 300);
+    const QPointF laterCursor(430, 330);
+    int liveReads = 0;
+    fixture.physicalCursor = snow_shot::platform::PhysicalCursor(
+        {true,
+         [&]() -> std::optional<QPoint> {
+             ++liveReads;
+             return fixture.geometry.physicalPositionForCanvasPoint(fixture.displays, laterCursor);
+         },
+         [](const QPoint&) { return true; }});
+    fixture.enableColorPicker(ScreenshotColorPickerDisplayMode::AlwaysShow);
+    fixture.coordinator.setSelectionToolbarHidden(true);
+    ScreenshotOverlayInputHandler input(
+        {fixture.captureState, fixture.interaction, fixture.selection, fixture.intelligentSelection,
+         fixture.geometry, fixture.displays, pickerInputActions(fixture)});
+    input.setExternalDragActive(true);
+    fixture.resetCounters();
+    input.beginExternalSelectionDrag(QPointF(200, 200), end);
+    auto* picker = fixture.coordinator.colorPicker();
+    require(fixture.stateNotifications == 1 && picker->workCounters().samples == 1 &&
+                picker->workCounters().previews == 1,
+            "atomic external initialization must publish and sample its complete endpoint once");
+    const QRectF initial = fixture.displayedSelection();
+    const QString endpointColor = picker->currentColorText();
+    fixture.processEvents();
+    fixture.resetCounters();
+
+    // The capture picker callback restores drag ownership before the Revealed lifecycle commit.
+    fixture.displays.startup->phase = ScreenshotStartupContext::Phase::Revealed;
+    fixture.services->discardColorPickerPresentation();
+    fixture.services->requestSelectionDragColorPickerPresentation(end);
+    fixture.services->updateOverlayState();
+    require(liveReads == 0 && picker->currentColorText() == endpointColor &&
+                picker->workCounters().samples == 0 && picker->workCounters().previews == 0 &&
+                picker->workCounters().moves == 0 && fixture.displayedSelection() == initial &&
+                fixture.selection.normalizedSelection() == initial &&
+                fixture.stateNotifications == 1,
+            "reveal must retain its latched picker and publish lifecycle without cursor or "
+            "duplicate geometry work");
+
+    fixture.resetCounters();
+    input.updateExternalSelectionDrag(end + QPointF(20, 10));
+    require(picker->workCounters().samples == 0 && fixture.stateNotifications == 0,
+            "a primed reveal picker must wait with subsequent movement for the shared deadline");
+    fixture.advanceClock(100);
+    fixture.flushFrame();
+    require(picker->workCounters().samples == 1 && picker->workCounters().previews == 1 &&
+                fixture.stateNotifications == 1 && liveReads == 0,
+            "the first moving frame must sample its drag endpoint once without a live cursor read");
+
+    fixture.interaction.finishDrag();
+    fixture.services->updateOverlayState();
+    fixture.resetCounters();
+    fixture.services->discardColorPickerPresentation();
+    fixture.services->requestSelectionDragColorPickerPresentation(end);
+    fixture.services->flushColorPickerPresentation();
+    require(picker->workCounters().samples == 0,
+            "a released gesture must reject an old drag-owned capture picker request");
+    fixture.colorPickerController->updateAtCurrentCursor(fixture.services->colorPickerContext());
+    require(liveReads == 1 && picker->workCounters().samples == 1,
+            "a released selection must retain the normal live cursor picker path");
+    fixture.interaction.reset();
+    fixture.services->resetPresentation();
+    fixture.resetCounters();
+    fixture.services->requestSelectionDragColorPickerPresentation(end);
+    fixture.colorPickerController->updateAtCurrentCursor(fixture.services->colorPickerContext());
+    require(liveReads == 1 && picker->workCounters().samples == 0 && picker->isHidden(),
+            "a canceled capture must not revive its picker or sample the cursor");
+}
+
 void selectionDragFramesShareTheLatestGeometryAndPickerAnchor() {
     Fixture fixture(QSize(1200, 800), false);
     fixture.displays.startup->resumeLiveInput();
@@ -1561,6 +1860,9 @@ int main(int argc, char* argv[]) {
     selectionDragBurstsPrepareAndCommitTheLatestModelAtOneFrame();
     selectionDragBoundariesAndCommandsCommitSynchronously();
     deferredSelectionDragInputSamplesTheLatestPositionAtOneFrame();
+    activationBoundaryOnlyConsumesDueSelectionDragInput();
+    activationBoundaryPullsDueInputBeforeItsQueuedNotification();
+    activationBoundaryRejectsRetiredAndReentrantSelectionDragInput();
     terminalSelectionDragInputKeepsItsExactPosition();
     resetAndEpochChangesDiscardDeferredSelectionDragInput();
     theFirstUsableMarqueeIsPresentedImmediately();
@@ -1589,6 +1891,7 @@ int main(int argc, char* argv[]) {
     shortcutContentStillRetranslatesOnLanguageChange();
     queuedPickerInputSurvivesSelectionConfirmation();
     queuedPickerHoverYieldsToSelectionDrag();
+    captureRevealPickerKeepsItsLatchedDragEndpoint();
     selectionDragFramesShareTheLatestGeometryAndPickerAnchor();
     explicitAspectRatioSnapCommitsQueuedDragWork();
     selectionDragPickerWorkIsDiscardedAtInteractionBoundaries();

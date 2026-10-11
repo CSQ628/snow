@@ -3,12 +3,16 @@
 #if defined(SNOW_SHOT_CAPTURE_PERF_INSTRUMENTATION)
 #include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QElapsedTimer>
 #include <QThread>
+#include <QThreadPool>
+
+#include <utility>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -22,7 +26,7 @@
 namespace snow_shot::presentation::capture_perf {
 namespace {
 QMutex mutex;
-QFile traceFile;
+QString tracePath;
 Sink* activeSink = nullptr;
 struct State {
     QElapsedTimer timer;
@@ -35,6 +39,46 @@ struct State {
     bool active = false;
 };
 State state;
+
+class TraceWriter final {
+  public:
+    TraceWriter() {
+        m_pool.setMaxThreadCount(1);
+        m_pool.setExpiryTimeout(-1);
+        // Configuration happens before captures. Start the dedicated writer now
+        // so the first trace finish does not also launch a thread during reveal.
+        m_pool.start([] {});
+    }
+
+    void append(QString path, QJsonObject sample) {
+        // Serialize and append on one worker, preserving sample order without
+        // putting disk I/O on the capture or first moving-frame critical path.
+        m_pool.start([path = std::move(path), sample = std::move(sample)]() mutable {
+            sample[QStringLiteral("writer_thread")] =
+                QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
+                qWarning("Unable to open capture performance trace: %s",
+                         qPrintable(file.errorString()));
+                return;
+            }
+            QByteArray record = QJsonDocument(sample).toJson(QJsonDocument::Compact);
+            record.append('\n');
+            if (file.write(record) != record.size())
+                qWarning("Unable to write capture performance trace: %s",
+                         qPrintable(file.errorString()));
+        });
+    }
+
+  private:
+    // QThreadPool drains queued writes at destruction, including application exit.
+    QThreadPool m_pool;
+};
+
+TraceWriter& traceWriter() {
+    static TraceWriter writer;
+    return writer;
+}
 
 class FileSink final : public Sink {
   public:
@@ -69,12 +113,8 @@ class FileSink final : public Sink {
                            {QStringLiteral("counters"), state.counters},
                            {QStringLiteral("thread"), QString::number(reinterpret_cast<quintptr>(
                                                           QThread::currentThreadId()))}};
-        if (traceFile.isOpen()) {
-            traceFile.write(QJsonDocument(object).toJson(QJsonDocument::Compact));
-            traceFile.write("\n");
-            traceFile.flush();
-        }
         state.active = false;
+        traceWriter().append(tracePath, std::move(object));
     }
 };
 FileSink fileSink;
@@ -82,18 +122,24 @@ FileSink fileSink;
 
 void configureTrace(const QString& path) {
     QMutexLocker lock(&mutex);
-    if (traceFile.isOpen())
-        traceFile.close();
-    if (!path.isEmpty()) {
-        traceFile.setFileName(path);
-        static_cast<void>(traceFile.open(QIODevice::WriteOnly | QIODevice::Append));
-    }
-    activeSink = &fileSink;
-}
-void beginSample(const char* scenario, qint64 width, qint64 height) {
     if (state.active)
         fileSink.finish(false);
+    tracePath.clear();
+    if (!path.isEmpty()) {
+        QFile file(path);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Append))
+            tracePath = QFileInfo(file).absoluteFilePath();
+    }
+    activeSink = tracePath.isEmpty() ? nullptr : &fileSink;
+    if (activeSink != nullptr)
+        static_cast<void>(traceWriter());
+}
+void beginSample(const char* scenario, qint64 width, qint64 height) {
     QMutexLocker lock(&mutex);
+    if (activeSink == nullptr)
+        return;
+    if (state.active)
+        fileSink.finish(false);
     state = {};
     state.scenario = QString::fromLatin1(scenario);
     state.width = width;
@@ -113,8 +159,14 @@ void counter(const char* name, qint64 value) {
     if (activeSink && state.active)
         activeSink->recordCounter(name, value);
 }
-void flushDesktopComposition() {
+bool flushDesktopComposition() {
+    {
+        QMutexLocker lock(&mutex);
+        if (activeSink == nullptr || !state.active)
+            return false;
+    }
     static_cast<void>(DwmFlush());
+    return true;
 }
 Scope::~Scope() {
     const qint64 elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -136,7 +188,9 @@ void configureTrace(const QString&) {}
 void beginSample(const char*, qint64, qint64) {}
 void milestone(const char*) {}
 void counter(const char*, qint64) {}
-void flushDesktopComposition() {}
+bool flushDesktopComposition() {
+    return false;
+}
 Scope::~Scope() = default;
 void finish(bool) {}
 } // namespace snow_shot::presentation::capture_perf

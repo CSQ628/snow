@@ -12,13 +12,13 @@
 #include "icon_renderer.h"
 
 #include "snow_shot/presentation/screenshotimagesource.h"
-#include <QGuiApplication>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QScreen>
 #include <QTimer>
 #include <QVector>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <utility>
 
@@ -152,53 +152,10 @@ void activateOverlayWindow(ScreenshotOverlayWindow& overlay, quint64 generation)
     activateAndFocusOverlayWindow(overlay, generation);
 }
 
-void scheduleOverlayActivation(ScreenshotOverlayWindow* overlay, quint64 generation) {
-    if (overlay == nullptr) {
-        return;
-    }
-
-    QTimer::singleShot(0, overlay, [overlay, generation]() {
-        if (!overlay->isPresentationCurrent(generation) || !overlay->isVisible()) {
-            return;
-        }
-
-        activateAndFocusOverlayWindow(*overlay, generation);
-        if (!overlay->isPresentationCurrent(generation) || !overlay->isVisible()) {
-            return;
-        }
-        QTimer::singleShot(0, overlay, [overlay, generation]() {
-            if (overlay->isPresentationCurrent(generation) && overlay->isVisible()) {
-                overlay->commitInitialSelectionCursor();
-            }
-        });
-    });
-}
-
-constexpr qreal kFramePacedFallbackRefreshRate = 60.0;
-
-int framePacedActivationDelayMs(const QScreen* screen) {
-    const qreal rate = screen != nullptr ? screen->refreshRate() : 0.0;
-    return std::max(1, static_cast<int>(std::ceil(
-                           1000.0 / (rate > 0.0 ? rate : kFramePacedFallbackRefreshRate))));
-}
-
 void commitInitialSelectionCursorOn(ScreenshotOverlayWindow* overlay, quint64 generation) {
     if (overlay != nullptr && overlay->isPresentationCurrent(generation)) {
         overlay->commitInitialSelectionCursor();
     }
-}
-
-void scheduleFramePacedOverlayActivation(ScreenshotOverlayWindow* overlay, quint64 generation) {
-    if (overlay == nullptr) {
-        return;
-    }
-    // Foreground and focus negotiation is slow on Windows and is not needed
-    // while a global-mouse drag runs on hook input. Keep the cursor sprite and
-    // the raise() above immediate, but run activation one frame after the
-    // reveal so the first paced drag updates are not queued behind it.
-    QTimer::singleShot(
-        framePacedActivationDelayMs(overlay->screen()), overlay,
-        [overlay, generation]() { activateAndFocusOverlayWindow(*overlay, generation); });
 }
 
 bool showOverlayWindow(ScreenshotOverlayWindow& overlay, bool deferFirstPaint, quint64 generation) {
@@ -239,18 +196,90 @@ qsizetype preferredOverlayEntryIndex(const QVector<ActiveOverlayEntry>& entries,
     return cursorIndex >= 0 || entries.isEmpty() ? cursorIndex : 0;
 }
 
+struct OverlaySurfacePreparationEntry {
+    QPointer<ScreenshotOverlayWindow> overlay;
+    quint64 generation = 0;
+};
+
+QEvent::Type surfacePreparationEventType() {
+    static const auto type = static_cast<QEvent::Type>(QEvent::registerEventType());
+    return type;
+}
+
+class OverlaySurfacePreparationTask final : public QObject {
+  public:
+    explicit OverlaySurfacePreparationTask(QVector<OverlaySurfacePreparationEntry> entries,
+                                           ScreenshotOverlayWindow* owner)
+        : QObject(owner), m_entries(std::move(entries)) {
+        postNextWindow();
+    }
+
+  protected:
+    bool event(QEvent* event) override {
+        if (event->type() != surfacePreparationEventType())
+            return QObject::event(event);
+        if (m_finished)
+            return true;
+        if (!preparationCurrent()) {
+            finish();
+            return true;
+        }
+
+        const QPointer<OverlaySurfacePreparationTask> guard(this);
+        const auto overlay = m_entries.at(m_nextWindow).overlay;
+        const bool finishedWindow = overlay->prepareNativeSurfaceStep();
+        // Native creation can reenter cancellation and delete the preferred
+        // overlay, which owns this task. Do not touch task state after deletion.
+        if (guard == nullptr)
+            return true;
+        if (finishedWindow)
+            ++m_nextWindow;
+        if (!preparationCurrent() || m_nextWindow == m_entries.size()) {
+            finish();
+        } else {
+            // One bounded region per dispatch leaves capture-ready and input
+            // callbacks an opportunity to supersede work even within a display.
+            postNextWindow();
+        }
+        return true;
+    }
+
+  private:
+    bool preparationCurrent() const {
+        return std::all_of(m_entries.cbegin(), m_entries.cend(),
+                           [](const OverlaySurfacePreparationEntry& entry) {
+                               return entry.overlay != nullptr && entry.overlay->isHidden() &&
+                                      entry.overlay->presentationGeneration() == entry.generation;
+                           });
+    }
+
+    void postNextWindow() {
+        QCoreApplication::postEvent(this, new QEvent(surfacePreparationEventType()),
+                                    Qt::LowEventPriority);
+    }
+
+    void finish() {
+        m_finished = true;
+        deleteLater();
+    }
+
+    QVector<OverlaySurfacePreparationEntry> m_entries;
+    qsizetype m_nextWindow = 0;
+    bool m_finished = false;
+};
+
 void showCapturedImageOverlayNow(ScreenshotOverlayWindow& overlay, bool framePaced,
-                                 quint64 generation) {
+                                 quint64 generation, bool keyboardOwner) {
     if (!showOverlayWindow(overlay, framePaced, generation)) {
         return;
     }
     raiseOverlayWindow(overlay);
     if (framePaced) {
         commitInitialSelectionCursorOn(&overlay, generation);
-        scheduleFramePacedOverlayActivation(&overlay, generation);
-        return;
     }
-    scheduleOverlayActivation(&overlay, generation);
+    if (keyboardOwner) {
+        overlay.requestPresentationActivation(generation, framePaced);
+    }
 }
 
 void showCapturedImageOverlayDeferred(ScreenshotOverlayWindow* overlay, bool framePaced,
@@ -260,7 +289,7 @@ void showCapturedImageOverlayDeferred(ScreenshotOverlayWindow* overlay, bool fra
     }
 
     QTimer::singleShot(0, overlay, [overlay, framePaced, generation]() {
-        showCapturedImageOverlayNow(*overlay, framePaced, generation);
+        showCapturedImageOverlayNow(*overlay, framePaced, generation, false);
     });
 }
 
@@ -277,7 +306,7 @@ void showCapturedImageOverlaysForDisplaySession(const ScreenshotDisplaySession& 
     if (preferredIndex >= 0 && preferredIndex < entries.size()) {
         const auto& entry = entries.at(preferredIndex);
         if (entry.overlay != nullptr) {
-            showCapturedImageOverlayNow(*entry.overlay, framePaced, entry.generation);
+            showCapturedImageOverlayNow(*entry.overlay, framePaced, entry.generation, true);
         }
     }
 
@@ -323,6 +352,39 @@ void showOverlayWindowsForDisplaySession(const ScreenshotDisplaySession& display
         });
 }
 } // namespace
+
+void ScreenshotOverlayCanvasPresenter::prepareOverlaySurfaces(
+    const ScreenshotDisplaySession& displaySession) const {
+    const QVector<ActiveOverlayEntry> entries = activeOverlayEntries(displaySession);
+    const qsizetype preferredIndex =
+        preferredOverlayEntryIndex(entries, displaySession.logicalCursorPosition());
+    if (preferredIndex < 0 || entries.at(preferredIndex).overlay == nullptr)
+        return;
+
+    // Resolve priority and snapshot only surface lifetimes before any callbacks.
+    // Hidden preparation has no active presentation; raw generations reserve the
+    // whole group until capture-ready reveal or cancellation supersedes it.
+    QVector<OverlaySurfacePreparationEntry> preparations;
+    preparations.reserve(entries.size());
+    const auto appendPreparation = [&](qsizetype index) {
+        const auto overlay = entries.at(index).overlay;
+        preparations.append({overlay, overlay->presentationGeneration()});
+    };
+    appendPreparation(preferredIndex);
+    for (qsizetype index = 0; index < entries.size(); ++index) {
+        if (index != preferredIndex && entries.at(index).overlay != nullptr)
+            appendPreparation(index);
+    }
+    // Queued normal-priority capture-ready callbacks outrank this optional work.
+    // Parent ownership also removes queued events if the preferred overlay dies.
+    new OverlaySurfacePreparationTask(std::move(preparations), entries.at(preferredIndex).overlay);
+}
+
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+int ScreenshotOverlayCanvasPresenter::surfacePreparationEventTypeForTesting() {
+    return static_cast<int>(surfacePreparationEventType());
+}
+#endif
 
 void ScreenshotOverlayCanvasPresenter::showOverlayWindows(
     const ScreenshotDisplaySession& displaySession, ScreenshotOverlayShowMode mode) const {

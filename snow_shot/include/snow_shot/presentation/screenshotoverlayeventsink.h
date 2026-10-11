@@ -22,6 +22,8 @@ class ScreenshotOverlayEventSink {
     virtual bool presentOverlayPointer(ScreenshotOverlayWindow*, const QPointF&) {
         return false;
     }
+    // Activation may invalidate the canvas. Commit already-due input before native focus work.
+    virtual void prepareOverlayActivation() {}
 
     [[nodiscard]] virtual bool shouldHandleOverlayMouseEvent(const ScreenshotOverlayWindow* overlay,
                                                              const QPointF& localPosition,

@@ -139,6 +139,7 @@ struct ScreenshotOverlayInputActions {
     std::function<QPoint()> currentLogicalCursorPosition = [] { return QCursor::pos(); };
     // Only continuous drag geometry uses this request; gesture boundaries and commands stay direct.
     std::function<void()> requestSelectionDragPresentation = {};
+    std::function<void()> prepareOverlayActivation = {};
 };
 
 struct ScreenshotOverlayInputHandlerContext {
@@ -173,7 +174,10 @@ class ScreenshotOverlayInputHandler final {
         return m_externalDragActive;
     }
     [[nodiscard]] bool acceptInput(bool genuine = true);
+    void prepareOverlayActivation();
     void beginExternalSelectionDrag(const QPointF& canvasPosition);
+    // Publish the anchor and latest buffered endpoint together before the overlay is revealed.
+    void beginExternalSelectionDrag(const QPointF& canvasStart, const QPointF& canvasPosition);
     void updateExternalSelectionDrag(const QPointF& canvasPosition);
 
     void handleMousePress(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
@@ -226,13 +230,15 @@ class ScreenshotOverlayInputHandler final {
     bool m_consumeEffectRelease = false;
     void executeConfiguredCompletionAction(const QString& action);
     void beginSelectionDrag(ScreenshotOverlayWindow* overlay, const QPointF& virtualPosition,
-                            ScreenshotSelectionDragMode dragMode);
+                            ScreenshotSelectionDragMode dragMode,
+                            std::optional<QPointF> currentPosition = std::nullopt);
     void handleIntelligentSelectionPress(const QPointF& virtualPosition);
     void handleIntelligentSelectionMove(ScreenshotOverlayWindow* overlay,
                                         const QPointF& localPosition,
                                         const QPointF& virtualPosition);
     void handleHoverMove(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
     void updateGuideLines(ScreenshotOverlayWindow* overlay, const QPointF& localPosition) const;
+    void updateSelectionDragGeometry(const QPointF& virtualPosition);
     void updateSelectionDrag(const QPointF& virtualPosition);
     void handleIntelligentSelectionRelease(const QPointF& virtualPosition);
     void finishSelectionDrag(ScreenshotOverlayWindow* overlay, const QPointF& localPosition,

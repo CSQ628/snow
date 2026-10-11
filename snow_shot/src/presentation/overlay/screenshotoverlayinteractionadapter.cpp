@@ -25,6 +25,11 @@ bool ScreenshotOverlayEventAdapter::acceptOverlayInput(bool genuine) {
     return m_inputHandler && m_inputHandler->acceptInput(genuine);
 }
 
+void ScreenshotOverlayEventAdapter::prepareOverlayActivation() {
+    if (m_inputHandler != nullptr)
+        m_inputHandler->prepareOverlayActivation();
+}
+
 void ScreenshotOverlayEventAdapter::clearEventTargets() {
     m_inputHandler = nullptr;
     m_raiseToolbarForCanvasInteraction = nullptr;

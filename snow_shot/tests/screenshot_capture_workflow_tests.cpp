@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <utility>
 
@@ -142,6 +143,12 @@ class CaptureRuntime final : public ScreenshotCaptureRuntimePort {
         }
         return true;
     }
+    void prepareOverlaySurfaces(const ScreenshotDisplaySession&) override {
+        ++prepareOverlaySurfaceCalls;
+        operations.push_back(QStringLiteral("prepare-overlay-pixels"));
+        if (duringOverlaySurfacePreparation)
+            duringOverlaySurfacePreparation();
+    }
     void showOverlayWindows(const ScreenshotDisplaySession&,
                             ScreenshotOverlayShowMode mode) override {
         ++showOverlayCalls;
@@ -153,6 +160,8 @@ class CaptureRuntime final : public ScreenshotCaptureRuntimePort {
         if (mode == ScreenshotOverlayShowMode::CapturedImage) {
             ++capturedImageShowCalls;
         }
+        if (duringOverlayShow)
+            duringOverlayShow();
     }
     void hideOverlayWindowsImmediately(const ScreenshotDisplaySession&) override {
         ++hideOverlayImmediatelyCalls;
@@ -214,6 +223,9 @@ class CaptureRuntime final : public ScreenshotCaptureRuntimePort {
     QVector<ScreenshotOverlayShowMode> showOverlayModes;
     int applyDisplayModelsCalls = 0;
     int preparePreCaptureOverlayCalls = 0;
+    int prepareOverlaySurfaceCalls = 0;
+    std::function<void()> duringOverlaySurfacePreparation;
+    std::function<void()> duringOverlayShow;
     int hideOverlayCalls = 0;
     int hideOverlayImmediatelyCalls = 0;
     int releaseSelectionPreviewCacheCalls = 0;
@@ -975,6 +987,234 @@ void capturedOverlayWaitsForImageAndSelectionInEitherOrder() {
     }
 }
 
+void cancellationDuringRevealCannotCompleteTheRetiredCapture() {
+    using Workflow = ScreenshotCaptureWorkflow;
+    for (const auto mode : {Workflow::StartMode::Normal, Workflow::StartMode::ExternalDrag}) {
+        for (const bool restart : {false, true}) {
+            ScreenshotCaptureState state;
+            ScreenshotDisplaySession displays;
+            ScreenshotGeometryMapper geometry;
+            ScreenshotInteractionState interaction;
+            ScreenshotSelectionModel selection;
+            ScreenshotIntelligentSelectionModel intelligent;
+            CaptureRuntime runtime;
+            ScreenshotCaptureWorkflowContext context{state,       runtime,   geometry,    displays,
+                                                     interaction, selection, intelligent, {}};
+            int presented = 0;
+            int pickerUpdates = 0;
+            context.presentation.capturePresented = [&] { ++presented; };
+            context.presentation.updateColorPicker = [&] { ++pickerUpdates; };
+            ScreenshotCaptureWorkflow workflow(context);
+            runtime.duringOverlayShow = [&] {
+                workflow.cancelCapture();
+                if (restart)
+                    workflow.startCapture(mode);
+            };
+            workflow.startCapture(mode);
+            const quint64 originalSession = state.sessionId;
+            CapturedDisplayModel snapshot;
+            snapshot.stableId = QStringLiteral("primary");
+            snapshot.physicalRect = QRect(0, 0, 64, 48);
+            snapshot.logicalRect = snapshot.physicalRect;
+            snapshot.image = QImage(64, 48, QImage::Format_RGBA8888);
+            snapshot.image.fill(Qt::blue);
+            const auto result = successfulResult(originalSession, snapshot);
+            runtime.deliverResult(result);
+            runtime.deliverResult(result);
+            require(runtime.showOverlayCalls == 1 && state.sessionId != originalSession &&
+                        presented == 0 && pickerUpdates == 0 && displays.startup &&
+                        displays.startup->phase != ScreenshotStartupContext::Phase::Revealed,
+                    "cancellation during native reveal must not publish stale presentation work");
+            require(state.captureInProgress == restart && (restart || interaction.inactive()),
+                    "stale reveal completion must preserve cancellation or a pending replacement");
+            if (restart) {
+                runtime.duringOverlayShow = {};
+                runtime.deliverResult(successfulResult(state.sessionId, snapshot));
+                require(runtime.showOverlayCalls == 2 && presented == 1 && pickerUpdates == 1 &&
+                            displays.startup->phase == ScreenshotStartupContext::Phase::Revealed,
+                        "a replacement capture must still publish its own presentation once");
+            }
+        }
+    }
+}
+
+void externalRevealPublishesItsLifecycleWithoutReapplyingSelection() {
+    using Workflow = ScreenshotCaptureWorkflow;
+    for (const auto mode : {Workflow::StartMode::Normal, Workflow::StartMode::ExternalDrag}) {
+        for (const auto presentation :
+             {Workflow::PresentationMode::Visible, Workflow::PresentationMode::Silent}) {
+            ScreenshotCaptureState state;
+            ScreenshotDisplaySession displays;
+            ScreenshotGeometryMapper geometry;
+            ScreenshotInteractionState interaction;
+            ScreenshotSelectionModel selection;
+            ScreenshotIntelligentSelectionModel intelligent;
+            CaptureRuntime runtime;
+            ScreenshotCaptureWorkflowContext context{state,       runtime,   geometry,    displays,
+                                                     interaction, selection, intelligent, {}};
+            context.smartSelectionEnabled = [] { return false; };
+            QVector<QString> completionOrder;
+            int prepared = 0;
+            int revealedUpdates = 0;
+            int presented = 0;
+            const QRect endpoint(10, 10, 21, 11);
+            context.presentation.beforeCapturePresented = [&] {
+                ++prepared;
+                selection.setSelectionStartEnd({10, 10}, {30, 20});
+            };
+            context.presentation.updateColorPicker = [&] {
+                completionOrder.push_back(QStringLiteral("picker"));
+            };
+            context.presentation.updateOverlayState = [&] {
+                if (!displays.startup ||
+                    displays.startup->phase != ScreenshotStartupContext::Phase::Revealed)
+                    return;
+                ++revealedUpdates;
+                completionOrder.push_back(QStringLiteral("revealed"));
+                require(runtime.showOverlayCalls == 1 && selection.pixelSelection() == endpoint,
+                        "the revealed lifecycle must publish the complete unchanged drag endpoint");
+            };
+            context.presentation.capturePresented = [&] {
+                ++presented;
+                completionOrder.push_back(QStringLiteral("presented"));
+                require(displays.startup->phase == ScreenshotStartupContext::Phase::Revealed &&
+                            selection.pixelSelection() == endpoint,
+                        "completion must retain the initially supplied endpoint after reveal");
+            };
+            Workflow workflow(context);
+            workflow.startCapture(mode, Workflow::ToolbarPreparation::OnDemand,
+                                  Workflow::ToolbarVisibility::Suppressed, presentation);
+            const quint64 session = state.sessionId;
+            CapturedDisplayModel snapshot;
+            snapshot.stableId = QStringLiteral("primary");
+            snapshot.physicalRect = QRect(0, 0, 64, 48);
+            snapshot.logicalRect = snapshot.physicalRect;
+            snapshot.image = QImage(64, 48, QImage::Format_RGBA8888);
+            snapshot.image.fill(Qt::blue);
+            const auto result = successfulResult(session, snapshot);
+            runtime.deliverResult(result);
+            runtime.deliverResult(result);
+            workflow.handleInitialSmartSelectionResolved(session);
+            const bool visible = presentation == Workflow::PresentationMode::Visible;
+            const bool publishesReveal = visible && mode == Workflow::StartMode::ExternalDrag;
+            QVector<QString> expectedOrder;
+            if (visible)
+                expectedOrder.push_back(QStringLiteral("picker"));
+            if (publishesReveal)
+                expectedOrder.push_back(QStringLiteral("revealed"));
+            expectedOrder.push_back(QStringLiteral("presented"));
+            require(prepared == 1 && presented == 1 &&
+                        revealedUpdates == (publishesReveal ? 1 : 0) &&
+                        completionOrder == expectedOrder,
+                    "visible external reveal must publish once between picker and completion; "
+                    "normal, silent and repeated readiness must not add that boundary");
+        }
+    }
+}
+
+void presentationCallbacksCannotContinueARetiredCapture() {
+    using Workflow = ScreenshotCaptureWorkflow;
+    enum class Boundary { ColorPicker, RevealedState, CapturePresented };
+    for (const auto mode : {Workflow::StartMode::Normal, Workflow::StartMode::ExternalDrag}) {
+        for (const auto boundary :
+             {Boundary::ColorPicker, Boundary::RevealedState, Boundary::CapturePresented}) {
+            for (const bool restart : {false, true}) {
+                for (const auto presentation :
+                     {Workflow::PresentationMode::Visible, Workflow::PresentationMode::Silent}) {
+                    if (boundary == Boundary::ColorPicker &&
+                        presentation == Workflow::PresentationMode::Silent)
+                        continue;
+                    if (boundary == Boundary::RevealedState &&
+                        (mode != Workflow::StartMode::ExternalDrag ||
+                         presentation == Workflow::PresentationMode::Silent))
+                        continue;
+                    ScreenshotCaptureState state;
+                    ScreenshotDisplaySession displays;
+                    ScreenshotGeometryMapper geometry;
+                    ScreenshotInteractionState interaction;
+                    ScreenshotSelectionModel selection;
+                    ScreenshotIntelligentSelectionModel intelligent;
+                    CaptureRuntime runtime;
+                    ScreenshotCaptureWorkflowContext context{state,       runtime,     geometry,
+                                                             displays,    interaction, selection,
+                                                             intelligent, {}};
+                    Workflow* currentWorkflow = nullptr;
+                    bool retired = false;
+                    int presented = 0;
+                    int pickerUpdates = 0;
+                    int refreshesAfterRetirement = -1;
+                    const auto retireCapture = [&] {
+                        if (retired)
+                            return;
+                        retired = true;
+                        currentWorkflow->cancelCapture();
+                        if (restart) {
+                            currentWorkflow->startCapture(
+                                mode, Workflow::ToolbarPreparation::OnDemand,
+                                Workflow::ToolbarVisibility::Suppressed, presentation);
+                        }
+                        refreshesAfterRetirement = runtime.startWorkflowRefreshCalls;
+                    };
+                    context.presentation.updateColorPicker = [&] {
+                        ++pickerUpdates;
+                        if (boundary == Boundary::ColorPicker)
+                            retireCapture();
+                    };
+                    context.presentation.updateOverlayState = [&] {
+                        if (boundary == Boundary::RevealedState && displays.startup &&
+                            displays.startup->phase == ScreenshotStartupContext::Phase::Revealed)
+                            retireCapture();
+                    };
+                    context.presentation.capturePresented = [&] {
+                        ++presented;
+                        if (boundary == Boundary::CapturePresented)
+                            retireCapture();
+                    };
+                    Workflow workflow(context);
+                    currentWorkflow = &workflow;
+                    workflow.startCapture(mode, Workflow::ToolbarPreparation::OnDemand,
+                                          Workflow::ToolbarVisibility::Suppressed, presentation);
+                    const quint64 originalSession = state.sessionId;
+                    CapturedDisplayModel snapshot;
+                    snapshot.stableId = QStringLiteral("primary");
+                    snapshot.physicalRect = QRect(0, 0, 64, 48);
+                    snapshot.logicalRect = snapshot.physicalRect;
+                    snapshot.image = QImage(64, 48, QImage::Format_RGBA8888);
+                    snapshot.image.fill(Qt::blue);
+                    const auto result = successfulResult(originalSession, snapshot);
+                    runtime.deliverResult(result);
+                    runtime.deliverResult(result);
+                    const int expectedPickerUpdates =
+                        presentation == Workflow::PresentationMode::Visible ? 1 : 0;
+                    const int expectedPresented = boundary == Boundary::CapturePresented ? 1 : 0;
+                    require(retired && state.sessionId != originalSession &&
+                                pickerUpdates == expectedPickerUpdates &&
+                                presented == expectedPresented &&
+                                runtime.startWorkflowRefreshCalls == refreshesAfterRetirement,
+                            "a retiring presentation callback must stop later completion and "
+                            "selector refresh work from its old capture");
+                    require(state.captureInProgress == restart &&
+                                (restart || interaction.inactive()) && displays.startup &&
+                                displays.startup->phase !=
+                                    ScreenshotStartupContext::Phase::Revealed,
+                            "callback retirement must preserve an idle or pending replacement "
+                            "capture");
+                    if (restart) {
+                        runtime.deliverResult(successfulResult(state.sessionId, snapshot));
+                        require(pickerUpdates == 2 * expectedPickerUpdates &&
+                                    presented == expectedPresented + 1 &&
+                                    !state.captureInProgress &&
+                                    displays.startup->phase ==
+                                        ScreenshotStartupContext::Phase::Revealed,
+                                "the replacement must retain its own visible or silent completion "
+                                "callback");
+                    }
+                }
+            }
+        }
+    }
+}
+
 void overlayCapturePrewarmsToolbarSurfaceAfterCaptureDispatch() {
     ScreenshotCaptureState state;
     state.sessionState = ScreenshotSessionState::IdlePrepared;
@@ -1619,6 +1859,57 @@ void externalDragBypassesSelectorAndPreparesBeforeReveal() {
     }
 }
 
+void externalDragPreparesHiddenPixelsAfterDispatch() {
+    using Workflow = ScreenshotCaptureWorkflow;
+    for (const auto mode : {Workflow::StartMode::Normal, Workflow::StartMode::ExternalDrag}) {
+        for (const auto presentation :
+             {Workflow::PresentationMode::Visible, Workflow::PresentationMode::Silent}) {
+            for (const bool failImmediately : {false, true}) {
+                ScreenshotCaptureState state;
+                ScreenshotDisplaySession displays;
+                ScreenshotGeometryMapper geometry;
+                ScreenshotInteractionState interaction;
+                ScreenshotSelectionModel selection;
+                ScreenshotIntelligentSelectionModel intelligent;
+                CaptureRuntime runtime;
+                runtime.failCaptureSynchronously = failImmediately;
+                auto workflow = makeWorkflow(state, displays, geometry, interaction, selection,
+                                             intelligent, runtime);
+                workflow.startCapture(mode, Workflow::ToolbarPreparation::OnDemand,
+                                      Workflow::ToolbarVisibility::Suppressed, presentation);
+                const bool prepare = mode == Workflow::StartMode::ExternalDrag &&
+                                     presentation == Workflow::PresentationMode::Visible &&
+                                     !failImmediately;
+                require(runtime.prepareOverlaySurfaceCalls == (prepare ? 1 : 0),
+                        "only a pending visible external capture prepares overlay pixels");
+                require(runtime.showOverlayCalls == 0,
+                        "pixel preparation must never reveal an uncaptured surface");
+                if (prepare) {
+                    require(
+                        runtime.operations.indexOf(QStringLiteral("capture-dispatched")) <
+                            runtime.operations.indexOf(QStringLiteral("prepare-overlay-pixels")),
+                        "native acquisition must start before hidden pixel preparation");
+                }
+            }
+        }
+    }
+
+    ScreenshotCaptureState state;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotInteractionState interaction;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    CaptureRuntime runtime;
+    auto workflow =
+        makeWorkflow(state, displays, geometry, interaction, selection, intelligent, runtime);
+    runtime.duringOverlaySurfacePreparation = [&workflow] { workflow.cancelCapture(); };
+    workflow.startCapture(Workflow::StartMode::ExternalDrag);
+    require(runtime.prepareOverlaySurfaceCalls == 1 && runtime.prewarmToolbarSurfaceCalls == 0 &&
+                runtime.showOverlayCalls == 0 && interaction.inactive() && !state.captureInProgress,
+            "a cancellation during pixel preparation must not restart toolbar or reveal work");
+}
+
 void externalDragDisplayChangesInvalidatePendingCapture() {
     ScreenshotCaptureState state;
     state.sessionState = ScreenshotSessionState::IdlePrepared;
@@ -2255,6 +2546,7 @@ int main() {
     externalDragDisplayChangesInvalidatePendingCapture();
     globalDragCoordinatesStayPhysicalAcrossDifferentDisplayScales();
     externalDragBypassesSelectorAndPreparesBeforeReveal();
+    externalDragPreparesHiddenPixelsAfterDispatch();
     initialCaptureSnapshotsScreenshotSettings();
     captureRestoresSelectionPreferencesAfterReset();
     idlePrewarmDoesNotInitializeSelector();
@@ -2266,6 +2558,9 @@ int main() {
     restartingCaptureReleasesPreviousSelectorCache();
     captureEndResetsPresentationBeforeDeferredCleanup();
     capturePresentedRunsAfterCapturedOverlayIsShown();
+    cancellationDuringRevealCannotCompleteTheRetiredCapture();
+    externalRevealPublishesItsLifecycleWithoutReapplyingSelection();
+    presentationCallbacksCannotContinueARetiredCapture();
     capturedOverlayWaitsForImageAndSelectionInEitherOrder();
     overlayCapturePrewarmsToolbarSurfaceAfterCaptureDispatch();
     overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch();

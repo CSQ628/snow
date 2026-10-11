@@ -9,23 +9,28 @@
 #include "snow_shot/presentation/screenshotscrollingthumbnailwidget.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include <QEvent>
+#include <QBackingStore>
 #include "snow_shot/platform/windows/windowchrome.h"
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/screenshotnative.h"
 #endif
 #include <QGuiApplication>
+#include <QImage>
 #include "../capture/screenshotscrollingdiagnostics.h"
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRegion>
+#include <QPointer>
 #include <QScopedValueRollback>
 #include "snow_shot/presentation/screenshotregiontypecontrol.h"
 #include <QResizeEvent>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QWindow>
+#include <QTimer>
+#include <QtMath>
 
 #include <algorithm>
 #include <optional>
@@ -35,6 +40,7 @@ namespace {
 constexpr int kScrollingThumbnailGap = 8;
 constexpr int kScrollingThumbnailMargin = 8;
 constexpr auto kHistoryLoadingMessageKey = "screenshot-history-loading";
+constexpr qint64 kNativeSurfacePreparationBytesPerStep = 1024 * 1024;
 
 #if defined(SNOW_SHOT_CAPTURE_PERF_INSTRUMENTATION)
 qint64 paintRegionArea(const QRegion& region) {
@@ -218,7 +224,7 @@ void ScreenshotOverlayWindow::setScreenshotSelectionState(
     if (m_screenshotRenderer != nullptr) {
         ScreenshotSelectionVisualState state = requestedState;
         state.borderVisible = m_screenshotRenderer->selectionBorderVisible();
-        m_screenshotRenderer->applySelectionState(state);
+        trackSelectionPaintDamage(m_screenshotRenderer->applySelectionState(state));
     }
 }
 
@@ -226,7 +232,8 @@ void ScreenshotOverlayWindow::setScreenshotSelectionRegion(
     const ScreenshotRegionGeometry& region, const ScreenshotRegionGeometry& confirmed,
     const QRectF& marquee, bool subtracting, const QColor& danger) {
     if (m_screenshotRenderer)
-        m_screenshotRenderer->setSelectionRegion(region, confirmed, marquee, subtracting, danger);
+        trackSelectionPaintDamage(m_screenshotRenderer->setSelectionRegion(
+            region, confirmed, marquee, subtracting, danger));
 }
 
 void ScreenshotOverlayWindow::clearScreenshotSelection() {
@@ -238,7 +245,7 @@ void ScreenshotOverlayWindow::clearScreenshotSelection() {
         });
     }
     if (m_screenshotRenderer != nullptr) {
-        m_screenshotRenderer->clearSelection();
+        trackSelectionPaintDamage(m_screenshotRenderer->clearSelection());
     }
 }
 
@@ -252,7 +259,7 @@ bool ScreenshotOverlayWindow::screenshotSelectionHandlesVisible() const {
 
 void ScreenshotOverlayWindow::setScreenshotSelectionBorderVisible(bool visible) {
     if (m_screenshotRenderer != nullptr) {
-        m_screenshotRenderer->setSelectionBorderVisible(visible);
+        trackSelectionPaintDamage(m_screenshotRenderer->setSelectionBorderVisible(visible));
     }
 }
 
@@ -596,6 +603,14 @@ quint64 ScreenshotOverlayWindow::transparentClearCountForTesting() const {
     return m_transparentClearCount;
 }
 
+quint64 ScreenshotOverlayWindow::nativeSurfacePreparationCountForTesting() const {
+    return m_nativeSurfacePreparationCount;
+}
+
+quint64 ScreenshotOverlayWindow::keyboardActivationCountForTesting() const {
+    return m_keyboardActivationCount;
+}
+
 ScreenshotCanvasRenderer* ScreenshotOverlayWindow::screenshotRendererForTesting() const {
     return m_screenshotRenderer.get();
 }
@@ -608,13 +623,125 @@ void ScreenshotOverlayWindow::warmPresentationSurface() {
     }
 }
 
+void ScreenshotOverlayWindow::prepareNativeSurface() {
+    static_cast<void>(prepareNativeSurfacePixels(true));
+}
+
+bool ScreenshotOverlayWindow::prepareNativeSurfaceStep() {
+    return prepareNativeSurfacePixels(false);
+}
+
+void ScreenshotOverlayWindow::invalidateNativeSurfacePreparation() {
+    ++m_nativeSurfacePreparationEpoch;
+    m_nativeSurfacePreparation = {};
+}
+
+bool ScreenshotOverlayWindow::prepareNativeSurfacePixels(bool fullRegion) {
+    if (isVisible() || size().isEmpty()) {
+        return true;
+    }
+
+    const QPointer<ScreenshotOverlayWindow> guard(this);
+    const quint64 generation = m_presentationGeneration;
+    const auto preparationCurrent = [&]() {
+        return guard != nullptr && guard->presentationGeneration() == generation &&
+               !guard->isVisible();
+    };
+    ensurePolished();
+    if (!preparationCurrent())
+        return true;
+    create();
+    if (!preparationCurrent())
+        return true;
+    QBackingStore* store = backingStore();
+    if (store == nullptr)
+        return true;
+    const QSize logicalSize = size();
+    const qreal dpr = devicePixelRatioF();
+    const quint64 epoch = m_nativeSurfacePreparationEpoch;
+    auto progress = m_nativeSurfacePreparation;
+    const bool sameSurface = progress.store == store && progress.logicalSize == logicalSize &&
+                             qFuzzyCompare(progress.devicePixelRatio, dpr) &&
+                             progress.epoch == epoch && store->size() == logicalSize;
+    if (sameSurface && progress.nextLogicalRow == logicalSize.height()) {
+        return true;
+    }
+    const auto pixelsCurrent = [&]() {
+        return preparationCurrent() && guard->m_nativeSurfacePreparationEpoch == epoch &&
+               guard->backingStore() == store && guard->size() == logicalSize &&
+               qFuzzyCompare(guard->devicePixelRatioF(), dpr);
+    };
+
+    SNOW_SHOT_CAPTURE_PERF_SCOPE("presentation.window.surface_prepare_pixels");
+    if (!sameSurface) {
+        progress = NativeSurfacePreparationProgress{store, logicalSize, dpr, 0, 0, epoch};
+        store->resize(logicalSize);
+        if (!fullRegion) {
+            // Force lazy platform allocation and inspect the actual raster stride
+            // only within its paint lifetime. Allocation itself is indivisible;
+            // Cocoa may also initialize a fresh IOSurface at this point.
+            store->beginPaint(QRegion());
+            const QPaintDevice* device = store->paintDevice();
+            if (device != nullptr) {
+                progress.bytesPerPhysicalRow =
+                    device->devType() == QInternal::Image
+                        ? static_cast<const QImage*>(device)->bytesPerLine()
+                        : static_cast<qint64>(device->width()) * ((device->depth() + 7) / 8);
+            }
+            store->endPaint();
+            if (!pixelsCurrent())
+                return true;
+            if (progress.bytesPerPhysicalRow <= 0)
+                return true;
+        }
+    }
+
+    int rowEnd = logicalSize.height();
+    QRect paintRect(QPoint(), logicalSize);
+    if (!fullRegion) {
+        const qint64 physicalRows = std::max<qint64>(1, kNativeSurfacePreparationBytesPerStep /
+                                                            progress.bytesPerPhysicalRow);
+        // Include a logical row of overlap at both ends to cover fractional-DPR
+        // rounding, reserving a physical row for rounding of the requested clear.
+        // One logical row is the minimum, even on unusually wide/high-DPR surfaces.
+        const int logicalRows = std::max(1, qFloor(static_cast<qreal>(physicalRows - 1) / dpr) - 2);
+        rowEnd = std::min(logicalSize.height(), progress.nextLogicalRow + logicalRows);
+        const int paintTop = std::max(0, progress.nextLogicalRow - 1);
+        const int paintBottom = std::min(logicalSize.height(), rowEnd + 1);
+        paintRect = QRect(0, paintTop, logicalSize.width(), paintBottom - paintTop);
+    }
+    // Each platform clears the declared alpha region, without a duplicate fill.
+    // Do not flush hidden or partially initialized pixels. First show still
+    // initializes and publishes the complete captured frame through normal paint.
+    store->beginPaint(paintRect);
+    store->endPaint();
+    if (!pixelsCurrent())
+        return true;
+    progress.nextLogicalRow = rowEnd;
+    m_nativeSurfacePreparation = progress;
+    if (rowEnd != logicalSize.height())
+        return false;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    ++m_nativeSurfacePreparationCount;
+#endif
+    return true;
+}
+
 void ScreenshotOverlayWindow::showPreparedFrame(bool deferFirstPaint) {
     static_cast<void>(showPreparedFrameForPresentation(beginPresentation(), deferFirstPaint));
 }
 
 quint64 ScreenshotOverlayWindow::beginPresentation() {
+    invalidateNativeSurfacePreparation();
     ++m_presentationGeneration;
     m_presentationActive = true;
+    m_firstCanvasPaintGeneration = 0;
+    m_activationRequestedGeneration = 0;
+    m_pendingActivationGeneration = 0;
+    m_selectionPaintFenceGeneration = 0;
+    m_nativeActivationStartedGeneration = 0;
+    m_framePacedPresentation = false;
+    m_pendingSelectionPaintDamage = {};
     return m_presentationGeneration;
 }
 
@@ -627,8 +754,126 @@ bool ScreenshotOverlayWindow::isPresentationCurrent(quint64 generation) const {
 }
 
 void ScreenshotOverlayWindow::retirePresentation() {
+    invalidateNativeSurfacePreparation();
     ++m_presentationGeneration;
     m_presentationActive = false;
+    m_activationRequestedGeneration = 0;
+    m_pendingActivationGeneration = 0;
+    m_selectionPaintFenceGeneration = 0;
+    m_nativeActivationStartedGeneration = 0;
+    m_framePacedPresentation = false;
+    m_pendingSelectionPaintDamage = {};
+}
+
+void ScreenshotOverlayWindow::requestPresentationActivation(quint64 generation,
+                                                            bool afterFirstPaint) {
+    if (!isPresentationCurrent(generation) || !isVisible() ||
+        m_activationRequestedGeneration == generation) {
+        return;
+    }
+    m_activationRequestedGeneration = generation;
+    m_framePacedPresentation = m_framePacedPresentation || afterFirstPaint;
+    if (windowHandle() != nullptr)
+        windowHandle()->installEventFilter(this);
+    if (afterFirstPaint && m_firstCanvasPaintGeneration != generation) {
+        m_pendingActivationGeneration = generation;
+        return;
+    }
+    queuePresentationActivation(generation, afterFirstPaint);
+}
+
+void ScreenshotOverlayWindow::trackSelectionPaintDamage(const QRegion& damage) {
+    if (m_canvas != nullptr && m_presentationActive && m_framePacedPresentation &&
+        m_selectionPaintFenceGeneration != m_presentationGeneration &&
+        m_nativeActivationStartedGeneration != m_presentationGeneration) {
+        m_pendingSelectionPaintDamage += damage.intersected(m_canvas->rect());
+    }
+}
+
+bool ScreenshotOverlayWindow::hasUnpaintedVisibleSelectionDamage() const {
+    // An unexposed or disabled canvas cannot publish QWidget::update() damage.
+    // Activation may itself expose the window, so never reserve focus for that paint.
+    return m_canvas != nullptr && m_canvas->isVisible() && m_canvas->updatesEnabled() &&
+           updatesEnabled() && isVisible() && windowHandle() != nullptr &&
+           windowHandle()->isExposed() &&
+           !m_pendingSelectionPaintDamage.intersected(m_canvas->visibleRegion()).isEmpty();
+}
+
+void ScreenshotOverlayWindow::resumePresentationActivationAfterSelectionPaint() {
+    if (m_pendingActivationGeneration == m_presentationGeneration &&
+        m_selectionPaintFenceGeneration == m_presentationGeneration &&
+        isPresentationCurrent(m_presentationGeneration) && isVisible() &&
+        !hasUnpaintedVisibleSelectionDamage()) {
+        const quint64 generation = std::exchange(m_pendingActivationGeneration, 0);
+        queuePresentationActivation(generation, true);
+    }
+}
+
+void ScreenshotOverlayWindow::invalidateSelectionActivationPaint() {
+    if (m_canvas != nullptr && m_framePacedPresentation &&
+        m_nativeActivationStartedGeneration != m_presentationGeneration &&
+        isPresentationCurrent(m_presentationGeneration) &&
+        (!m_pendingSelectionPaintDamage.isEmpty() ||
+         m_selectionPaintFenceGeneration == m_presentationGeneration)) {
+        // Geometry or DPR changes replace the coordinate space of the outstanding
+        // damage. Require a fresh frame in the new viewport before activation.
+        m_pendingSelectionPaintDamage = QRegion(m_canvas->rect());
+        m_canvas->update();
+    }
+}
+
+void ScreenshotOverlayWindow::queuePresentationActivation(quint64 generation, bool framePaced) {
+    QTimer::singleShot(0, this, [this, generation, framePaced]() {
+        if (!isPresentationCurrent(generation) || !isVisible()) {
+            return;
+        }
+        const QPointer<ScreenshotOverlayWindow> guard(this);
+        // Foreground/focus negotiation can repaint synchronously before the native
+        // frame notifier runs. Commit an already due drag frame first, so that
+        // repaint includes its pending selection geometry.
+        m_eventSink.prepareOverlayActivation();
+        if (guard == nullptr || !isPresentationCurrent(generation) || !isVisible()) {
+            return;
+        }
+        if (framePaced && m_selectionPaintFenceGeneration != generation &&
+            hasUnpaintedVisibleSelectionDamage()) {
+            // The due hook or the native frame wake may have just queued owner
+            // geometry. Publish that paint before blocking foreground negotiation.
+            // Defer only once: high-rate input must not starve keyboard activation.
+            // Freeze the awaited damage here; later input cannot enlarge this fence.
+            m_selectionPaintFenceGeneration = generation;
+            m_pendingActivationGeneration = generation;
+            return;
+        }
+        m_nativeActivationStartedGeneration = generation;
+        m_pendingSelectionPaintDamage = {};
+        SNOW_SHOT_CAPTURE_PERF_SCOPE("presentation.window.activate");
+        SNOW_SHOT_CAPTURE_PERF_COUNTER("presentation.window.activation_requests", 1);
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+        ++m_keyboardActivationCount;
+#endif
+        activateWindow();
+        if (guard == nullptr || !isPresentationCurrent(generation) || !isVisible()) {
+            return;
+        }
+        if (m_canvas != nullptr) {
+            m_canvas->setFocus(Qt::OtherFocusReason);
+        }
+        if (guard != nullptr && isPresentationCurrent(generation) && isVisible()) {
+            commitInitialSelectionCursor();
+            if (guard == nullptr || !isPresentationCurrent(generation) || !isVisible()) {
+                return;
+            }
+            // Native focus delivery can update the cursor after activateWindow()
+            // returns. Reassert once on its following Qt dispatch, under the same
+            // presentation guard used by the original captured-image reveal.
+            QTimer::singleShot(0, this, [this, generation]() {
+                if (isPresentationCurrent(generation) && isVisible()) {
+                    commitInitialSelectionCursor();
+                }
+            });
+        }
+    });
 }
 
 bool ScreenshotOverlayWindow::showPreparedFrameForPresentation(quint64 generation,
@@ -636,6 +881,9 @@ bool ScreenshotOverlayWindow::showPreparedFrameForPresentation(quint64 generatio
     if (!isPresentationCurrent(generation)) {
         return false;
     }
+    // Show can synchronously dispatch paint and pending input before the presenter
+    // requests keyboard ownership. Track its damage under this reservation too.
+    m_framePacedPresentation = m_framePacedPresentation || deferFirstPaint;
     // The presenter's internal show() publishes this reservation. A separate public
     // show() starts a new presentation even when the pooled widget remains visible.
     const QScopedValueRollback<bool> showingPreparedFrame(m_showingPreparedFrame, !isVisible());
@@ -722,10 +970,20 @@ void ScreenshotOverlayWindow::initializeScreenshotSurface() {
 }
 
 bool ScreenshotOverlayWindow::event(QEvent* event) {
+    if (event != nullptr && (event->type() == QEvent::DevicePixelRatioChange ||
+                             event->type() == QEvent::ScreenChangeInternal)) {
+        invalidateNativeSurfacePreparation();
+        invalidateSelectionActivationPaint();
+    }
     if (event != nullptr &&
         (event->type() == QEvent::Hide || event->type() == QEvent::WindowDeactivate)) {
+        const QPointer<ScreenshotOverlayWindow> guard(this);
         m_eventSink.cancelEffectDrag();
+        if (guard == nullptr)
+            return true;
         m_eventSink.leaveEffectEditors();
+        if (guard == nullptr)
+            return true;
     }
     if (event != nullptr && event->type() == QEvent::Hide) {
         retirePresentation();
@@ -774,21 +1032,50 @@ bool ScreenshotOverlayWindow::event(QEvent* event) {
     SNOW_SHOT_CAPTURE_PERF_SCOPE("presentation.window.update_request");
     SNOW_SHOT_CAPTURE_PERF_COUNTER("presentation.window.update_request_events", 1);
     SNOW_SHOT_CAPTURE_PERF_MILESTONE("presentation.window.update_request_begin");
+    const QPointer<ScreenshotOverlayWindow> guard(this);
     const bool handled = QWidget::event(event);
+    if (guard != nullptr) {
+        // An opaque sibling can consume the entire dirty area without a canvas
+        // Paint. Release the fence after the parent update when no visible owner
+        // damage remains; genuinely unpainted visible pixels still keep waiting.
+        resumePresentationActivationAfterSelectionPaint();
+    }
     SNOW_SHOT_CAPTURE_PERF_MILESTONE("presentation.window.update_request_end");
     return handled;
 }
 
 bool ScreenshotOverlayWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == windowHandle() && event != nullptr && event->type() == QEvent::Expose)
+        resumePresentationActivationAfterSelectionPaint();
     if (watched == m_regionTypeControl && event != nullptr && event->type() == QEvent::Resize)
         layoutRegionTypeControl();
     if (watched == m_canvas && event != nullptr) {
+        const QPointer<ScreenshotOverlayWindow> guard(this);
         if (event->type() == QEvent::Leave)
             m_eventSink.leaveEffectEditors();
         if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide)
             m_eventSink.cancelEffectDrag();
+        if (guard == nullptr)
+            return true;
+        if (event->type() == QEvent::Hide)
+            resumePresentationActivationAfterSelectionPaint();
+        if (event->type() == QEvent::Resize)
+            invalidateSelectionActivationPaint();
     }
     if (watched == m_canvas && event != nullptr && event->type() == QEvent::Paint) {
+        if (m_presentationActive && isVisible()) {
+            const auto* paint = static_cast<QPaintEvent*>(event);
+            m_pendingSelectionPaintDamage -= paint->region();
+            m_firstCanvasPaintGeneration = m_presentationGeneration;
+            if (m_pendingActivationGeneration == m_presentationGeneration &&
+                (m_selectionPaintFenceGeneration != m_presentationGeneration ||
+                 !hasUnpaintedVisibleSelectionDamage())) {
+                const quint64 generation = std::exchange(m_pendingActivationGeneration, 0);
+                // Dispatch after this paint returns; do not put foreground negotiation
+                // ahead of the initial selection frame or guess its refresh interval.
+                queuePresentationActivation(generation, true);
+            }
+        }
         SNOW_SHOT_CAPTURE_PERF_COUNTER("presentation.window.canvas.paint_dispatches", 1);
 #if defined(SNOW_SHOT_CAPTURE_PERF_INSTRUMENTATION)
         const auto* paintEvent = static_cast<QPaintEvent*>(event);
@@ -877,6 +1164,8 @@ void ScreenshotOverlayWindow::paintEvent(QPaintEvent* event) {
 }
 
 void ScreenshotOverlayWindow::resizeEvent(QResizeEvent* event) {
+    invalidateNativeSurfacePreparation();
+    invalidateSelectionActivationPaint();
     QWidget::resizeEvent(event);
     layoutScrollingThumbnail();
     layoutRegionTypeControl();
@@ -1133,7 +1422,7 @@ void ScreenshotOverlayWindow::layoutRegionTypeControl() {
 
 void ScreenshotOverlayWindow::setSelectionDraft(const QPainterPath& path,
                                                 const QVector<QPointF>& vertices) {
-    m_screenshotRenderer->setSelectionDraft(path, vertices);
+    trackSelectionPaintDamage(m_screenshotRenderer->setSelectionDraft(path, vertices));
 }
 
 void ScreenshotOverlayWindow::setScrollingTrimModel(

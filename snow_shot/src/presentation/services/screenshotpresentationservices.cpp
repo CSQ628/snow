@@ -370,6 +370,16 @@ void ScreenshotPresentationServices::discardSelectionDragInput() {
     m_state->selectionDragInput = {};
 }
 
+void ScreenshotPresentationServices::flushDueSelectionDragInput() {
+    if (m_state->inFrame || !m_state->initialized ||
+        m_state->sessionId != m_context.captureState.sessionId ||
+        !m_context.interaction.manualSelecting() || !m_context.interaction.dragging() ||
+        m_context.captureState.presentationSuppressed || !m_state->selectionDragInput ||
+        !m_state->frameClock.due(nowNanoseconds()))
+        return;
+    flushPendingFrame();
+}
+
 ScreenshotPresentationServices::Preparation ScreenshotPresentationServices::prepareOverlayState() {
     m_state->selectionDragDirty = false;
     const bool newSession =

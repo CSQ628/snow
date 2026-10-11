@@ -85,6 +85,11 @@ void ScreenshotOverlayCoordinator::prepareDisplayModels(ScreenshotDisplaySession
     m_canvasPresenter.prepareDisplayModels(displaySession);
 }
 
+void ScreenshotOverlayCoordinator::prepareOverlaySurfaces(
+    const ScreenshotDisplaySession& displaySession) {
+    m_canvasPresenter.prepareOverlaySurfaces(displaySession);
+}
+
 void ScreenshotOverlayCoordinator::applyDisplayModels(ScreenshotDisplaySession& displaySession) {
     m_canvasPresenter.applyDisplayModels(displaySession);
     ++m_presentationRevision;

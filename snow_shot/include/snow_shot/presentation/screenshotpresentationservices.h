@@ -77,6 +77,8 @@ class ScreenshotPresentationServices final {
     // Pull external drag input at the presentation deadline, before preparing that frame.
     void requestSelectionDragInput(std::function<void()> input);
     void discardSelectionDragInput();
+    // Native activation can repaint before the scheduler wake. Preserve the existing deadline.
+    void flushDueSelectionDragInput();
     void updatePointerPresentation(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
     void requestColorPickerPresentation(ScreenshotOverlayWindow* overlay,
                                         const QPointF& localPosition);
