@@ -2401,6 +2401,11 @@ void SnowCanvasWidget::Impl::syncAfterEngineMutation() {
 
 void SnowCanvasWidget::Impl::syncAfterEngineMutation(bool emitSignals) {
     distanceCreationPixelScale.reset();
+    std::uint8_t captureActive = 0;
+    if (hasViewport() &&
+        snow_runtime_has_pointer_capture(runtimeBinding.engine(), &captureActive) == SNOW_OK) {
+        inputHandler.syncPointerCapture(captureActive != 0);
+    }
     if (auto* owner = runtimeBinding.runtimeOwner())
         snow_canvas_runtime::Access::smartErase(*owner).sync(runtimeBinding.engine());
     const std::uint64_t previousSceneRevision =

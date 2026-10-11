@@ -154,6 +154,42 @@ pub(crate) struct MagnifierWheelAccumulator {
 }
 
 impl Editor {
+    /// Document mutations own appearance; a pointer gesture owns only its geometry snapshot.
+    /// Rebase after successful commits and history replay so finishing or cancelling a drag
+    /// cannot undo a separately committed style edit.
+    pub(crate) fn sync_magnifier_interaction_styles(&mut self, document: &DocumentModel) {
+        match &mut self.state.interaction {
+            InteractionState::EditingMagnifier(state) => {
+                if let Ok(committed) = document.magnifier(state.id) {
+                    let style = MagnifierStyle::from_data(committed);
+                    style.apply(&mut state.original);
+                    style.apply(&mut state.preview);
+                    state.original.opacity = committed.opacity;
+                    state.preview.opacity = committed.opacity;
+                }
+            }
+            InteractionState::PendingSelectionMove(state) => {
+                sync_selection_magnifier_styles(
+                    document,
+                    &mut state.original_magnifiers,
+                    &mut state.original_elements,
+                    &mut [],
+                    state.original_arrows.is_empty(),
+                );
+            }
+            InteractionState::EditingSelection(state) => {
+                sync_selection_magnifier_styles(
+                    document,
+                    &mut state.original_magnifiers,
+                    &mut state.original_elements,
+                    &mut state.preview_elements,
+                    state.original_arrows.is_empty(),
+                );
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn process_magnifier_wheel_event(
         &mut self,
         document: &DocumentModel,
@@ -448,6 +484,57 @@ impl Editor {
                 })
             }
             _ => Ok(Default::default()),
+        }
+    }
+}
+
+fn sync_selection_magnifier_styles(
+    document: &DocumentModel,
+    magnifiers: &mut [SelectionMagnifierState],
+    original_elements: &mut [SelectionRectState],
+    preview_elements: &mut [SelectionRectState],
+    no_arrows: bool,
+) {
+    let single = original_elements.len() == 1 && no_arrows;
+    for value in magnifiers {
+        let Ok(committed) = document.magnifier(value.id) else {
+            continue;
+        };
+        let style = MagnifierStyle::from_data(committed);
+        let properties = MagnifierStyle::from_data(&value.magnifier).differences(style);
+        style.apply(&mut value.magnifier);
+        value.magnifier.opacity = committed.opacity;
+        // A group proxy is the union of source and lens, frozen at pointer down. Only a
+        // single source proxy carries the shape/corner appearance used by its handles.
+        if single {
+            for element in original_elements
+                .iter_mut()
+                .chain(preview_elements.iter_mut())
+            {
+                if element.id != value.id {
+                    continue;
+                }
+                if properties & MAGNIFIER_STYLE_PROPERTY_SHAPE != 0 {
+                    element.rect.highlight_shape = style.shape;
+                }
+                if properties & MAGNIFIER_STYLE_PROPERTY_CORNER_RADII != 0 {
+                    element.rect.corner_radii = style.corner_radii;
+                }
+                if properties
+                    & (MAGNIFIER_STYLE_PROPERTY_SHAPE | MAGNIFIER_STYLE_PROPERTY_CORNER_RADII)
+                    != 0
+                {
+                    element.rect.corner_radii =
+                        snow_draw_engine_document::normalize_shape_corner_radii(
+                            element.rect.highlight_shape,
+                            element.rect.width,
+                            element.rect.height,
+                            element.rect.corner_radii,
+                        );
+                }
+                element.rect.stroke = style.stroke;
+                element.rect.opacity = committed.opacity;
+            }
         }
     }
 }

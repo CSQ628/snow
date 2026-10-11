@@ -40,7 +40,7 @@ void drag(SnowCanvasWidget& canvas, QPointF start, QPointF end) {
     mouse(canvas, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
 }
 
-QJsonArray magnifiers(const SnowCanvasRuntime& runtime) {
+QJsonArray records(const SnowCanvasRuntime& runtime, const QString& kind) {
     const auto document = QJsonDocument::fromJson(runtime.serializeDocumentSession())
                               .object()
                               .value(QStringLiteral("document"))
@@ -48,11 +48,15 @@ QJsonArray magnifiers(const SnowCanvasRuntime& runtime) {
     QJsonArray result;
     for (const auto& slot : document.value(QStringLiteral("slots")).toArray()) {
         const auto data = slot.toObject().value(QStringLiteral("data")).toObject();
-        if (data.contains(QStringLiteral("Magnifier"))) {
-            result.append(data.value(QStringLiteral("Magnifier")));
+        if (data.contains(kind)) {
+            result.append(data.value(kind));
         }
     }
     return result;
+}
+
+QJsonArray magnifiers(const SnowCanvasRuntime& runtime) {
+    return records(runtime, QStringLiteral("Magnifier"));
 }
 
 QJsonObject magnifier(const SnowCanvasRuntime& runtime) {
@@ -80,9 +84,10 @@ void prepare(SnowCanvasWidget& canvas) {
 
 bool wheel(SnowCanvasWidget& canvas, int pixels, int angle = 0,
            Qt::KeyboardModifiers modifiers = Qt::NoModifier, bool native = false,
-           Qt::MouseEventSource source = Qt::MouseEventSynthesizedBySystem) {
+           Qt::MouseEventSource source = Qt::MouseEventSynthesizedBySystem,
+           Qt::MouseButtons buttons = Qt::NoButton) {
     QWheelEvent event(QPointF(260, 190), canvas.mapToGlobal(QPoint(260, 190)), QPoint(0, pixels),
-                      QPoint(0, angle), Qt::NoButton, modifiers, Qt::NoScrollPhase, false, source);
+                      QPoint(0, angle), buttons, modifiers, Qt::NoScrollPhase, false, source);
     if (!native)
         return canvas.adjustMagnifierFromWheel(event);
     event.ignore();
@@ -514,6 +519,149 @@ void requireChangedPixelsRepainted(const QImage& before, const QImage& after,
     require(changed > 0, "the partial original-image change must affect rendered pixels");
 }
 
+void magnifierSelectionDragsAllSelectedBodies() {
+    for (bool dragSource : {false, true}) {
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        prepare(canvas);
+        drag(canvas, {220, 160}, {300, 220});
+        selectMagnifier(canvas);
+        const auto source = center(magnifier(runtime), QStringLiteral("source_center"));
+        const auto lensBody = canvas.canvasToViewTransform().map(source + QPointF(60, 0));
+        drag(canvas, lensBody, lensBody + QPointF(180, 0));
+        const auto originalMagnifier = magnifier(runtime);
+
+        require(canvas.setCanvasTool(SnowCanvasTool::Shape), "create a mixed-selection shape");
+        auto shapeStyle = canvas.canvasStyleToolbarState().shapeStyle;
+        shapeStyle.fill = Qt::blue;
+        require(canvas.setCanvasShapeStylePatch(shapeStyle, SnowCanvasShapeStylePropertyFillColor,
+                                                SnowCanvasShapeKind::Rectangle),
+                "make the selected rectangle body interactive");
+        drag(canvas, {600, 320}, {680, 380});
+        const auto rectangles = records(runtime, QStringLiteral("Rectangle"));
+        require(rectangles.size() == 1, "the mixed-selection fixture contains one rectangle");
+        const auto originalRectangle = rectangles.first().toObject();
+        require(canvas.setCanvasTool(SnowCanvasTool::Select), "select both compound annotations");
+        drag(canvas, {100, 60}, {760, 500});
+        const auto selection = runtime.selectedElementIds();
+        require(selection.size() == 2, "the marquee selects the magnifier and rectangle");
+
+        const auto start = canvas.canvasToViewTransform().map(
+            dragSource ? source : center(originalRectangle, QStringLiteral("center")));
+        const QPointF delta(30, 15);
+        mouse(canvas, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseMove, start + delta, Qt::NoButton, Qt::LeftButton);
+        require(runtime.selectedElementIds() == selection &&
+                    magnifier(runtime) == originalMagnifier &&
+                    records(runtime, QStringLiteral("Rectangle")) == rectangles,
+                "drag previews preserve the complete selection and committed document");
+        mouse(canvas, QEvent::MouseButtonRelease, start + delta, Qt::LeftButton, Qt::NoButton);
+        const auto movedMagnifier = magnifier(runtime);
+        const auto movedRectangle =
+            records(runtime, QStringLiteral("Rectangle")).first().toObject();
+        require(runtime.selectedElementIds() == selection &&
+                    near(center(movedMagnifier, QStringLiteral("source_center")), source + delta) &&
+                    near(center(movedMagnifier, QStringLiteral("magnified_center")),
+                         center(originalMagnifier, QStringLiteral("magnified_center")) + delta) &&
+                    near(center(movedRectangle, QStringLiteral("center")),
+                         center(originalRectangle, QStringLiteral("center")) + delta),
+                "dragging either selected body moves the whole group and both magnifier regions");
+        require(canvas.undo() && magnifier(runtime) == originalMagnifier &&
+                    records(runtime, QStringLiteral("Rectangle")) == rectangles && canvas.redo() &&
+                    magnifier(runtime) == movedMagnifier &&
+                    records(runtime, QStringLiteral("Rectangle")).first().toObject() ==
+                        movedRectangle,
+                "the group drag is undone and redone as one complete operation");
+    }
+}
+
+void wheelFactorEditsSurviveSourceAndLensDrags() {
+    for (bool dragSource : {false, true}) {
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        prepare(canvas);
+        drag(canvas, {220, 160}, {300, 220});
+        selectMagnifier(canvas);
+        canvas.setWheelZoomEnabled(false);
+        const auto original = magnifier(runtime);
+        const auto source = center(original, QStringLiteral("source_center"));
+        const auto lens = center(original, QStringLiteral("magnified_center"));
+        const auto camera = canvas.canvasToViewTransform();
+        const auto start = camera.map(dragSource ? source : lens + QPointF(60, 0));
+        std::vector<SnowCanvasMagnifierEdit> commits;
+        observeWheelCommits(canvas, commits);
+        mouse(canvas, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseMove, start + QPointF(20, 10), Qt::NoButton, Qt::LeftButton);
+        require(wheel(canvas, 0, 120, Qt::NoModifier, true, Qt::MouseEventSynthesizedBySystem,
+                      Qt::LeftButton),
+                "native wheel input adjusts the factor during an active drag");
+        const auto factorEdited = magnifier(runtime);
+        require(
+            factorEdited.value(QStringLiteral("factor")).toDouble() == 2.1 &&
+                near(center(factorEdited, QStringLiteral("source_center")), source) &&
+                near(center(factorEdited, QStringLiteral("magnified_center")), lens) &&
+                commits.size() == 1 && !commits.back().creationDefaults &&
+                commits.back().style.factor == 2.1 && canvas.canvasMagnifierStyle().factor == 2.1 &&
+                canvas.canvasToViewTransform() == camera,
+            "the wheel commits only a selected factor edit while drag geometry stays transient");
+        const QPointF delta(50, 25);
+        mouse(canvas, QEvent::MouseMove, start + delta, Qt::NoButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseButtonRelease, start + delta, Qt::LeftButton, Qt::NoButton);
+        const auto moved = magnifier(runtime);
+        require(
+            moved.value(QStringLiteral("factor")).toDouble() == 2.1 &&
+                near(center(moved, QStringLiteral("source_center")),
+                     dragSource ? source + delta : source) &&
+                near(center(moved, QStringLiteral("magnified_center")), lens + delta) &&
+                moved.value(QStringLiteral("width")) == original.value(QStringLiteral("width")) &&
+                moved.value(QStringLiteral("height")) == original.value(QStringLiteral("height")) &&
+                commits.size() == 1,
+            "release preserves the wheel factor and commits the final source or lens geometry");
+        require(canvas.undo() && magnifier(runtime) == factorEdited && canvas.undo() &&
+                    magnifier(runtime) == original && canvas.redo() &&
+                    magnifier(runtime) == factorEdited && canvas.redo() &&
+                    magnifier(runtime) == moved,
+                "factor and drag edits retain their independent undo and redo order");
+        require(canvas.resetEditingState() && canvas.setCanvasTool(SnowCanvasTool::Magnifier) &&
+                    canvas.canvasMagnifierStyle().factor == 2,
+                "wheel edits during selected drags preserve future magnifier defaults");
+    }
+}
+
+void undoCreationCancelsLensPreviewAndCapture() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    prepare(canvas);
+    const QImage empty = fullRender(canvas);
+    drag(canvas, {220, 160}, {300, 220});
+    selectMagnifier(canvas);
+    const auto original = magnifier(runtime);
+    const auto lens = center(original, QStringLiteral("magnified_center"));
+    const auto start = canvas.canvasToViewTransform().map(lens + QPointF(60, 0));
+    const auto end = start + QPointF(150, 20);
+    mouse(canvas, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    mouse(canvas, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+    require(fullRender(canvas) != empty && QWidget::mouseGrabber() == &canvas,
+            "an active lens drag renders a preview and owns mouse capture");
+    require(canvas.undo() && !runtime.hasDocumentContent() &&
+                runtime.selectedElementIds().isEmpty() && fullRender(canvas) == empty &&
+                QWidget::mouseGrabber() != &canvas,
+            "undoing creation immediately removes the lens preview, selection and mouse capture");
+    mouse(canvas, QEvent::MouseMove, end + QPointF(10, 10), Qt::NoButton, Qt::LeftButton);
+    mouse(canvas, QEvent::MouseButtonRelease, end + QPointF(10, 10), Qt::LeftButton, Qt::NoButton);
+    require(!runtime.hasDocumentContent() && fullRender(canvas) == empty &&
+                !canvas.canvasHistoryState().canUndo && canvas.canvasHistoryState().canRedo,
+            "late input cannot resurrect the removed lens or record a stale drag operation");
+    require(canvas.redo() && magnifier(runtime) == original,
+            "redo restores the original creation without the canceled lens displacement");
+    selectMagnifier(canvas);
+    drag(canvas, start, end);
+    require(near(center(magnifier(runtime), QStringLiteral("magnified_center")),
+                 lens + QPointF(150, 20)) &&
+                canvas.undo() && magnifier(runtime) == original,
+            "a new lens drag works and remains undoable after the canceled interaction");
+}
+
 void originalDamageClosesThroughLaterFilterPasses() {
     for (bool chained : {false, true}) {
         MutableImageRenderer renderer(QSize(400, 240));
@@ -621,8 +769,11 @@ int main(int argc, char** argv) {
     wheelPublishesHomogenizedSelectionAtTheFactorLimit();
     wheelRemaindersResetAtInputAndEditingBoundaries();
     wheelDirectionLimitsAndCocoaMouseClassification();
+    wheelFactorEditsSurviveSourceAndLensDrags();
     if (app.arguments().contains(QStringLiteral("--magnifier-wheel-only")))
         return EXIT_SUCCESS;
+    magnifierSelectionDragsAllSelectedBodies();
+    undoCreationCancelsLensPreviewAndCapture();
     compoundDraggingAndDefaultIsolation();
     coincidentOneTimesLensGrip();
     originalDamageClosesThroughLaterFilterPasses();

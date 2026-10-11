@@ -148,37 +148,11 @@ impl Editor {
         document: &DocumentModel,
         previous_selection: &SelectionState,
     ) {
-        let interaction_contains_missing = match &self.state.interaction {
-            InteractionState::CreatingSerialNumber(state) => {
-                document.serial_number(state.serial_id).is_err()
-                    || state
-                        .text
-                        .as_ref()
-                        .is_some_and(|(id, _)| document.text(*id).is_err())
-            }
-            InteractionState::PendingSelectionMove(state) => {
-                state
-                    .original_elements
-                    .iter()
-                    .any(|element| document.element(element.id).is_err())
-                    || state
-                        .original_arrows
-                        .iter()
-                        .any(|arrow| document.element(arrow.id).is_err())
-            }
-            InteractionState::EditingSelection(state) => {
-                state
-                    .original_elements
-                    .iter()
-                    .any(|element| document.element(element.id).is_err())
-                    || state
-                        .original_arrows
-                        .iter()
-                        .any(|arrow| document.element(arrow.id).is_err())
-            }
-            _ => false,
-        };
-        if interaction_contains_missing {
+        if self
+            .state
+            .interaction
+            .contains_missing_document_target(document)
+        {
             self.cancel_interaction();
         }
 

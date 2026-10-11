@@ -453,6 +453,45 @@ pub(crate) enum InteractionState {
     EditingMagnifier(EditMagnifierState),
 }
 
+impl InteractionState {
+    /// Document-bound gestures must stop before their snapshots can outlive a removed target.
+    pub(crate) fn contains_missing_document_target(&self, document: &DocumentModel) -> bool {
+        let selection_has_missing_target =
+            |elements: &[SelectionRectState], arrows: &[SelectionArrowState]| {
+                elements
+                    .iter()
+                    .map(|element| element.id)
+                    .chain(arrows.iter().map(|arrow| arrow.id))
+                    .any(|id| document.element(id).is_err())
+            };
+        match self {
+            Self::CreatingSerialNumber(state) => {
+                document.serial_number(state.serial_id).is_err()
+                    || state
+                        .text
+                        .as_ref()
+                        .is_some_and(|(id, _)| document.text(*id).is_err())
+            }
+            Self::PendingSelectionMove(state) => {
+                selection_has_missing_target(&state.original_elements, &state.original_arrows)
+            }
+            Self::EditingSelection(state) => {
+                selection_has_missing_target(&state.original_elements, &state.original_arrows)
+            }
+            Self::PendingArrowMove(state) => document.arrow(state.arrow_id).is_err(),
+            Self::EditingArrow(state) => document.arrow(state.arrow_id).is_err(),
+            Self::EditingMagnifier(state) => document.magnifier(state.id).is_err(),
+            Self::Idle
+            | Self::CreatingRectangle(_)
+            | Self::CreatingPenHighlight(_)
+            | Self::CreatingArrow(_)
+            | Self::CreatingFreeDraw(_)
+            | Self::CreatingPenFilter(_)
+            | Self::MarqueeSelection(_) => false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct EditMagnifierState {
     pub pointer_id: u32,

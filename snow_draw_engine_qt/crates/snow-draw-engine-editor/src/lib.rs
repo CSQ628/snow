@@ -155,6 +155,8 @@ pub struct Editor {
     overlay_state_revision: u64,
     pending_command: Option<EditorCommand>,
     magnifier_wheel: Option<magnifier::MagnifierWheelAccumulator>,
+    captured_pointer: Option<u32>,
+    pending_capture_release: bool,
 }
 
 impl Editor {
@@ -173,6 +175,8 @@ impl Editor {
             overlay_state_revision: 0,
             pending_command: None,
             magnifier_wheel: None,
+            captured_pointer: None,
+            pending_capture_release: false,
         })
     }
 
@@ -302,6 +306,7 @@ impl Editor {
     ) {
         self.invalidate_auto_filter_gesture(document);
         self.sync_selection_after_document_change(document, &snapshot.selection);
+        self.sync_magnifier_interaction_styles(document);
         self.bump_scene_state_revision();
         self.bump_overlay_state_revision();
     }
@@ -327,6 +332,9 @@ impl Editor {
     }
 
     fn cancel_interaction(&mut self) {
+        // Direct document mutations cannot return an input output. Drop ownership for native
+        // reconciliation immediately, and retain a release command for the next input output.
+        self.pending_capture_release |= self.captured_pointer.take().is_some();
         self.magnifier_wheel = None;
         self.state.ui.free_draw_hover_position = None;
         self.state.pending_text_edit = None;

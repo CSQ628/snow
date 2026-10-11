@@ -52,18 +52,22 @@ impl Editor {
             return CanvasHit::ArrowHandle(target);
         }
 
-        if include_selection_handles
-            && selection_box_visible
-            && let Some(bounds) = self.selection_bounds_snapshot(document)
-            && let Some(target) = selection_hit_target(
-                &bounds,
-                single_rect.as_ref(),
-                single_text_rect.as_ref(),
-                selection_frame_padding,
-                selection_corner_handle_outset,
-                self.camera().zoom,
-                canvas_point,
-            )
+        let selection_target = if include_selection_handles && selection_box_visible {
+            self.selection_bounds_snapshot(document).and_then(|bounds| {
+                selection_hit_target(
+                    &bounds,
+                    single_rect.as_ref(),
+                    single_text_rect.as_ref(),
+                    selection_frame_padding,
+                    selection_corner_handle_outset,
+                    self.camera().zoom,
+                    canvas_point,
+                )
+            })
+        } else {
+            None
+        };
+        if let Some(target) = selection_target
             && (target != SelectionHitTarget::Move
                 || !self
                     .state
@@ -74,6 +78,19 @@ impl Editor {
         {
             return CanvasHit::SelectionHandle(target);
         }
+
+        // Magnifier lenses must be resolved before the generic move area. A selected
+        // source/body still moves the whole group once the actual topmost hit is known.
+        let element_hit = |id, kind| {
+            if selection_target == Some(SelectionHitTarget::Move)
+                && self.state.selection.ids.len() > 1
+                && self.state.selection.contains(id)
+            {
+                CanvasHit::SelectionHandle(SelectionHitTarget::Move)
+            } else {
+                CanvasHit::EligibleElement(id, kind)
+            }
+        };
 
         if include_selection_handles
             && let Some((arrow_id, arrow)) = single_arrow
@@ -102,7 +119,7 @@ impl Editor {
                     if let Some(value) = self.magnifier_snapshot(document, *id) {
                         let tolerance = element_hit_tolerance(self.camera().zoom);
                         if rectangle_hit_test(&value.source_rect(), canvas_point, tolerance) {
-                            return CanvasHit::EligibleElement(*id, ElementKind::Magnifier);
+                            return element_hit(*id, ElementKind::Magnifier);
                         }
                         if rectangle_hit_test(&value.magnified_rect(), canvas_point, tolerance) {
                             return CanvasHit::MagnifierLens(*id);
@@ -155,7 +172,7 @@ impl Editor {
                         }
                         let value = self.magnifier_snapshot(document, *id).unwrap_or(*value);
                         if rectangle_hit_test(&value.source_rect(), canvas_point, hit_tolerance) {
-                            return CanvasHit::EligibleElement(*id, ElementKind::Magnifier);
+                            return element_hit(*id, ElementKind::Magnifier);
                         }
                         if rectangle_hit_test(&value.magnified_rect(), canvas_point, hit_tolerance)
                         {
@@ -223,22 +240,10 @@ impl Editor {
                 hit_id,
                 kind,
             ) {
-                return CanvasHit::EligibleElement(hit_id, kind);
+                return element_hit(hit_id, kind);
             }
         }
-        if include_selection_handles
-            && selection_box_visible
-            && let Some(bounds) = self.selection_bounds_snapshot(document)
-            && selection_hit_target(
-                &bounds,
-                single_rect.as_ref(),
-                single_text_rect.as_ref(),
-                selection_frame_padding,
-                selection_corner_handle_outset,
-                self.camera().zoom,
-                canvas_point,
-            ) == Some(SelectionHitTarget::Move)
-        {
+        if selection_target == Some(SelectionHitTarget::Move) {
             return CanvasHit::SelectionHandle(SelectionHitTarget::Move);
         }
         CanvasHit::Empty

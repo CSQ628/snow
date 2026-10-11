@@ -33,6 +33,12 @@ mod filter_snap_tests;
 mod free_draw_continuation_tests;
 mod input;
 #[cfg(test)]
+mod magnifier_drag_style_tests;
+#[cfg(test)]
+mod magnifier_group_move_tests;
+#[cfg(test)]
+mod magnifier_lifecycle_tests;
+#[cfg(test)]
 mod magnifier_tests;
 mod mutations;
 #[cfg(test)]
@@ -104,6 +110,10 @@ impl Default for Engine {
 }
 
 impl Engine {
+    pub fn has_pointer_capture(&self) -> bool {
+        self.editor.has_pointer_capture()
+    }
+
     pub fn new(config: EngineConfig) -> Self {
         Self::try_new(config).expect("runtime config should be valid")
     }
@@ -199,6 +209,7 @@ impl Engine {
             pending_viewports: BTreeSet::new(),
         };
         engine.editor.reset_magnifier_wheel_input();
+        engine.editor.reset_pointer_capture_state();
         engine.scene_cache.sync(&engine.model, None);
         let _ = engine.refresh_all_viewports();
         engine

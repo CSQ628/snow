@@ -327,6 +327,17 @@ impl EditorSession {
         self.editor.magnifier_wheel = None;
     }
 
+    /// Native pointer capture belongs to the current runtime, not its persisted document.
+    pub fn has_pointer_capture(&self) -> bool {
+        self.editor.captured_pointer.is_some()
+    }
+
+    /// A cloned document session does not inherit native pointer ownership or queued releases.
+    pub fn reset_pointer_capture_state(&mut self) {
+        self.editor.captured_pointer = None;
+        self.editor.pending_capture_release = false;
+    }
+
     /// Discards measurements, numbering sequences, and transient storage from the old document.
     pub fn reset_document_retained_state(&mut self, initial_serial_number: &SerialNumberStyle) {
         self.editor.reset_editing_state();

@@ -1415,6 +1415,8 @@ SnowError snow_viewport_fill_auto_filter_category(SnowRuntime runtime, SnowViewp
                                                   SnowChangedViewportList* changed);
 
 SnowError snow_runtime_get_history_state(SnowRuntime runtime, SnowHistoryState* out_state);
+/* Reports current capture ownership after input, cancellation, and document mutations. */
+SnowError snow_runtime_has_pointer_capture(SnowRuntime runtime, uint8_t* out_active);
 
 /* Apply one validated versioned annotation batch as one history entry. Output bytes are
    owned by
