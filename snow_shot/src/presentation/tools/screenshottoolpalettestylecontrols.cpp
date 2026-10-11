@@ -207,6 +207,8 @@ constexpr char kSignatureMagnifierLeader[] = "toggle:magnifier-leader";
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Leader line type"),
 };
 constexpr char kRoleAngleColor[] = "angle-color";
+constexpr char kRoleAngleType[] = "angle-type";
+constexpr char kSignatureAngleType[] = "radio:angle-type";
 constexpr char kRoleAngleUnit[] = "angle-unit";
 constexpr char kRoleAngleDecimals[] = "angle-decimals";
 constexpr char kSignatureAngleUnit[] = "radio:angle-unit";
@@ -222,6 +224,9 @@ constexpr quint32 angleProperty(SnowCanvasAngleStyleProperty property) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle stroke color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current angle stroke width"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle stroke width %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle type"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "360° angle"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "180° angle"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle unit"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Degrees"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Radians"),
@@ -254,7 +259,8 @@ QVector<QByteArray> styleEditorRoles(ScreenshotToolPalette::Tool tool) {
                 kRoleMagnifierRadius,   kRoleMagnifierFactor, kRoleMagnifierLeader,
                 kRoleMagnifierArrowhead};
     case Tool::Angle:
-        return {kRoleAngleColor, kRoleOutlineWidth, kRoleAngleUnit, kRoleAngleDecimals};
+        return {kRoleAngleColor, kRoleOutlineWidth, kRoleAngleType, kRoleAngleUnit,
+                kRoleAngleDecimals};
     case Tool::Arrow:
         return {kRoleOutlineStroke, kRoleOutlineWidth, "arrow-type",   kRoleArrowRatio,
                 "start-arrowhead",  kRoleArrowShaft,   "end-arrowhead"};
@@ -1343,6 +1349,7 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
     case Tool::Angle:
         stageComponent(kRoleAngleColor, kSignatureForegroundColor, m_angleColorEditor);
         stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_angleWidthEditor);
+        stageWidget(kRoleAngleType);
         stageWidget(kRoleAngleUnit);
         stageWidget(kRoleAngleDecimals);
         break;
@@ -2415,6 +2422,42 @@ QWidget* ScreenshotToolPaletteStyleControls::buildAngleFamily(
 
     if (host.addGroupSeparator)
         host.addGroupSeparator(layout);
+    QWidget* types = takeReusableWidget(kRoleAngleType, kSignatureAngleType, layout, controls);
+    if (types == nullptr) {
+        ScreenshotToolPaletteRadioEditorConfig config;
+        config.objectName = QStringLiteral("screenshotAngleTypeButtonGroup");
+        config.useButtonMetrics = true;
+        config.options = {
+            {static_cast<int>(SnowCanvasAngleType::Directed), "360° angle",
+             custom_outlined_icons::AngleType360()},
+            {static_cast<int>(SnowCanvasAngleType::Interior), "180° angle",
+             custom_outlined_icons::AngleType180()},
+        };
+        auto editor = createScreenshotToolPaletteRadioEditor(controls, config, metrics);
+        types = editor.container;
+        m_angleTypeGroup = editor.group;
+        layout->addWidget(types);
+    } else {
+        m_angleTypeGroup = types->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    }
+    tagWidget(types, kRoleAngleType, kSignatureAngleType);
+    configureScreenshotToolPaletteTooltip(types, "Angle type");
+    setScreenshotToolPaletteAccessibleNameSource(types, "Angle type");
+    types->setAccessibleName(ScreenshotToolPaletteTranslationText("Angle type").translated());
+    QObject::disconnect(m_angleTypeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                        nullptr, nullptr);
+    QObject::connect(m_angleTypeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                     controls, [this](int id) {
+                         if (id < static_cast<int>(SnowCanvasAngleType::Directed) ||
+                             id > static_cast<int>(SnowCanvasAngleType::Interior))
+                             return;
+                         commitAngleProperty(angleProperty(SnowCanvasAngleStyleProperty::Type),
+                                             [id](SnowCanvasAngleStyle& style) {
+                                                 style.angleType =
+                                                     static_cast<SnowCanvasAngleType>(id);
+                                             });
+                     });
+
     QWidget* units = takeReusableWidget(kRoleAngleUnit, kSignatureAngleUnit, layout, controls);
     if (units == nullptr) {
         ScreenshotToolPaletteRadioEditorConfig config;
@@ -4320,6 +4363,16 @@ void ScreenshotToolPaletteStyleControls::registerAngleEntries() {
                  m_angleWidthEditor->update(m_state.angleStyle.strokeWidth,
                                             mixed(SnowCanvasAngleStyleProperty::StrokeWidth));
          }},
+        {angleProperty(SnowCanvasAngleStyleProperty::Type),
+         [this, mixed]() {
+             if (m_angleTypeGroup != nullptr) {
+                 const QSignalBlocker blocker(m_angleTypeGroup);
+                 m_angleTypeGroup->setCheckedId(
+                     mixed(SnowCanvasAngleStyleProperty::Type)
+                         ? -1
+                         : static_cast<int>(m_state.angleStyle.angleType));
+             }
+         }},
         {angleProperty(SnowCanvasAngleStyleProperty::Unit),
          [this, mixed]() {
              if (m_angleUnitGroup != nullptr) {
@@ -4749,6 +4802,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_magnifierLeaderToggle = nullptr;
     m_angleColorEditor.reset();
     m_angleWidthEditor.reset();
+    m_angleTypeGroup = nullptr;
     m_angleUnitGroup = nullptr;
     m_angleDecimalsEditor = {};
     m_arrowStrokeWidthEditor.reset();
@@ -4894,6 +4948,7 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
         m_distanceScaleEditor = nullptr;
     }
     if (!keepAngle) {
+        m_angleTypeGroup = nullptr;
         m_angleUnitGroup = nullptr;
         m_angleDecimalsEditor = {};
     }
@@ -5441,6 +5496,7 @@ void ScreenshotToolPaletteStyleControls::refreshToolbarMetrics(
     configureScreenshotToolPaletteStyleRadioButtonGroup(m_distanceUnitGroup, metrics, true);
     configureScreenshotToolPaletteIconNumericValueButton(m_distanceScaleEditor, metrics);
     configureScreenshotToolPaletteSelectEditor(m_distanceDecimalsEditor, metrics);
+    configureScreenshotToolPaletteStyleRadioButtonGroup(m_angleTypeGroup, metrics, true);
     configureScreenshotToolPaletteStyleRadioButtonGroup(m_angleUnitGroup, metrics, true);
     configureScreenshotToolPaletteStyleRadioButtonGroup(m_magnifierShapeGroup, metrics);
     configureScreenshotToolPaletteSelectEditor(m_angleDecimalsEditor, metrics);
@@ -6598,6 +6654,8 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
             changed |= angleProperty(SnowCanvasAngleStyleProperty::Stroke);
         if (m_state.angleStyle.strokeWidth != displayed.strokeWidth)
             changed |= angleProperty(SnowCanvasAngleStyleProperty::StrokeWidth);
+        if (m_state.angleStyle.angleType != displayed.angleType)
+            changed |= angleProperty(SnowCanvasAngleStyleProperty::Type);
         if (m_state.angleStyle.unit != displayed.unit)
             changed |= angleProperty(SnowCanvasAngleStyleProperty::Unit);
         if (m_state.angleStyle.decimalPlaces != displayed.decimalPlaces)

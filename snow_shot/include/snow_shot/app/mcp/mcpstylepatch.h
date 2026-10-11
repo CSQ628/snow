@@ -87,6 +87,7 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
                           QStringLiteral("km"), QStringLiteral("mm")};
     const QHash<QString, QStringList> enums{
         {QStringLiteral("unit"), units},
+        {QStringLiteral("angle_type"), {QStringLiteral("directed"), QStringLiteral("interior")}},
         {QStringLiteral("shape"),
          {QStringLiteral("rectangle"), QStringLiteral("ellipse"), QStringLiteral("diamond")}},
         {QStringLiteral("fill_style"),
@@ -178,7 +179,7 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
                    QStringLiteral("endpoint_style")};
     else if (target == QStringLiteral("angle"))
         allowed = {QStringLiteral("stroke"), QStringLiteral("stroke_width"), QStringLiteral("unit"),
-                   QStringLiteral("decimal_places")};
+                   QStringLiteral("decimal_places"), QStringLiteral("angle_type")};
     else if (target == QStringLiteral("magnifier"))
         allowed = {QStringLiteral("shape"),        QStringLiteral("stroke"),
                    QStringLiteral("stroke_width"), QStringLiteral("factor"),
@@ -346,6 +347,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             return canvas.setMagnifierStyleFromToolbar(style, flags, creationDefaults);
     } else if (target == QStringLiteral("angle")) {
         auto style = state.angleStyle;
+        style.angleType = static_cast<SnowCanvasAngleType>(
+            enumeration("angle_type", static_cast<int>(style.angleType)));
         style.stroke = color("stroke", style.stroke);
         style.strokeWidth = number("stroke_width", style.strokeWidth);
         style.unit =
@@ -356,6 +359,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             {QStringLiteral("stroke_width"),
              static_cast<quint32>(SnowCanvasAngleStyleProperty::StrokeWidth)},
             {QStringLiteral("unit"), static_cast<quint32>(SnowCanvasAngleStyleProperty::Unit)},
+            {QStringLiteral("angle_type"),
+             static_cast<quint32>(SnowCanvasAngleStyleProperty::Type)},
             {QStringLiteral("decimal_places"),
              static_cast<quint32>(SnowCanvasAngleStyleProperty::DecimalPlaces)}};
         quint32 flags = 0;

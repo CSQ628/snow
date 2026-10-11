@@ -17,6 +17,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/configurationstore.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/shortcuts/shortcutdisplayservice.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
@@ -10922,8 +10923,9 @@ void spotlightShapePreferencesRoundTripAndAcceptLegacySettings() {
     require(configuration.setValue(key, value) &&
                 screenshotCanvasToolStyleDefaults().spotlightShape ==
                     SnowCanvasRectangleShape::Rectangle &&
-                screenshotCanvasToolStyleDefaults().spotlightCornerRadii == SnowCanvasCornerRadii{},
-            "legacy Spotlight preferences must use Rectangle");
+                screenshotCanvasToolStyleDefaults().spotlightCornerRadii ==
+                    SnowCanvasCornerRadii{6.0, 6.0, 6.0, 6.0},
+            "legacy Spotlight preferences must use Rectangle with six-pixel corners");
     for (const QJsonValue& invalid :
          {QJsonValue(-1), QJsonValue(3), QJsonValue(1.5), QJsonValue(QStringLiteral("1"))}) {
         value.insert(QStringLiteral("shape"), invalid);
@@ -12087,6 +12089,26 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
         palette.rememberStyleEdit(edit);
         return true;
     });
+    auto* typeContainer =
+        palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    auto* types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types && types->buttons().size() == 2 &&
+                types->checkedId() == static_cast<int>(SnowCanvasAngleType::Directed),
+            "angle types retain the existing 360-degree default");
+    for (auto type : {SnowCanvasAngleType::Interior, SnowCanvasAngleType::Directed}) {
+        auto* button = types->button(static_cast<int>(type));
+        require(button && !button->icon().isNull() &&
+                    button->accessibleName() == (type == SnowCanvasAngleType::Interior
+                                                     ? QStringLiteral("180° angle")
+                                                     : QStringLiteral("360° angle")),
+                "angle type buttons expose distinct icons and accessible labels");
+        button->click();
+        require(emitted.angleType == type &&
+                    properties == bit(SnowCanvasAngleStyleProperty::Type) &&
+                    emitted.unit == initial.unit && emitted.decimalPlaces == initial.decimalPlaces,
+                "angle type changes preserve independent display preferences");
+    }
     for (SnowCanvasAngleUnit unit : {SnowCanvasAngleUnit::Radians, SnowCanvasAngleUnit::Degrees}) {
         auto* button = units->button(static_cast<int>(unit));
         require(button != nullptr && !button->icon().isNull() &&
@@ -12137,6 +12159,10 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
     }
     units = unitGroup();
     decimals = decimalsSelect();
+    typeContainer = palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types != nullptr, "angle type controls are restored with the angle tool");
     require(units != nullptr && decimals != nullptr, "angle controls should rebuild on demand");
     SnowCanvasStyleToolbarState selected;
     selected.source = SnowCanvasStyleToolbarSource::SelectedAngle;
@@ -12144,10 +12170,12 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
     selected.angleStyle = remembered;
     selected.angleStyle.unit = SnowCanvasAngleUnit::Radians;
     selected.angleStyle.decimalPlaces = 3;
-    selected.angleStyleMixed =
-        bit(SnowCanvasAngleStyleProperty::Unit) | bit(SnowCanvasAngleStyleProperty::DecimalPlaces);
+    selected.angleStyleMixed = bit(SnowCanvasAngleStyleProperty::Unit) |
+                               bit(SnowCanvasAngleStyleProperty::DecimalPlaces) |
+                               bit(SnowCanvasAngleStyleProperty::Type);
     palette.setStyleToolbarState(selected);
-    require(units->checkedId() == -1 && !decimals->currentValue().isValid() &&
+    require(types->checkedId() == -1 && units->checkedId() == -1 &&
+                !decimals->currentValue().isValid() &&
                 palette.creationStyleDefaults().angle == remembered,
             "mixed selected values should clear controls without replacing creation defaults");
     const int beforeResolving = edits;
@@ -12222,6 +12250,10 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
     decimals = decimalsSelect();
     require(units != nullptr && decimals != nullptr,
             "angle tool should expose selected angle style controls");
+    typeContainer = palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types != nullptr, "angle type controls are available for retranslation");
     const int beforeLanguage = edits;
     const auto beforeLanguageDefaults = palette.creationStyleDefaults().angle;
     for (const QString& locale :
@@ -12229,7 +12261,9 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
         require(mutableLanguage.setLanguage(locale), "angle controls should support every locale");
         QCoreApplication::processEvents();
         require(
-            units->button(static_cast<int>(SnowCanvasAngleUnit::Degrees))->accessibleName() ==
+            types->button(static_cast<int>(SnowCanvasAngleType::Interior))->accessibleName() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "180° angle") &&
+                units->button(static_cast<int>(SnowCanvasAngleUnit::Degrees))->accessibleName() ==
                     QCoreApplication::translate("ScreenshotToolPalette", "Degrees") &&
                 decimals->model()->index(3, 0).data(decimals->labelRole()).toString() ==
                     QCoreApplication::translate("ScreenshotToolPalette", "3 decimal places") &&
@@ -15931,7 +15965,8 @@ void screenshotProductStyleProfileIsComplete() {
                 exact(defaults.watermark.gap, 56.0) && exact(defaults.watermark.opacity, 0.16),
             "watermark defaults should match the Snow Shot product profile");
     require(defaults.spotlight.color == QColor(0, 0, 0, 255) &&
-                exact(defaults.spotlight.opacity, 0.64),
+                exact(defaults.spotlight.opacity, 0.64) &&
+                defaults.spotlightCornerRadii == SnowCanvasCornerRadii{6.0, 6.0, 6.0, 6.0},
             "spotlight defaults should match the Snow Shot product profile");
 }
 
@@ -17665,24 +17700,62 @@ void regionSwitcherRetranslatesAndRenders() {
                         scheme.map.colorBgContainer,
                     "floating region surface uses the drawing toolbar container background");
             auto* hint = floating.findChild<QLabel*>();
-            require(hint &&
-                        hint->text() == QCoreApplication::translate("ScreenshotRegionTypeControl",
-                                                                    "%1 to switch region type")
-                                            .arg(QKeySequence(screenshotRegionTypeCycleKey())
-                                                     .toString(QKeySequence::NativeText)),
-                    "region hint must show the active platform shortcut in every language");
+            require(hint && hint->text() ==
+                                QCoreApplication::translate("ScreenshotRegionTypeControl",
+                                                            "%1 to switch region type")
+                                    .arg(snow_shot::shortcuts::formatShortcutListDisplayText(
+                                        snow_shot::storage::ScreenshotShortcutSettings().shortcuts(
+                                            QStringLiteral("next_selection_type")))),
+                    "region hint must show the configured next shortcut in every language");
             require(hint &&
                         hint->heightForWidth(hint->width()) ==
                             hint->heightForWidth(hint->width() * 2) &&
                         hint->palette().color(QPalette::WindowText) ==
                             scheme.map.colorTextSecondary,
                     "floating hint stays on one line and uses the secondary theme text color");
+            // Recreate the pre-configuration layout with the same shortcut text.
+            ScreenshotRegionTypeControl original(nullptr, true);
+            original.layout()->itemAt(0)->layout()->setAlignment({});
+            auto* originalHint = original.findChild<QLabel*>();
+            require(originalHint != nullptr, "the original region layout exposes its hint");
+            originalHint->setText(
+                QCoreApplication::translate("ScreenshotRegionTypeControl",
+                                            "%1 to switch region type")
+                    .arg(snow_shot::shortcuts::formatShortcutListDisplayText(
+                        snow_shot::storage::ScreenshotShortcutSettings().shortcuts(
+                            QStringLiteral("next_selection_type")))));
+            const QSize originalBase = original.QWidget::sizeHint();
+            const int originalWidth = std::max(
+                originalBase.width(),
+                originalHint->fontMetrics().boundingRect(originalHint->text()).width() + 32);
+            original.resize(originalWidth, original.layout()->heightForWidth(originalWidth));
+            original.show();
+            original.layout()->activate();
+            require(floating.size() == original.size() &&
+                        hint->geometry() == originalHint->geometry() &&
+                        hint->font() == originalHint->font(),
+                    "configured next shortcuts must preserve the original hint size, text layout, "
+                    "and font");
+            for (const auto* id : {"rectangle", "polyline", "curve", "freehand"}) {
+                const auto name = QStringLiteral("screenshotRegionType_") + QLatin1StringView(id);
+                const auto* actualButton = floating.findChild<adqt::widgets::AdButton*>(name);
+                const auto* originalButton = original.findChild<adqt::widgets::AdButton*>(name);
+                require(actualButton && originalButton &&
+                            actualButton->geometry() == originalButton->geometry() &&
+                            actualButton->iconSize() == originalButton->iconSize(),
+                        "configured next shortcuts must preserve the original icon distribution "
+                        "and sizes");
+            }
             if (!snapshots.isEmpty()) {
                 const auto suffix =
                     locale + (dark ? QStringLiteral("-dark") : QStringLiteral("-light"));
                 require(floating.grab().save(QDir(snapshots).filePath(
                             QStringLiteral("region-switcher-") + suffix + QStringLiteral(".png"))),
                         "save floating switcher snapshot");
+                require(original.grab().save(
+                            QDir(snapshots).filePath(QStringLiteral("region-switcher-original-") +
+                                                     suffix + QStringLiteral(".png"))),
+                        "save original floating switcher snapshot");
                 require(palette.actionPanel()->grab().save(QDir(snapshots).filePath(
                             QStringLiteral("region-toolbar-") + suffix + QStringLiteral(".png"))),
                         "save Move toolbar snapshot");
@@ -18049,6 +18122,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--spotlight-shape-only"))) {
+        screenshotProductStyleProfileIsComplete();
         spotlightCornerRadiusEditorReusesShapeBehavior();
         spotlightShapeSelectorMatchesShapeAndRebindsEdits();
         spotlightShapePreferencesRoundTripAndAcceptLegacySettings();

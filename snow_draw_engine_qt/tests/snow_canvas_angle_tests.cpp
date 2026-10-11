@@ -29,15 +29,17 @@ void require(bool condition, const char* message) {
 }
 
 void mouse(SnowCanvasWidget& canvas, QEvent::Type type, QPointF point,
-           Qt::MouseButton button = Qt::NoButton, Qt::MouseButtons buttons = Qt::NoButton) {
-    QMouseEvent event(type, point, point, point, button, buttons, Qt::NoModifier);
+           Qt::MouseButton button = Qt::NoButton, Qt::MouseButtons buttons = Qt::NoButton,
+           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QMouseEvent event(type, point, point, point, button, buttons, modifiers);
     QApplication::sendEvent(&canvas, &event);
     QApplication::processEvents();
 }
 
-void click(SnowCanvasWidget& canvas, QPointF point) {
-    mouse(canvas, QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton);
-    mouse(canvas, QEvent::MouseButtonRelease, point, Qt::LeftButton);
+void click(SnowCanvasWidget& canvas, QPointF point,
+           Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    mouse(canvas, QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton, modifiers);
+    mouse(canvas, QEvent::MouseButtonRelease, point, Qt::LeftButton, Qt::NoButton, modifiers);
 }
 
 void wheel(SnowCanvasWidget& canvas, int delta, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
@@ -219,8 +221,8 @@ void wheelDraftAndSelectedAngle() {
     const auto b = points.at(2).toArray();
     require(std::abs(std::hypot(b.at(0).toDouble() - v.at(0).toDouble(),
                                 b.at(1).toDouble() - v.at(1).toDouble()) -
-                     120) < 1e-8,
-            "wheel preserves second-arm length");
+                     200) < 1e-8,
+            "wheel preserves the shared side length");
     require(canvas.undo() && !runtime.hasDocumentContent() && !runtime.canUndo(),
             "draft wheel has no separate undo entries");
     require(canvas.redo() && canvas.setCanvasTool(SnowCanvasTool::Select),
@@ -281,7 +283,7 @@ void directedArcExportAndFullTurn() {
                 "directed sweep supports reflex angles");
         const auto image = runtime.renderToImage({-300, -180, 600, 360}, {600, 360}, {});
         require(!image.isNull() && inkNear(image, {420, 180}), "export renders first arm");
-        require(inkNear(image, end.y() < 180 ? QPoint(319, 161) : QPoint(273, 180)),
+        require(inkNear(image, end.y() < 180 ? QPoint(329, 151) : QPoint(260, 180)),
                 "export renders directed inner arc away from either arm");
         require(image.pixelColor(20, 20).alpha() == 0, "export keeps transparent background");
     }
@@ -296,10 +298,39 @@ void directedArcExportAndFullTurn() {
                 label(runtime) == QStringLiteral("360°"),
             "wheel clamps at full turn and preserves its identity");
     const auto image = runtime.renderToImage({-300, -180, 600, 360}, {600, 360}, {});
-    require(inkNear(image, {273, 180}), "full-turn export renders a circle");
+    require(inkNear(image, {260, 180}), "full-turn export renders a circle");
     require(canvas.adjustAngleValue(-500 * radiansPerDegree) &&
                 label(runtime) == QStringLiteral("0°"),
             "wheel clamps at zero");
+}
+
+void interiorAngleCreationSelectionAndExport() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    prepare(canvas);
+    auto style = canvas.canvasAngleStyle();
+    style.angleType = SnowCanvasAngleType::Interior;
+    require(canvas.setCanvasAngleStyle(style), "select the separate interior angle type");
+    angle(canvas, {300, 300});
+    require(label(runtime) == QStringLiteral("90°"),
+            "clockwise interior angle measures 90 degrees");
+    const auto image = runtime.renderToImage({-300, -180, 600, 360}, {600, 360}, {});
+    require(inkNear(image, {329, 209}) && !inkNear(image, {260, 180}),
+            "interior angle export renders the smaller arc");
+    require(canvas.setCanvasTool(SnowCanvasTool::Select), "select interior angle");
+    click(canvas, {329, 209});
+    require(canvas.canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::SelectedAngle &&
+                canvas.canvasAngleStyle().angleType == SnowCanvasAngleType::Interior,
+            "interior arc picking preserves the angle type through the ABI");
+    require(canvas.adjustAngleValue(1000 * radiansPerDegree) &&
+                label(runtime) == QStringLiteral("180°"),
+            "interior wheel adjustments stop at 180 degrees");
+    require(canvas.adjustAngleValue(-1000 * radiansPerDegree) &&
+                label(runtime) == QStringLiteral("0°"),
+            "interior wheel adjustments stop at zero degrees");
+    style.angleType = static_cast<SnowCanvasAngleType>(99);
+    require(!canvas.setCanvasAngleStyle(style), "reject invalid angle types atomically");
 }
 
 void abiAndStyleNotifications() {
@@ -314,6 +345,10 @@ void abiAndStyleNotifications() {
     after.angle_style = abi;
     require(!snow_canvas_state::styleToolbarStatesEqual(before, after),
             "angle style notifies controls");
+    after = before;
+    after.angle_style.angle_type = SNOW_ANGLE_TYPE_INTERIOR;
+    require(!snow_canvas_state::styleToolbarStatesEqual(before, after),
+            "angle type alone notifies controls");
     after = before;
     after.angle_style_mixed = 4;
     require(!snow_canvas_state::styleToolbarStatesEqual(before, after),
@@ -350,7 +385,7 @@ void arcAndLabelSelectAndEraseTheOwnedPair() {
         SnowCanvasWidget canvas(runtime);
         prepare(canvas);
         angle(canvas);
-        QPointF target(319, 161);
+        QPointF target(329, 151);
         if (useLabel) {
             const auto center =
                 only(runtime, QStringLiteral("Text")).value(QStringLiteral("center")).toObject();
@@ -412,6 +447,68 @@ QPointF globalPoint(const QJsonObject& owner, int index) {
             owner.value(QStringLiteral("y")).toDouble() + point.at(1).toDouble()};
 }
 
+void requireSideLength(const QJsonObject& owner, double expected) {
+    const QPointF vertex = globalPoint(owner, 1);
+    for (const int index : {0, 2}) {
+        const QPointF side = globalPoint(owner, index) - vertex;
+        require(std::abs(std::hypot(side.x(), side.y()) - expected) < 1e-8,
+                "both rendered sides use the shared length");
+    }
+}
+
+void equalSideCreationAndEditing() {
+    for (const double distance : {10.0, 50.0, 150.0}) {
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        prepare(canvas);
+        const double bearing = 23 * radiansPerDegree;
+        const QPointF vertex(300, 180);
+        click(canvas, vertex + QPointF(100 * std::cos(bearing), 100 * std::sin(bearing)));
+        click(canvas, vertex);
+        const double endBearing = bearing - 83 * radiansPerDegree;
+        click(canvas,
+              vertex + QPointF(distance * std::cos(endBearing), distance * std::sin(endBearing)),
+              Qt::ShiftModifier);
+        const auto owner = only(runtime, QStringLiteral("Arrow"));
+        requireSideLength(owner, 100);
+        require(std::abs(sweep(owner) - 90) < 1e-8,
+                "Shift snaps the measured angle with a rotated first side");
+    }
+    for (const int index : {0, 2, 1}) {
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        prepare(canvas);
+        click(canvas, {400, 180});
+        click(canvas, {300, 180});
+        click(canvas, {300, 130});
+        require(canvas.setCanvasTool(SnowCanvasTool::Select), "select equal-sided angle");
+        click(canvas, {350, 180});
+        const auto original = only(runtime, QStringLiteral("Arrow"));
+        requireSideLength(original, 100);
+        const QPointF start = canvas.canvasToViewTransform().map(globalPoint(original, index));
+        const QPointF target = index == 0   ? QPointF(450, 200)
+                               : index == 2 ? QPointF(310, 60)
+                                            : QPointF(260, 200);
+        mouse(canvas, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseMove, target, Qt::NoButton, Qt::LeftButton);
+        require(only(runtime, QStringLiteral("Arrow")) == original,
+                "side editing uses a transient preview");
+        mouse(canvas, QEvent::MouseButtonRelease, target, Qt::LeftButton);
+        const auto edited = only(runtime, QStringLiteral("Arrow"));
+        const double length = index == 0   ? std::hypot(150.0, 20.0)
+                              : index == 2 ? std::hypot(10.0, 120.0)
+                                           : std::hypot(140.0, 20.0);
+        requireSideLength(edited, length);
+        if (index == 1)
+            require(globalPoint(edited, 0) == globalPoint(original, 0),
+                    "vertex editing keeps the first endpoint fixed");
+        require(canvas.undo() && only(runtime, QStringLiteral("Arrow")) == original,
+                "one undo restores both sides");
+        require(canvas.redo() && only(runtime, QStringLiteral("Arrow")) == edited,
+                "redo restores synchronized sides");
+    }
+}
+
 void arcHandleAndBodyDragAtDifferentZooms() {
     for (const double degrees : {90.0, 270.0, 360.0}) {
         for (const double zoom : {0.75, 2.0}) {
@@ -438,8 +535,8 @@ void arcHandleAndBodyDragAtDifferentZooms() {
                 const QPointF vertex = globalPoint(original, 1);
                 const double bearing = (body ? 25.0 : degrees / 2.0) * radiansPerDegree;
                 const QPointF radial(std::cos(bearing), -std::sin(bearing));
-                const QPointF start = canvas.canvasToViewTransform().map(vertex + radial * 27.0);
-                const QPointF end = canvas.canvasToViewTransform().map(vertex + radial * 67.0);
+                const QPointF start = canvas.canvasToViewTransform().map(vertex + radial * 40.5);
+                const QPointF end = canvas.canvasToViewTransform().map(vertex + radial * 80.5);
                 mouse(canvas, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
                 mouse(canvas, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
                 require(only(runtime, QStringLiteral("Arrow")) == original,
@@ -451,7 +548,7 @@ void arcHandleAndBodyDragAtDifferentZooms() {
                                      .toObject()
                                      .value(QStringLiteral("arc_radius"))
                                      .toDouble() -
-                                 67.0) < 1e-7,
+                                 80.5) < 1e-7,
                         "handle and arc body change only the radius at each zoom");
                 require(edited.value(QStringLiteral("points")) ==
                                 original.value(QStringLiteral("points")) &&
@@ -553,10 +650,12 @@ int main(int argc, char** argv) {
     wheelDraftAndSelectedAngle();
     draftLatchUsesScreenPixels();
     directedArcExportAndFullTurn();
+    interiorAngleCreationSelectionAndExport();
     abiAndStyleNotifications();
     selectedStyleKeepsCreationDefaults();
     heterogeneousStyleEditChangesOnlyCreationDefaults();
     arcAndLabelSelectAndEraseTheOwnedPair();
+    equalSideCreationAndEditing();
     arcHandleAndBodyDragAtDifferentZooms();
     labelsOverlayUninterruptedAngleLines();
     if (argc > 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--preview"))
