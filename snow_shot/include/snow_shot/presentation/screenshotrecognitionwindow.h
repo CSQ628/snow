@@ -151,9 +151,13 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void commitActiveTableEdit();
 
     void showTextEditor(QTextDocument* document, bool readOnly = false, bool streaming = false);
+    void showTextEditor(std::shared_ptr<QTextDocument> document, bool readOnly = false,
+                        bool streaming = false);
     void setTextEditorStreaming(bool streaming);
     void hideTextEditor();
     void showLatexEditor(QTextDocument* document, std::function<QString()> source = {});
+    void showLatexEditor(std::shared_ptr<QTextDocument> document,
+                         std::function<QString()> source = {});
     void setLatexPreviewEnabled(bool enabled);
     void clearLatexPreview();
 
@@ -186,6 +190,12 @@ class ScreenshotRecognitionWindow final : public QWidget {
     bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
+    void showTextEditorWithOwner(QTextDocument* document,
+                                 std::shared_ptr<QTextDocument> documentOwner, bool readOnly,
+                                 bool streaming);
+    void showLatexEditorWithOwner(QTextDocument* document,
+                                  std::shared_ptr<QTextDocument> documentOwner,
+                                  std::function<QString()> source);
     [[nodiscard]] QPointF canvasPositionForLocalPoint(const QPointF& localPosition) const;
     [[nodiscard]] QTransform canvasToLocalTransform() const;
     void registerWindowShortcuts();
@@ -272,6 +282,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
     ScreenshotOcrTextLayer* m_textLayer = nullptr;
     QWidget* m_textEditorContainer = nullptr;
     QTextEdit* m_textEditor = nullptr;
+    std::shared_ptr<QTextDocument> m_textEditorDocumentOwner;
     adqt::widgets::AdSpin* m_textEditorSpin = nullptr;
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     QTextBrowser* m_qrBrowser = nullptr;
