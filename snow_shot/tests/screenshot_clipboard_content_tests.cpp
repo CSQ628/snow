@@ -417,6 +417,8 @@ void localTextFilesAreSupported() {
                     (html ? decoded->originalContent.html : decoded->originalContent.text) ==
                         source,
                 "local text renders at requested density with original source and file identity");
+        require(decoded->formattedDocument->defaultFont().pixelSize() == 20,
+                "text and unstyled HTML files use the readable pinned-text default");
         require(!ScreenshotClipboardContentReader::decode(snapshot, [] { return true; }),
                 "text file decode honors cancellation");
         require(
@@ -1028,6 +1030,72 @@ void htmlIsSelectableAndExternalResourcesAreBlocked() {
             "external HTML resources must not be fetched");
 }
 
+void formattedTextUsesReadableDefaultFont() {
+    const QString text = QStringLiteral("Readable pinned text");
+    QMimeData referenceMime;
+    referenceMime.setHtml(
+        QStringLiteral("<p style=\"font-size: 20px; margin: 0\">%1</p>").arg(text));
+    const auto reference = ScreenshotClipboardContentReader::readMimeData(&referenceMime, 1.0);
+    require(reference && reference->isFormattedText(), "readable text reference should render");
+
+    for (const bool html : {false, true}) {
+        QMimeData mime;
+        if (html) {
+            mime.setHtml(QStringLiteral("<p style=\"margin: 0\">%1</p>").arg(text));
+        } else {
+            mime.setText(text);
+        }
+        const auto standard = ScreenshotClipboardContentReader::readMimeData(&mime, 1.0);
+        const auto highDpi = ScreenshotClipboardContentReader::readMimeData(&mime, 2.0);
+        require(standard && highDpi && standard->isFormattedText() && highDpi->isFormattedText(),
+                "plain text and unstyled HTML should render at both display densities");
+        require(standard->formattedDocument->defaultFont().pixelSize() == 20 &&
+                    standard->image.size() == reference->image.size(),
+                "plain text and unstyled HTML render at the readable 20-pixel default size");
+        require(highDpi->formattedDocument->defaultFont().pixelSize() == 20 &&
+                    highDpi->image.size() == standard->image.size() * 2,
+                "display density scales the raster without changing the default font size");
+
+        const auto restored = ScreenshotClipboardContentReader::renderOriginalText(
+            standard->originalContent, 1.0, Qt::white);
+        require(restored && restored->formattedDocument->defaultFont().pixelSize() == 20 &&
+                    restored->image.size() == standard->image.size(),
+                "restored pins retain the readable default text layout");
+    }
+}
+
+void htmlExplicitFontSizesOverrideDefault() {
+    QMimeData mime;
+    mime.setHtml(QStringLiteral("<body style=\"font-size: 16px\"><p style=\"margin: 0\">Inherited "
+                                "<span style=\"font-size: 10px\">Small</span> "
+                                "<span style=\"font-size: 24pt\">Large</span></p></body>"));
+    const auto content = ScreenshotClipboardContentReader::readMimeData(&mime, 1.0);
+    require(content && content->isFormattedText(), "explicit HTML font sizes should render");
+    bool foundInherited = false;
+    bool foundSmall = false;
+    bool foundLarge = false;
+    for (QTextBlock block = content->formattedDocument->begin(); block.isValid();
+         block = block.next()) {
+        for (auto iterator = block.begin(); !iterator.atEnd(); ++iterator) {
+            const QTextFragment fragment = iterator.fragment();
+            if (!fragment.isValid()) {
+                continue;
+            }
+            const QFont font =
+                fragment.charFormat().font().resolve(content->formattedDocument->defaultFont());
+            if (fragment.text().contains(QStringLiteral("Inherited"))) {
+                foundInherited = font.pixelSize() == 16;
+            } else if (fragment.text() == QStringLiteral("Small")) {
+                foundSmall = font.pixelSize() == 10;
+            } else if (fragment.text() == QStringLiteral("Large")) {
+                foundLarge = qFuzzyCompare(font.pointSizeF(), 24.0);
+            }
+        }
+    }
+    require(foundInherited && foundSmall && foundLarge,
+            "HTML body and inline pixel/point font sizes override the pinned-text default");
+}
+
 void formattedTextHasPaddingOnEverySide() {
     const auto requirePadding = [](const ScreenshotClipboardContent& content, const char* message) {
         constexpr qreal expectedPadding = 16.0;
@@ -1341,6 +1409,8 @@ int main(int argc, char** argv) {
     changedLocalFilesAreRejectedAndTextFallbackRemainsAvailable();
     decodeIsCancellableAndReturnsGuiAffineDocuments();
     htmlIsSelectableAndExternalResourcesAreBlocked();
+    formattedTextUsesReadableDefaultFont();
+    htmlExplicitFontSizesOverrideDefault();
     formattedTextHasPaddingOnEverySide();
     formattedTextBackgroundFollowsApplicationTheme();
     htmlSourceBackgroundOverridesApplicationTheme();
