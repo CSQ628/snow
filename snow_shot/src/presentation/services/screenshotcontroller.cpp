@@ -1481,8 +1481,8 @@ void ScreenshotController::Impl::createSelectionWorkflows() {
                     m_colorPickerController->setSuppressed(suppressed);
                 },
             },
-            [this](int cornerRadius, int shadowWidth) {
-                m_selectionSettings->setSelectionEffects(cornerRadius, shadowWidth);
+            [this](int cornerRadius, int shadowWidth, const QColor& shadowColor) {
+                m_selectionSettings->setSelectionEffects(cornerRadius, shadowWidth, shadowColor);
             },
             [this](ScreenshotSelectionAspectRatioPreset preset, bool locked) {
                 m_selectionSettings->setAspectRatioPreference(preset, locked);
@@ -1710,6 +1710,7 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
                 m_selection.setRegionType(m_selectionSettings->regionType());
                 static_cast<void>(m_selection.setCornerRadius(m_selectionSettings->cornerRadius()));
                 static_cast<void>(m_selection.setShadowWidth(m_selectionSettings->shadowWidth()));
+                m_selection.setShadowColor(m_selectionSettings->shadowColor());
                 static_cast<void>(m_selection.setAspectRatioPreset(
                     m_selectionSettings->aspectRatioPreset(), {},
                     snow_shot::presentation::kScreenshotSelectionMinimumSize));
