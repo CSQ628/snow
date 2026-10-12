@@ -3,6 +3,7 @@
 #include "snowimageqtcodec.h"
 #include "snowimagecodecbridge.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_shot/image/supportedimagefiles.h"
 #include "../../test-support/virtualmemory.h"
 
 #include <QAbstractTextDocumentLayout>
@@ -40,6 +41,16 @@ void require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+void imageFileExtensionsMatchShellRegistration() {
+    const auto images = snow_shot::image::supportedImageFileExtensions();
+    require(ScreenshotClipboardContentReader::supportedImageFileExtensions() == images,
+            "image reader and shell registration share the authoritative image suffixes");
+    auto allFiles = images;
+    allFiles.append({QStringLiteral("txt"), QStringLiteral("html"), QStringLiteral("htm")});
+    require(ScreenshotClipboardContentReader::supportedFileExtensions() == allFiles,
+            "existing file pinning retains its additional formatted-text formats");
 }
 
 QByteArray pngBytes(const QImage& image) {
@@ -1036,6 +1047,7 @@ void nativeDibMaskColoredPixelsRemainPixels() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    imageFileExtensionsMatchShellRegistration();
     embeddedImagesUseManagedCachedPixels();
     if (application.arguments().contains(QStringLiteral("--embedded-images-only"))) {
         return EXIT_SUCCESS;

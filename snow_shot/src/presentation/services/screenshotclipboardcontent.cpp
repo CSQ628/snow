@@ -1,6 +1,7 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
+#include "snow_shot/image/supportedimagefiles.h"
 #include "screenshotclipboardcontentsnapshot.h"
 
 #include "../../image/snowimageqtcodec.h"
@@ -197,16 +198,25 @@ constexpr EncodedImageFormat kEncodedImageFormats[] = {
     {"image/jxl", snow::image::Format::jxl},  {"image/avif", snow::image::Format::avif},
 };
 
-struct FileImageFormat {
-    const char* suffix;
-    snow::image::Format format;
-};
+using snow_shot::image::ImageFileFormat;
+using snow_shot::image::kImageFileFormats;
 
-constexpr FileImageFormat kFileImageFormats[] = {
-    {"png", snow::image::Format::png},   {"jpg", snow::image::Format::jpeg},
-    {"jpeg", snow::image::Format::jpeg}, {"webp", snow::image::Format::webp},
-    {"jxl", snow::image::Format::jxl},   {"avif", snow::image::Format::avif},
-};
+snow::image::Format imageFileCodecFormat(snow_shot::image::ImageFileCodec codec) {
+    using Codec = snow_shot::image::ImageFileCodec;
+    switch (codec) {
+    case Codec::Png:
+        return snow::image::Format::png;
+    case Codec::Jpeg:
+        return snow::image::Format::jpeg;
+    case Codec::WebP:
+        return snow::image::Format::webp;
+    case Codec::Jxl:
+        return snow::image::Format::jxl;
+    case Codec::Avif:
+        return snow::image::Format::avif;
+    }
+    return snow::image::Format::unknown;
+}
 
 QImage normalizedImage(QImage image) {
     if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
@@ -439,12 +449,12 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
                 const ScreenshotClipboardContentReader::CancellationCheck& cancelled,
                 const AllocationCheck& allocate, qint64 retained) {
     const auto format =
-        std::find_if(std::begin(kFileImageFormats), std::end(kFileImageFormats),
-                     [&localImage](const FileImageFormat& candidate) {
+        std::find_if(std::begin(kImageFileFormats), std::end(kImageFileFormats),
+                     [&localImage](const ImageFileFormat& candidate) {
                          return localImage.suffix == QLatin1String(candidate.suffix);
                      });
     const bool textFile = isTextFile(localImage.suffix);
-    if ((!textFile && format == std::end(kFileImageFormats)) || cancellationRequested(cancelled)) {
+    if ((!textFile && format == std::end(kImageFileFormats)) || cancellationRequested(cancelled)) {
         return std::nullopt;
     }
 
@@ -489,10 +499,11 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
         return ScreenshotClipboardContentReader::decode(std::move(textSnapshot), cancelled,
                                                         textAllocate);
     }
-    if (allocate && !admitImage(snow_shot::image_codec::inspectSize(encoded, format->format),
+    const auto codecFormat = imageFileCodecFormat(format->codec);
+    if (allocate && !admitImage(snow_shot::image_codec::inspectSize(encoded, codecFormat),
                                 retained + encoded.size(), allocate))
         return std::nullopt;
-    return imageContent(snow_shot::image_codec::decode(encoded, format->format,
+    return imageContent(snow_shot::image_codec::decode(encoded, codecFormat,
                                                        QByteArray("image/") + format->suffix));
 }
 
@@ -891,11 +902,12 @@ ScreenshotClipboardContentReader::readMimeData(const QMimeData* mimeData, qreal 
     return captured.has_value() ? decode(std::move(*captured)) : std::nullopt;
 }
 
+QStringList ScreenshotClipboardContentReader::supportedImageFileExtensions() {
+    return snow_shot::image::supportedImageFileExtensions();
+}
+
 QStringList ScreenshotClipboardContentReader::supportedFileExtensions() {
-    QStringList extensions;
-    for (const auto& format : kFileImageFormats) {
-        extensions.append(QString::fromLatin1(format.suffix));
-    }
+    auto extensions = supportedImageFileExtensions();
     extensions.append({QStringLiteral("txt"), QStringLiteral("html"), QStringLiteral("htm")});
     return extensions;
 }
@@ -925,8 +937,8 @@ ScreenshotClipboardContentReader::snapshotLocalFiles(const QStringList& paths,
         const QString suffix = info.suffix().toLower();
         const bool supported =
             isTextFile(suffix) ||
-            std::any_of(std::begin(kFileImageFormats), std::end(kFileImageFormats),
-                        [&suffix](const FileImageFormat& format) {
+            std::any_of(std::begin(kImageFileFormats), std::end(kImageFileFormats),
+                        [&suffix](const ImageFileFormat& format) {
                             return suffix == QLatin1String(format.suffix);
                         });
         if (!supported || !info.isFile() || !info.isReadable() || info.size() <= 0 ||
