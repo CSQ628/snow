@@ -57,7 +57,8 @@ void launchArguments() {
 
 void imageSuffixes() {
     const auto extensions = snow_shot::image::supportedImageFileExtensions();
-    require(extensions == QStringList{QStringLiteral("png"), QStringLiteral("jpg"),
+    require(extensions == QStringList{QStringLiteral("gif"), QStringLiteral("apng"),
+                                      QStringLiteral("png"), QStringLiteral("jpg"),
                                       QStringLiteral("jpeg"), QStringLiteral("webp"),
                                       QStringLiteral("jxl"), QStringLiteral("avif")},
             "shell registration covers the formats accepted by Snow Shot's file image reader");

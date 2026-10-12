@@ -1,12 +1,14 @@
 #include "snow_shot/presentation/screenshotfilepinbatch.h"
 
 #include "snow_shot/platform/selectedfiles.h"
+#include "pinned_animation_fixtures.h"
 
 #include <QApplication>
 #include <QClipboard>
 #include <QColorSpace>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QMimeData>
 #include <QSemaphore>
 #include <QTemporaryDir>
@@ -514,6 +516,83 @@ void queuedDuplicatePolicyUsesEarlierPins() {
     require(presented == QStringList{first, second} && duplicateActions == 1,
             "duplicate policy is prepared after each earlier pin finishes");
 }
+
+void animatedFileBatchesRetainSources() {
+    QTemporaryDir directory;
+    const auto fixtures = pinned_animation_fixtures::images();
+    QStringList paths;
+    for (const auto& fixture : fixtures) {
+        const auto path = directory.filePath(QStringLiteral("source.") + fixture.suffix);
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "animated batch fixtures must be written");
+        paths.append(path);
+    }
+    ScreenshotFilePinBatch batch;
+    QList<ScreenshotClipboardContent> retained;
+    batch.start(paths, [&](ScreenshotClipboardContent content) {
+        const auto index = retained.size();
+        require(content.animationSource && content.animationSource->isAnimated() &&
+                    content.animationSource->encoded == fixtures.at(index).bytes &&
+                    content.originalContent.localFilePath == paths.at(index),
+                "batched animated files must retain source bytes and selection order");
+        retained.append(std::move(content));
+        return true;
+    });
+    finish(batch);
+    require(retained.size() == fixtures.size(), "every animated file must be presented");
+    for (qsizetype index = 0; index < paths.size(); ++index) {
+        require(QFile::remove(paths.at(index)) &&
+                    retained.at(index).animationSource->encoded == fixtures.at(index).bytes,
+                "completed batches must transfer immutable source ownership to their pins");
+    }
+}
+
+void queuedAnimatedShellRequestsRetainSources() {
+    QTemporaryDir directory;
+    const auto fixtures = pinned_animation_fixtures::images();
+    QStringList paths;
+    for (const auto& fixture : fixtures) {
+        const auto path = directory.filePath(QStringLiteral("queued.") + fixture.suffix.toUpper());
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "animated shell request fixtures must be written");
+        paths.append(path);
+    }
+    ScreenshotFilePinQueue queue;
+    QList<ScreenshotClipboardContent> retained;
+    const auto prepare = [&] {
+        ScreenshotFilePinQueue::Options options;
+        options.present = [&](ScreenshotClipboardContent content) {
+            const auto index = retained.size();
+            require(content.animationSource && content.animationSource->isAnimated() &&
+                        content.animationSource->encoded == fixtures.at(index).bytes &&
+                        content.originalContent.localFilePath == paths.at(index),
+                    "queued animated shell requests retain source bytes and arrival order");
+            retained.append(std::move(content));
+            return true;
+        };
+        return options;
+    };
+    const auto failure = [](const QString&) {
+        require(false, "supported animated shell requests must not fail");
+    };
+    for (const auto& path : paths) {
+        require(ScreenshotClipboardContentReader::supportedImageFileExtensions().contains(
+                    QFileInfo(path).suffix().toLower()),
+                "animated shell requests are admitted by the shared image suffix list");
+        queue.enqueue({path}, prepare, failure);
+    }
+    finish(queue);
+    require(retained.size() == fixtures.size(), "every queued animated shell request is presented");
+    for (qsizetype index = 0; index < paths.size(); ++index) {
+        require(QFile::remove(paths.at(index)) &&
+                    retained.at(index).animationSource->encoded == fixtures.at(index).bytes,
+                "queued pins own their animation bytes after their source files are removed");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -529,6 +608,8 @@ int main(int argc, char** argv) {
     completionReportsResults();
     queuedShellRequestsContinueAndRemainIndependent();
     queuedDuplicatePolicyUsesEarlierPins();
+    animatedFileBatchesRetainSources();
+    queuedAnimatedShellRequestsRetainSources();
     selectionFailures();
     ScreenshotExportCoordinator::shared().shutdown();
     return 0;

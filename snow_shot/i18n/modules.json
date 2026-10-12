@@ -60,6 +60,7 @@
     "ScreenshotSelectionResizeWorkflow",
     "ScreenshotSelectionToolbarWidget",
     "ScreenshotShortcutHintsWidget",
+    "SnowImageQtCodec",
     "snow_shot::app::mcp::ScreenshotMcpServer",
     "snow_shot::app::mcp::ScreenshotMcpSession",
     "snow_shot::presentation::DirectCaptureController"

@@ -1114,6 +1114,42 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("pin_to_screen_shortcuts/toggle_playback"),
+     QJsonArray{QStringLiteral("Space")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/next_frame"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/previous_frame"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/decrease_playback_speed"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/increase_playback_speed"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/reset_playback_speed"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("pin_to_screen_shortcuts/resize_window"),
      QJsonArray{QStringLiteral("M")},
      ConfigurationValueKind::StringList,
@@ -2196,6 +2232,24 @@ normalizeToolbarLayout(const QJsonValue& value, const QStringList& itemIds,
             hiddenSet.contains(QStringLiteral("save-as-file"))) {
             hidden.push_back(QStringLiteral("quick-save"));
             hiddenSet.insert(QStringLiteral("quick-save"));
+        }
+    }
+    if (known.contains(QStringLiteral("print")) && !positioned.contains(QStringLiteral("print")) &&
+        !hiddenSet.contains(QStringLiteral("print"))) {
+        for (QStringList& position : positions) {
+            const qsizetype saveIndex = position.indexOf(QStringLiteral("save-as-file"));
+            if (saveIndex >= 0) {
+                const qsizetype quickIndex = position.indexOf(QStringLiteral("quick-save"));
+                position.insert(quickIndex >= 0 ? std::min(quickIndex, saveIndex) : saveIndex,
+                                QStringLiteral("print"));
+                positioned.insert(QStringLiteral("print"));
+                break;
+            }
+        }
+        if (!positioned.contains(QStringLiteral("print")) &&
+            hiddenSet.contains(QStringLiteral("save-as-file"))) {
+            hidden.push_back(QStringLiteral("print"));
+            hiddenSet.insert(QStringLiteral("print"));
         }
     }
     if (migrateScreenshotLayout && !positions.isEmpty() &&
