@@ -390,6 +390,8 @@ class ScreenshotPinnedWindow final : public QWidget {
     QPointF canvasPositionForViewPosition(const QPointF& position) const;
     void copyEditToolbarContent();
     void copyCurrentViewport();
+    struct CopyOutputOptions;
+    void copyCurrentViewportWithOptions(CopyOutputOptions output);
     void copyOriginalContent();
     void loadImageFile();
     void loadClipboardContent();
@@ -411,6 +413,8 @@ class ScreenshotPinnedWindow final : public QWidget {
     void quickSave();
     void invalidatePendingCopy();
     void copyRenderedImage(std::shared_ptr<ScreenshotExportArtifact> artifact);
+    void copyRenderedImage(std::shared_ptr<ScreenshotExportArtifact> artifact,
+                           const CopyOutputOptions& output);
     void applyImageOperation(const QTransform& operation, int quarterTurnDelta = 0);
     void resetImageTransform();
     void applyImageTransform(const QTransform& transform, int quarterTurns);
@@ -490,11 +494,14 @@ class ScreenshotPinnedWindow final : public QWidget {
     void finishWindowMove();
     bool windowDragEnabled() const;
     bool windowDragEligible() const;
-    bool windowDragEligibleAt(const QPoint& position) const;
-    bool windowDragEnabledAt(const QPoint& position) const;
+    bool windowDragEligibleAt(const QPoint& position,
+                              Qt::KeyboardModifiers modifiers = Qt::NoModifier) const;
+    bool windowDragEnabledAt(const QPoint& position,
+                             Qt::KeyboardModifiers modifiers = Qt::NoModifier) const;
     bool handleDoubleClick(const QPoint& position);
     bool handleMiddleClick(const QPoint& position);
-    void updateWindowDragCursor(const QPoint& position);
+    void updateWindowDragCursor(const QPoint& position,
+                                Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void setWindowDragCursor(Qt::CursorShape shape);
     void clearWindowDragCursor();
     bool nativeTrackSizeConstraintsEnabled() const;
