@@ -6,9 +6,19 @@
 
 void ScreenshotOverlayEventAdapter::setEventTargets(
     ScreenshotOverlayInputHandler& inputHandler,
-    std::function<void()> raiseToolbarForCanvasInteraction) {
+    std::function<void()> raiseToolbarForCanvasInteraction,
+    std::function<void(ScreenshotOverlayWindow*, const QPointF&)> presentPointer) {
     m_inputHandler = &inputHandler;
     m_raiseToolbarForCanvasInteraction = std::move(raiseToolbarForCanvasInteraction);
+    m_presentPointer = std::move(presentPointer);
+}
+
+bool ScreenshotOverlayEventAdapter::presentOverlayPointer(ScreenshotOverlayWindow* overlay,
+                                                          const QPointF& position) {
+    if (!m_presentPointer)
+        return false;
+    m_presentPointer(overlay, position);
+    return true;
 }
 
 bool ScreenshotOverlayEventAdapter::acceptOverlayInput(bool genuine) {
@@ -18,6 +28,7 @@ bool ScreenshotOverlayEventAdapter::acceptOverlayInput(bool genuine) {
 void ScreenshotOverlayEventAdapter::clearEventTargets() {
     m_inputHandler = nullptr;
     m_raiseToolbarForCanvasInteraction = nullptr;
+    m_presentPointer = nullptr;
 }
 
 bool ScreenshotOverlayEventAdapter::shouldHandleOverlayMouseEvent(
@@ -97,13 +108,11 @@ void ScreenshotOverlayEventAdapter::handleUnhandledMiddleClick() {
 }
 
 bool ScreenshotOverlayEventAdapter::handleOverlayWheel(ScreenshotOverlayWindow* overlay,
-                                                       const QPointF& localPosition,
-                                                       const QPoint& angleDelta,
-                                                       const QPoint& pixelDelta) {
+                                                       const QWheelEvent& event) {
     if (m_inputHandler == nullptr) {
         return false;
     }
-    return m_inputHandler->handleWheel(overlay, localPosition, angleDelta, pixelDelta);
+    return m_inputHandler->handleWheel(overlay, event);
 }
 
 bool ScreenshotOverlayEventAdapter::shouldBlockUnhandledOverlayKeyInput() const {

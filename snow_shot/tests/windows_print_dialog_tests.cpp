@@ -1,9 +1,12 @@
 #include "../src/platform/windows/nativeprintdialog.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
+#include "print_diagnostics_test_support.h"
 
 #include <QApplication>
 #include <QColorSpace>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QThread>
@@ -20,6 +23,7 @@
 
 namespace {
 using Service = ScreenshotPrintService;
+using snow_shot::runtime::RuntimeActivityTracker;
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -32,14 +36,32 @@ void flush() {
     for (int i = 0; i < 5; ++i)
         QCoreApplication::processEvents();
 }
-void processUntil(const std::function<bool()>& condition) {
+void processUntil(
+    const std::function<bool()>& condition,
+    const char* message = "timed out waiting for asynchronous native print preparation") {
     QElapsedTimer timer;
     timer.start();
     while (!condition() && timer.elapsed() < 10000) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QThread::msleep(1);
     }
-    require(condition(), "timed out waiting for asynchronous native print preparation");
+    require(condition(), message);
+}
+
+void requireMemoryTrimBlocked(std::uint64_t idleCount) {
+    auto& activity = RuntimeActivityTracker::shared();
+    const auto active = activity.snapshot();
+    bool trimmed = false;
+    require(active.activeCount > idleCount &&
+                !activity.tryRunWhenIdle(active.generation, [&] { trimmed = true; }) && !trimmed,
+            "pending native interaction and completion cleanup must block memory trimming");
+}
+
+void waitForIdleActivity(std::uint64_t idleCount) {
+    processUntil(
+        [&] { return RuntimeActivityTracker::shared().snapshot().activeCount == idleCount; },
+        "completed native printing must retire its activity even when Shell retains its data");
 }
 
 enum class Outcome {
@@ -55,6 +77,8 @@ enum class Outcome {
     DeferredRelease,
     WorkerRelease,
     WindowHide,
+    WindowHideWorkerRelease,
+    WindowHideDuringDrop,
     DestroyOwner
 };
 Outcome outcome = Outcome::DeferredRelease;
@@ -66,6 +90,8 @@ int activations = 0;
 int enters = 0;
 int drops = 0;
 int leaves = 0;
+
+void showAndHideMockWizard();
 
 class WizardTarget : public winrt::implements<WizardTarget, IDropTarget> {
   public:
@@ -116,6 +142,10 @@ class WizardTarget : public winrt::implements<WizardTarget, IDropTarget> {
             return HRESULT_FROM_WIN32(ERROR_CANCELLED);
         if (outcome != Outcome::ImmediateRelease)
             retainedData.copy_from(data);
+        if (outcome == Outcome::WindowHideDuringDrop) {
+            showAndHideMockWizard();
+            requireMemoryTrimBlocked(0);
+        }
         if (outcome == Outcome::DestroyOwner) {
             delete expectedOwner;
             expectedOwner = nullptr;
@@ -137,7 +167,9 @@ HRESULT WINAPI activateWizard(REFCLSID clsid, LPUNKNOWN outer, DWORD context, RE
     *target = nullptr;
     if (outcome == Outcome::ActivateFailure)
         return E_ACCESSDENIED;
-    if (outcome != Outcome::MissingTarget)
+    if (outcome == Outcome::MissingTarget)
+        SetLastError(ERROR_SUCCESS); // A COM result must not depend on a stale Win32 error.
+    else
         *target = winrt::make<WizardTarget>().detach();
     return S_OK;
 }
@@ -160,6 +192,8 @@ void showAndHideMockWizard() {
 }
 
 void destroyedOwnerDuringPreparation() {
+    waitForIdleActivity(0);
+    const auto idleCount = RuntimeActivityTracker::shared().snapshot().activeCount;
     activations = 0;
     auto* owner = new QWidget;
     int completions = 0;
@@ -167,24 +201,30 @@ void destroyedOwnerDuringPreparation() {
     image.fill(Qt::white);
     screenshotLegacyWindowsPrintBackend({&activateWizard})(
         owner, image, [&](Service::Result result) {
+            requireMemoryTrimBlocked(idleCount);
             require(result.status == Service::Status::Cancelled,
                     "destroying the owner before PNG preparation finishes must cancel printing");
             ++completions;
         });
     require(activations == 0 && completions == 0,
             "PNG preparation must defer all native COM and wizard interaction");
+    requireMemoryTrimBlocked(idleCount);
     delete owner;
     processUntil([&] { return completions == 1; });
     require(activations == 0, "cancelled preparation must never activate the native wizard");
+    waitForIdleActivity(idleCount);
 }
 
 void photoWizardOutcomesAndSnapshotLifetime() {
     const auto backend = screenshotLegacyWindowsPrintBackend({&activateWizard});
-    for (auto next : {Outcome::ActivateFailure, Outcome::MissingTarget, Outcome::EnterFailure,
-                      Outcome::RejectedImage, Outcome::DropFailure, Outcome::RetainedDropFailure,
-                      Outcome::Cancel, Outcome::RetainedCancel, Outcome::ImmediateRelease,
-                      Outcome::DeferredRelease, Outcome::WorkerRelease, Outcome::WindowHide,
-                      Outcome::DestroyOwner}) {
+    for (auto next :
+         {Outcome::ActivateFailure, Outcome::MissingTarget, Outcome::EnterFailure,
+          Outcome::RejectedImage, Outcome::DropFailure, Outcome::RetainedDropFailure,
+          Outcome::Cancel, Outcome::RetainedCancel, Outcome::ImmediateRelease,
+          Outcome::DeferredRelease, Outcome::WorkerRelease, Outcome::WindowHide,
+          Outcome::WindowHideWorkerRelease, Outcome::WindowHideDuringDrop, Outcome::DestroyOwner}) {
+        waitForIdleActivity(0);
+        const auto idleCount = RuntimeActivityTracker::shared().snapshot().activeCount;
         outcome = next;
         activations = enters = drops = leaves = 0;
         snapshotPath.clear();
@@ -203,6 +243,7 @@ void photoWizardOutcomesAndSnapshotLifetime() {
         Service::Result final;
         require(service.printImage(&receiver, expectedOwner, image,
                                    [&](Service::Result result) {
+                                       requireMemoryTrimBlocked(idleCount);
                                        require(QThread::currentThread() == qApp->thread(),
                                                "wizard completion must return to the GUI thread");
                                        final = std::move(result);
@@ -214,23 +255,34 @@ void photoWizardOutcomesAndSnapshotLifetime() {
         if (retainedData) {
             require(QFileInfo::exists(snapshotPath),
                     "the PNG must remain available after the asynchronous handoff");
-            if (next != Outcome::DestroyOwner) {
+            if (next != Outcome::DestroyOwner && next != Outcome::WindowHideDuringDrop) {
                 require(completions == 0 && service.busy(),
                         "the request must remain pending while the wizard retains the snapshot");
+                requireMemoryTrimBlocked(idleCount);
                 require(!service.printImage(&receiver, expectedOwner, expectedImage, [](auto) {}),
                         "an active wizard must prevent duplicate print dialogs");
             }
-            if (next == Outcome::WindowHide) {
-                showAndHideMockWizard();
+            if (next == Outcome::WindowHide || next == Outcome::WindowHideWorkerRelease ||
+                next == Outcome::WindowHideDuringDrop) {
+                if (next != Outcome::WindowHideDuringDrop)
+                    showAndHideMockWizard();
                 require(completions == 1 && !service.busy() &&
                             final.status == Service::Status::HandedOff &&
                             QFileInfo::exists(snapshotPath),
                         "closing the dialog must release interaction while retained Shell data "
                         "keeps the snapshot available for native printing");
+                waitForIdleActivity(idleCount);
+                const auto idle = RuntimeActivityTracker::shared().snapshot();
+                bool trimmed = false;
+                require(RuntimeActivityTracker::shared().tryRunWhenIdle(idle.generation,
+                                                                        [&] { trimmed = true; }) &&
+                            trimmed && retainedData && QFileInfo::exists(snapshotPath),
+                        "a closed wizard must permit memory trimming without releasing Shell data");
             }
-            if (next == Outcome::WorkerRelease) {
+            if (next == Outcome::WorkerRelease || next == Outcome::WindowHideWorkerRelease) {
                 std::thread worker([data = std::move(retainedData)]() mutable { data = nullptr; });
                 worker.join();
+                requireMemoryTrimBlocked(idleCount);
             } else {
                 retainedData = nullptr;
             }
@@ -238,9 +290,10 @@ void photoWizardOutcomesAndSnapshotLifetime() {
         }
         const bool cancelled = next == Outcome::Cancel || next == Outcome::RetainedCancel ||
                                next == Outcome::DestroyOwner;
-        const bool handedOff = next == Outcome::ImmediateRelease ||
-                               next == Outcome::DeferredRelease || next == Outcome::WorkerRelease ||
-                               next == Outcome::WindowHide;
+        const bool handedOff =
+            next == Outcome::ImmediateRelease || next == Outcome::DeferredRelease ||
+            next == Outcome::WorkerRelease || next == Outcome::WindowHide ||
+            next == Outcome::WindowHideWorkerRelease || next == Outcome::WindowHideDuringDrop;
         if (completions != 1 || service.busy() || activations != 1)
             std::cerr << "outcome=" << static_cast<int>(next) << " completions=" << completions
                       << " busy=" << service.busy() << " activations=" << activations
@@ -275,10 +328,13 @@ void photoWizardOutcomesAndSnapshotLifetime() {
         }
         flush();
         require(completions == 1, "late data release must not complete a request twice");
+        waitForIdleActivity(idleCount);
     }
 }
 
 QString retainSnapshotUntilShutdown() {
+    waitForIdleActivity(0);
+    const auto idleCount = RuntimeActivityTracker::shared().snapshot().activeCount;
     outcome = Outcome::DeferredRelease;
     expectedImage = QImage(8, 4, QImage::Format_RGB32);
     expectedImage.fill(Qt::white);
@@ -288,15 +344,56 @@ QString retainSnapshotUntilShutdown() {
     activations = 0;
     screenshotLegacyWindowsPrintBackend({&activateWizard})(
         &owner, expectedImage, [&](Service::Result result) {
+            requireMemoryTrimBlocked(idleCount);
             require(result.status == Service::Status::HandedOff,
                     "closing the shutdown fixture must release its print request");
             ++completions;
         });
     processUntil([&] { return bool(retainedData); });
+    requireMemoryTrimBlocked(idleCount);
     showAndHideMockWizard();
     require(completions == 1 && retainedData && QFileInfo::exists(snapshotPath),
             "the shutdown fixture must retain native snapshot references after closure");
+    waitForIdleActivity(idleCount);
+    auto& activity = RuntimeActivityTracker::shared();
+    const auto idle = activity.snapshot();
+    FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    require(SUCCEEDED(retainedData->QueryGetData(&format)) &&
+                SUCCEEDED(retainedData->GetData(&format, &medium)),
+            "cached Shell data must remain readable after the print request completes");
+    ReleaseStgMedium(&medium);
+    bool trimmed = false;
+    require(activity.snapshot().activeCount == idleCount &&
+                !activity.tryRunWhenIdle(idle.generation, [&] { trimmed = true; }) && !trimmed,
+            "late native data access must restart the quiet period without retaining activity");
     return snapshotPath;
+}
+
+void verifyNativeFailureLogs(const QList<QJsonObject>& records) {
+    QMap<QString, int> failures;
+    bool handedOff = false;
+    for (const auto& record : records) {
+        const auto fields = record.value(QStringLiteral("fields")).toObject();
+        if (fields.value(QStringLiteral("backend")) != QStringLiteral("windows_photo_wizard"))
+            continue;
+        require(!QJsonDocument(record).toJson().contains("Screenshot.png"),
+                "native diagnostics must exclude temporary snapshot paths");
+        const auto event = record.value(QStringLiteral("event"));
+        if (event == QStringLiteral("print.native_failed")) {
+            require(record.value(QStringLiteral("level")) == QStringLiteral("WARN"),
+                    "native failures must persist as warnings");
+            ++failures[fields.value(QStringLiteral("stage")).toString() + u':' +
+                       fields.value(QStringLiteral("code")).toString()];
+        }
+        handedOff |= event == QStringLiteral("print.native_handed_off");
+    }
+    require(failures.value(QStringLiteral("activate_photo_wizard:0x80070005")) == 1 &&
+                failures.value(QStringLiteral("activate_photo_wizard:0x80004003")) == 1 &&
+                failures.value(QStringLiteral("DragEnter:0x80004005")) == 1 &&
+                failures.value(QStringLiteral("image_rejected:0x80004005")) == 1 &&
+                failures.value(QStringLiteral("Drop:0x80004005")) == 2 && handedOff,
+            "exported native logs must distinguish activation, rejection and handoff failures");
 }
 
 HWND nativeOwner = nullptr;
@@ -385,8 +482,10 @@ int main(int argc, char** argv) {
             nativePhotoWizardCancellation();
             return 0;
         }
+        print_tests::LogSession logs;
         photoWizardOutcomesAndSnapshotLifetime();
         destroyedOwnerDuringPreparation();
+        verifyNativeFailureLogs(logs.records());
         shutdownSnapshot = retainSnapshotUntilShutdown();
     }
     require(!QFileInfo::exists(shutdownSnapshot) &&

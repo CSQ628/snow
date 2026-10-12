@@ -81,6 +81,16 @@ double logicalDpiYForFontSizing() {
 }
 
 void applyFontFamily(QFont& font, const SnowSceneDisplayItem& item) {
+    if (item.kind == SNOW_SCENE_DISPLAY_ITEM_TEXT) {
+        font.setBold(item.text_bold != 0);
+        font.setItalic(item.text_italic != 0);
+    } else if (item.kind == SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER) {
+        // Serial labels center and fit glyph ink. Ambient text decorations have
+        // no serial style property and would paint beyond those measured bounds.
+        font.setUnderline(false);
+        font.setOverline(false);
+        font.setStrikeOut(false);
+    }
     const QString family = snow_canvas_text::fontFamilyFromSceneItem(item);
     if (!family.isEmpty()) {
         font.setFamily(family);
@@ -103,8 +113,11 @@ void configureTextDocument(QTextDocument& document, const SnowSceneDisplayItem& 
     document.setTextWidth(qMax(1.0, textWidth));
 }
 
-QSizeF naturalTextLayoutSize(const QString& text, const QFont& font,
-                             const SnowSceneDisplayItem& item, double* outInkWidth = nullptr) {
+double documentInkWidth(const QTextDocument& document);
+
+QSizeF automaticTextLayoutSize(const QString& text, const QFont& font,
+                               const SnowSceneDisplayItem& item, std::optional<double> maximumWidth,
+                               double* outInkWidth) {
     const QString measuredText = text.isEmpty() ? QStringLiteral(" ") : text;
     const QStringList lines = measuredText.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
     QTextOption option;
@@ -124,17 +137,19 @@ QSizeF naturalTextLayoutSize(const QString& text, const QFont& font,
         }
         layout.endLayout();
     }
-    if (outInkWidth != nullptr) {
-        *outInkWidth = maxWidth;
-    }
-
-    const double measuredWidth = qMax(1.0, maxWidth + autoResizeTextWidthSafety(font));
+    const double naturalWidth = qMax(1.0, maxWidth + autoResizeTextWidthSafety(font));
+    const double measuredWidth =
+        maximumWidth.has_value() ? qMin(naturalWidth, qMax(1.0, *maximumWidth)) : naturalWidth;
     // QTextLine::height() can differ substantially from QTextDocument's line
     // height for variable font faces. Painting uses QTextDocument, so it must
     // also be the height authority for the stored element rectangle.
     QTextDocument document;
     configureTextDocument(document, item, font, measuredWidth, text, true);
-    return QSizeF(measuredWidth, qMax(1.0, static_cast<double>(document.size().height())));
+    const QSizeF documentSize = document.size();
+    if (outInkWidth != nullptr) {
+        *outInkWidth = measuredWidth < naturalWidth ? documentInkWidth(document) : maxWidth;
+    }
+    return QSizeF(measuredWidth, qMax(1.0, static_cast<double>(documentSize.height())));
 }
 
 // Widest laid-out line of a wrapped document, in document (unwrapped ink)
@@ -269,14 +284,26 @@ QSizeF measureNaturalText(const QString& text, const QFont& baseFont,
 
 TextMeasuredLayout measureNaturalTextLayout(const QString& text, const QFont& baseFont,
                                             const SnowSceneDisplayItem& item, double zoom) {
+    return measureAutomaticTextLayout(text, baseFont, item, std::nullopt, zoom);
+}
+
+TextMeasuredLayout measureAutomaticTextLayout(const QString& text, const QFont& baseFont,
+                                              const SnowSceneDisplayItem& item,
+                                              std::optional<double> maximumWidth, double zoom) {
     const double safeZoom = qMax(0.0001, zoom);
     const FontResolution resolution = resolveFont(baseFont, item, safeZoom);
     double inkWidth = 1.0;
-    const QSizeF documentSize = naturalTextLayoutSize(text, resolution.font, item, &inkWidth);
     const double toDocument = resolution.scale / safeZoom;
+    const auto documentMaximum =
+        maximumWidth.has_value() ? std::optional<double>(*maximumWidth / toDocument) : std::nullopt;
+    const QSizeF documentSize =
+        automaticTextLayoutSize(text, resolution.font, item, documentMaximum, &inkWidth);
     TextMeasuredLayout measured;
     measured.layout = QSizeF(qMax(1.0, documentSize.width() * toDocument),
                              qMax(1.0, documentSize.height() * toDocument));
+    if (maximumWidth.has_value()) {
+        measured.layout.setWidth(qMin(measured.layout.width(), qMax(1.0, *maximumWidth)));
+    }
     measured.content =
         QSizeF(qMax(1.0, inkWidth * toDocument), qMax(1.0, documentSize.height() * toDocument));
     return measured;

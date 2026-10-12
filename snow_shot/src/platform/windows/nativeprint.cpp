@@ -1,6 +1,8 @@
 #include "../../presentation/services/nativeprintbackend.h"
 #include "nativeprintdocument.h"
 #include "nativeprintdialog.h"
+#include "nativeprintdiagnostics.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -27,6 +29,8 @@
 namespace {
 using Service = ScreenshotPrintService;
 using namespace winrt::Windows::Graphics::Printing;
+using snow_shot::print_detail::logPrintEvent;
+using snow_shot::print_detail::logWindowsPrintResult;
 
 QString printError(HRESULT code) {
     return QCoreApplication::translate("ScreenshotPrintService", "Windows printing failed (%1)")
@@ -42,6 +46,9 @@ bool isWindows11() {
 }
 
 class ModernJob final : public std::enable_shared_from_this<ModernJob> {
+    snow_shot::runtime::RuntimeActivityLease m_activity =
+        snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
+
   public:
     void start(QWidget* owner, QImage image, Service::Completion completion) {
         m_completion = std::move(completion);
@@ -52,11 +59,23 @@ class ModernJob final : public std::enable_shared_from_this<ModernJob> {
                                                 if (auto job = weak.lock())
                                                     job->finish({Service::Status::Cancelled, {}});
                                             });
+        const char* stage = "RoInitialize";
         try {
             const HRESULT initialized = RoInitialize(RO_INIT_SINGLETHREADED);
             winrt::check_hresult(initialized);
             m_initialized = true;
-            m_document = winrt::make_self<ScreenshotWindowsPrintDocument>(std::move(image));
+            stage = "IsSupported";
+            if (!PrintManager::IsSupported()) {
+                logPrintEvent("print.native_ui_unavailable",
+                              {{QStringLiteral("backend"), QStringLiteral("windows_modern")},
+                               {QStringLiteral("reason"), QStringLiteral("not_supported")}});
+                finish({Service::Status::Unavailable, {}});
+                return;
+            }
+            stage = "create_document";
+            m_document =
+                winrt::make_self<ScreenshotWindowsPrintDocument>(std::move(image), m_lifecycle);
+            stage = "activate_PrintManager";
             const auto interop =
                 winrt::get_activation_factory<PrintManager, IPrintManagerInterop>();
             if (!ownerAlive) {
@@ -64,25 +83,45 @@ class ModernJob final : public std::enable_shared_from_this<ModernJob> {
                 return;
             }
             const HWND handle = reinterpret_cast<HWND>(ownerAlive->winId());
+            stage = "GetForWindow";
             winrt::check_hresult(interop->GetForWindow(handle, winrt::guid_of<PrintManager>(),
                                                        winrt::put_abi(m_manager)));
+            stage = "register_PrintTaskRequested";
             m_requested = m_manager.PrintTaskRequested(
                 [self](const auto&, const PrintTaskRequestedEventArgs& event) {
+                    const char* stage = "CreatePrintTask";
                     try {
                         winrt::com_ptr<ScreenshotWindowsPrintDocument> document;
                         {
                             std::lock_guard lock(self->m_mutex);
-                            if (self->m_finishing)
+                            if (self->m_lifecycle->finished())
                                 return;
-                            self->m_taskCreated = true;
                             document = self->m_document;
                         }
                         auto task = event.Request().CreatePrintTask(
-                            L"SnowShot", [document](const auto& args) {
-                                args.SetSource(document.template as<IPrintDocumentSource>());
+                            L"SnowShot", [self, document](const auto& args) {
+                                try {
+                                    args.SetSource(document.template as<IPrintDocumentSource>());
+                                } catch (...) {
+                                    const auto code = logWindowsPrintResult(
+                                        winrt::to_hresult(), "windows_modern", "SetSource");
+                                    self->finish({Service::Status::Failed, printError(code)});
+                                    throw;
+                                }
                             });
+                        logPrintEvent(
+                            "print.native_task_created",
+                            {{QStringLiteral("backend"), QStringLiteral("windows_modern")}});
+                        stage = "register_Completed";
                         const auto token = task.Completed(
                             [self](const auto&, const PrintTaskCompletedEventArgs& args) {
+                                logPrintEvent(
+                                    "print.native_task_completed",
+                                    {{QStringLiteral("backend"), QStringLiteral("windows_modern")},
+                                     {QStringLiteral("status"),
+                                      static_cast<int>(args.Completion())}},
+                                    args.Completion() == PrintTaskCompletion::Failed ? QtWarningMsg
+                                                                                     : QtInfoMsg);
                                 switch (args.Completion()) {
                                 case PrintTaskCompletion::Submitted:
                                     self->finish({Service::Status::Submitted, {}});
@@ -98,7 +137,7 @@ class ModernJob final : public std::enable_shared_from_this<ModernJob> {
                         bool removeHandler;
                         {
                             std::lock_guard lock(self->m_mutex);
-                            removeHandler = self->m_finishing;
+                            removeHandler = self->m_lifecycle->finished();
                             if (!removeHandler) {
                                 self->m_task = task;
                                 self->m_completed = token;
@@ -107,25 +146,40 @@ class ModernJob final : public std::enable_shared_from_this<ModernJob> {
                         if (removeHandler)
                             task.Completed(token);
                     } catch (...) {
-                        self->finish({Service::Status::Failed, printError(winrt::to_hresult())});
+                        const auto code =
+                            logWindowsPrintResult(winrt::to_hresult(), "windows_modern", stage);
+                        self->finish({Service::Status::Failed, printError(code)});
                     }
                 });
+            stage = "ShowPrintUIForWindowAsync";
             winrt::check_hresult(interop->ShowPrintUIForWindowAsync(
                 handle, winrt::guid_of<winrt::Windows::Foundation::IAsyncOperation<bool>>(),
                 winrt::put_abi(m_ui)));
-            m_ui.Completed([self](const auto& operation,
-                                  winrt::Windows::Foundation::AsyncStatus status) {
-                try {
-                    if (status == winrt::Windows::Foundation::AsyncStatus::Canceled)
-                        self->finish({Service::Status::Cancelled, {}});
-                    else if (!operation.GetResults())
-                        self->finish({Service::Status::Unavailable, {}});
-                } catch (...) {
-                    self->finish({Service::Status::Unavailable, printError(winrt::to_hresult())});
-                }
-            });
+            logPrintEvent("print.native_ui_requested",
+                          {{QStringLiteral("backend"), QStringLiteral("windows_modern")}});
+            stage = "register_ui_Completed";
+            m_ui.Completed(
+                [self](const auto& operation, winrt::Windows::Foundation::AsyncStatus status) {
+                    try {
+                        if (status == winrt::Windows::Foundation::AsyncStatus::Canceled)
+                            self->finish({Service::Status::Cancelled, {}});
+                        else if (!operation.GetResults()) {
+                            logPrintEvent(
+                                "print.native_ui_unavailable",
+                                {{QStringLiteral("backend"), QStringLiteral("windows_modern")},
+                                 {QStringLiteral("reason"), QStringLiteral("ui_not_shown")}},
+                                QtWarningMsg);
+                            self->finish({Service::Status::Unavailable, {}});
+                        }
+                    } catch (...) {
+                        const auto code = logWindowsPrintResult(winrt::to_hresult(),
+                                                                "windows_modern", "ui_GetResults");
+                        self->finish({Service::Status::Unavailable, printError(code)});
+                    }
+                });
         } catch (...) {
-            finish({Service::Status::Unavailable, printError(winrt::to_hresult())});
+            const auto code = logWindowsPrintResult(winrt::to_hresult(), "windows_modern", stage);
+            finish({Service::Status::Unavailable, printError(code)});
         }
     }
 
@@ -133,18 +187,21 @@ class ModernJob final : public std::enable_shared_from_this<ModernJob> {
     void finish(Service::Result result) {
         {
             std::lock_guard lock(m_mutex);
-            if (m_finishing)
+            auto terminal = m_lifecycle->finish(std::move(result));
+            if (!terminal)
                 return;
-            // An interface failure after a task starts is terminal, never a reason
-            // to open a second dialog and risk submitting the same job twice.
-            if (result.status == Service::Status::Unavailable && m_taskCreated)
-                result.status = Service::Status::Failed;
-            m_finishing = true;
+            result = std::move(*terminal);
         }
+        if (result.status == Service::Status::Unavailable)
+            logPrintEvent("print.native_fallback_requested",
+                          {{QStringLiteral("backend"), QStringLiteral("windows_modern")},
+                           {QStringLiteral("reason"), QStringLiteral("failure_before_document")}},
+                          QtWarningMsg);
         const auto self = shared_from_this();
         QMetaObject::invokeMethod(
             qApp,
             [self, result = std::move(result)]() mutable {
+                const auto activity = std::move(self->m_activity);
                 Service::Completion completion;
                 PrintTask task{nullptr};
                 winrt::com_ptr<ScreenshotWindowsPrintDocument> document;
@@ -157,16 +214,23 @@ class ModernJob final : public std::enable_shared_from_this<ModernJob> {
                 if (document)
                     document->releasePreview();
                 QObject::disconnect(self->m_ownerDestroyed);
-                try {
-                    if (task)
-                        task.Completed(self->m_completed);
-                    if (self->m_manager)
-                        self->m_manager.PrintTaskRequested(self->m_requested);
-                    if (self->m_ui && result.status == Service::Status::Cancelled)
-                        self->m_ui.Cancel();
-                } catch (...) {
-                    // Cleanup must still release the apartment and complete the request.
-                }
+                // Cancel before opening the legacy UI. Every cleanup step must still run
+                // if Windows rejects cancellation or removal of another event handler.
+                const auto cleanup = [](const char* stage, auto action) {
+                    try {
+                        action();
+                    } catch (...) {
+                        logWindowsPrintResult(winrt::to_hresult(), "windows_modern", stage);
+                    }
+                };
+                if (self->m_ui && (result.status == Service::Status::Cancelled ||
+                                   result.status == Service::Status::Unavailable))
+                    cleanup("cancel_ui", [&] { self->m_ui.Cancel(); });
+                if (task)
+                    cleanup("remove_Completed", [&] { task.Completed(self->m_completed); });
+                if (self->m_manager)
+                    cleanup("remove_PrintTaskRequested",
+                            [&] { self->m_manager.PrintTaskRequested(self->m_requested); });
                 self->m_manager = nullptr;
                 self->m_ui = nullptr;
                 if (self->m_initialized) {
@@ -178,9 +242,9 @@ class ModernJob final : public std::enable_shared_from_this<ModernJob> {
             Qt::QueuedConnection);
     }
     std::mutex m_mutex;
+    std::shared_ptr<ScreenshotWindowsPrintLifecycle> m_lifecycle =
+        std::make_shared<ScreenshotWindowsPrintLifecycle>();
     bool m_initialized = false;
-    bool m_finishing = false;
-    bool m_taskCreated = false;
     QMetaObject::Connection m_ownerDestroyed;
     Service::Completion m_completion;
     winrt::com_ptr<ScreenshotWindowsPrintDocument> m_document;
@@ -201,42 +265,54 @@ class PhotoPrintDataObject : public winrt::implements<PhotoPrintDataObject, IDat
         : m_directory(std::move(directory)), m_data(std::move(data)), m_job(std::move(job)) {
         // Shell apartment caches may keep this object alive until process exit,
         // when COM no longer guarantees running its final Release/destructor.
-        m_shutdown = QObject::connect(qApp, &QObject::destroyed,
-                                      [directory = m_directory] { directory->remove(); });
+        m_shutdown = QObject::connect(qApp, &QObject::destroyed, [directory = m_directory] {
+            const auto activity = snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
+            directory->remove();
+        });
     }
     ~PhotoPrintDataObject();
 
     HRESULT __stdcall GetData(FORMATETC* format, STGMEDIUM* medium) noexcept override {
-        return m_data->GetData(format, medium);
+        return withActivity([&] { return m_data->GetData(format, medium); });
     }
     HRESULT __stdcall GetDataHere(FORMATETC* format, STGMEDIUM* medium) noexcept override {
-        return m_data->GetDataHere(format, medium);
+        return withActivity([&] { return m_data->GetDataHere(format, medium); });
     }
     HRESULT __stdcall QueryGetData(FORMATETC* format) noexcept override {
-        return m_data->QueryGetData(format);
+        return withActivity([&] { return m_data->QueryGetData(format); });
     }
     HRESULT __stdcall GetCanonicalFormatEtc(FORMATETC* input, FORMATETC* output) noexcept override {
-        return m_data->GetCanonicalFormatEtc(input, output);
+        return withActivity([&] { return m_data->GetCanonicalFormatEtc(input, output); });
     }
     HRESULT __stdcall SetData(FORMATETC* format, STGMEDIUM* medium,
                               BOOL release) noexcept override {
-        return m_data->SetData(format, medium, release);
+        return withActivity([&] { return m_data->SetData(format, medium, release); });
     }
     HRESULT __stdcall EnumFormatEtc(DWORD direction, IEnumFORMATETC** formats) noexcept override {
-        return m_data->EnumFormatEtc(direction, formats);
+        return withActivity([&] { return m_data->EnumFormatEtc(direction, formats); });
     }
     HRESULT __stdcall DAdvise(FORMATETC* format, DWORD flags, IAdviseSink* sink,
                               DWORD* connection) noexcept override {
-        return m_data->DAdvise(format, flags, sink, connection);
+        return withActivity([&] { return m_data->DAdvise(format, flags, sink, connection); });
     }
     HRESULT __stdcall DUnadvise(DWORD connection) noexcept override {
-        return m_data->DUnadvise(connection);
+        return withActivity([&] { return m_data->DUnadvise(connection); });
     }
     HRESULT __stdcall EnumDAdvise(IEnumSTATDATA** connections) noexcept override {
-        return m_data->EnumDAdvise(connections);
+        return withActivity([&] { return m_data->EnumDAdvise(connections); });
     }
 
   private:
+    template <typename Callback> static HRESULT withActivity(Callback&& callback) noexcept {
+        try {
+            // Shell may access the cached snapshot after the wizard has completed.
+            const auto activity = snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
+            return std::forward<Callback>(callback)();
+        } catch (...) {
+            return winrt::to_hresult();
+        }
+    }
+
     std::shared_ptr<QTemporaryDir> m_directory;
     QMetaObject::Connection m_shutdown;
     winrt::com_ptr<IDataObject> m_data;
@@ -259,6 +335,10 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
                                                       QStringLiteral("/snow-shot-print-XXXXXX"));
         const QString path =
             QDir::toNativeSeparators(m_directory->filePath(QStringLiteral("Screenshot.png")));
+        logPrintEvent("print.native_snapshot_started",
+                      {{QStringLiteral("backend"), QStringLiteral("windows_photo_wizard")},
+                       {QStringLiteral("width"), image.width()},
+                       {QStringLiteral("height"), image.height()}});
         auto* watcher = new QFutureWatcher<bool>(qApp);
         QObject::connect(
             watcher, &QFutureWatcher<bool>::finished, qApp, [self, watcher, path, api] {
@@ -267,37 +347,51 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
                 if (!self->m_owner) {
                     self->completeLater({Service::Status::Cancelled, {}});
                 } else if (!saved) {
+                    logWindowsPrintResult(
+                        HRESULT_FROM_WIN32(ERROR_WRITE_FAULT), "windows_photo_wizard",
+                        self->m_directory->isValid() ? "write_snapshot"
+                                                     : "create_snapshot_directory");
                     self->completeLater({Service::Status::Failed,
                                          printError(HRESULT_FROM_WIN32(ERROR_WRITE_FAULT))});
                 } else {
+                    logPrintEvent(
+                        "print.native_snapshot_prepared",
+                        {{QStringLiteral("backend"), QStringLiteral("windows_photo_wizard")}});
                     self->startWizard(path, api);
                 }
             });
-        watcher->setFuture(
-            QtConcurrent::run([image, directory = m_directory, cancelled = m_cancelled, path] {
+        watcher->setFuture(QtConcurrent::run(snow_shot::runtime::trackRuntimeWork(
+            [image, directory = m_directory, cancelled = m_cancelled, path] {
                 if (cancelled->load(std::memory_order_acquire) || !directory->isValid())
                     return false;
                 const bool saved = image.save(path, "PNG");
                 return saved && !cancelled->load(std::memory_order_acquire);
-            }));
+            })));
     }
 
   private:
     void startWizard(const QString& path, ScreenshotWindowsPrintDialogApi api) {
+        // Native calls can pump events and close the wizard before setup returns.
+        const auto activity = m_activity;
         const auto self = shared_from_this();
+        const char* stage = "CoInitializeEx";
         try {
             winrt::check_hresult(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
             m_initialized = true;
             m_ownerHandle = reinterpret_cast<HWND>(m_owner->winId());
             winrt::com_ptr<IShellItem> item;
+            stage = "SHCreateItemFromParsingName";
             winrt::check_hresult(SHCreateItemFromParsingName(
                 reinterpret_cast<LPCWSTR>(path.utf16()), nullptr, IID_PPV_ARGS(item.put())));
             winrt::com_ptr<IShellItemArray> items;
+            stage = "SHCreateShellItemArrayFromShellItem";
             winrt::check_hresult(
                 SHCreateShellItemArrayFromShellItem(item.get(), IID_PPV_ARGS(items.put())));
             winrt::com_ptr<IDataObject> shellData;
+            stage = "BindToHandler";
             winrt::check_hresult(
                 items->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(shellData.put())));
+            stage = "create_data_object";
             const auto data =
                 winrt::make<PhotoPrintDataObject>(m_directory, std::move(shellData), self);
             m_dataCreated = true;
@@ -306,13 +400,18 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
             constexpr CLSID photoPrintWizard{
                 0x60fd46de, 0xf830, 0x4894, {0xa6, 0x28, 0x6f, 0xa8, 0x1b, 0xc0, 0x19, 0x0d}};
             winrt::com_ptr<IDropTarget> target;
+            stage = "activate_photo_wizard";
             winrt::check_hresult(api.create(photoPrintWizard, nullptr, CLSCTX_INPROC_SERVER,
                                             __uuidof(IDropTarget), target.put_void()));
-            winrt::check_pointer(target.get());
+            // COM activation reports HRESULTs, not GetLastError(). A successful
+            // activation with no target is a pointer failure even if LastError is zero.
+            if (!target)
+                winrt::throw_hresult(E_POINTER);
             if (!m_owner) {
                 completeLater({Service::Status::Cancelled, {}});
                 return;
             }
+            stage = "SetWinEventHook";
             m_hook = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, nullptr, &wizardEvent,
                                      GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
             if (!m_hook) {
@@ -321,12 +420,15 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
             s_jobs.emplace(m_hook, self);
             POINTL point{};
             DWORD effect = DROPEFFECT_COPY;
+            stage = "DragEnter";
             winrt::check_hresult(target->DragEnter(data.get(), MK_LBUTTON, point, &effect));
             if (!(effect & DROPEFFECT_COPY)) {
+                stage = "image_rejected";
                 target->DragLeave();
                 winrt::throw_hresult(E_FAIL);
             }
             effect = DROPEFFECT_COPY;
+            stage = "Drop";
             const HRESULT status = target->Drop(data.get(), MK_LBUTTON, point, &effect);
             if (status == DRAGDROP_S_CANCEL || status == S_FALSE ||
                 status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
@@ -334,9 +436,14 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
             } else {
                 winrt::check_hresult(status);
                 m_handedOff = true;
+                logPrintEvent(
+                    "print.native_handed_off",
+                    {{QStringLiteral("backend"), QStringLiteral("windows_photo_wizard")}});
             }
         } catch (...) {
-            completeLater({Service::Status::Failed, printError(winrt::to_hresult())});
+            const auto code =
+                logWindowsPrintResult(winrt::to_hresult(), "windows_photo_wizard", stage);
+            completeLater({Service::Status::Failed, printError(code)});
         }
     }
 
@@ -347,13 +454,13 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
         // Final Release may run on the wizard thread. Cleanup, COM balancing and
         // the application's completion must run on the initiating GUI thread.
         QMetaObject::invokeMethod(
-            qApp,
-            [self = shared_from_this()] {
-                self->finish(self->m_result.value_or(
-                    Service::Result{self->m_owner && self->m_handedOff ? Service::Status::HandedOff
+            qApp, snow_shot::runtime::trackRuntimeWork([self = shared_from_this()]() mutable {
+                const auto job = std::move(self);
+                job->finish(job->m_result.value_or(Service::Result{job->m_owner && job->m_handedOff
+                                                                       ? Service::Status::HandedOff
                                                                        : Service::Status::Cancelled,
-                                    {}}));
-            },
+                                                                   {}}));
+            }),
             Qt::QueuedConnection);
     }
 
@@ -380,9 +487,12 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
         if (!job)
             return;
         if (event == EVENT_OBJECT_HIDE) {
-            if (window == job->m_window && !IsWindowVisible(window))
+            if (window == job->m_window && !IsWindowVisible(window)) {
+                logPrintEvent("print.native_ui_closed", {{QStringLiteral("backend"),
+                                                          QStringLiteral("windows_photo_wizard")}});
                 job->finish(
                     job->m_result.value_or(Service::Result{Service::Status::HandedOff, {}}));
+            }
             return;
         }
         if (job->m_window || GetWindow(window, GW_OWNER) ||
@@ -395,6 +505,8 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
         // The wizard exposes no owner interface and uses another GUI thread.
         // Cross-thread HWND ownership can deadlock its COM calls to this apartment.
         job->m_window = window;
+        logPrintEvent("print.native_ui_shown",
+                      {{QStringLiteral("backend"), QStringLiteral("windows_photo_wizard")}});
         if (!job->m_owner) {
             PostMessageW(window, WM_CLOSE, 0, 0);
             return;
@@ -408,6 +520,8 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
     void finish(Service::Result result) {
         if (!m_completion)
             return;
+        // Completion ends the interaction even when Shell keeps its data object alive.
+        const auto activity = std::move(m_activity);
         auto completion = std::move(m_completion);
         if (!m_owner)
             result = {Service::Status::Cancelled, {}};
@@ -426,6 +540,8 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
     }
 
     static inline std::unordered_map<HWINEVENTHOOK, std::weak_ptr<PhotoPrintJob>> s_jobs;
+    snow_shot::runtime::RuntimeActivityLease m_activity =
+        snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
     QPointer<QWidget> m_owner;
     HWND m_ownerHandle = nullptr;
     HWND m_window = nullptr;
@@ -441,8 +557,13 @@ class PhotoPrintJob final : public std::enable_shared_from_this<PhotoPrintJob> {
 };
 
 PhotoPrintDataObject::~PhotoPrintDataObject() {
+    const auto activity = snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
+    const auto job = std::move(m_job);
     QObject::disconnect(m_shutdown);
-    m_job->dataReleased();
+    // Release the native data and snapshot while cleanup is still tracked.
+    m_data = nullptr;
+    m_directory.reset();
+    job->dataReleased();
 }
 } // namespace
 
@@ -451,6 +572,9 @@ ScreenshotPrintService::Backend screenshotNativePrintBackend(bool legacy) {
         return screenshotLegacyWindowsPrintBackend();
     return [](QWidget* owner, QImage image, Service::Completion completion) {
         if (!isWindows11()) {
+            logPrintEvent("print.native_ui_unavailable",
+                          {{QStringLiteral("backend"), QStringLiteral("windows_modern")},
+                           {QStringLiteral("reason"), QStringLiteral("requires_windows_11")}});
             completion({Service::Status::Unavailable, {}});
             return;
         }

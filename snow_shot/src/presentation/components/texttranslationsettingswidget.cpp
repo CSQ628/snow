@@ -141,7 +141,13 @@ void TextTranslationSettingsWidget::applyTheme(
     update();
 }
 
-void TextTranslationSettingsWidget::rebuild() {
+void TextTranslationSettingsWidget::rebuild(bool force) {
+    const auto models = m_session.textTranslationConfigurations();
+    // fieldChanged also reports persistence state without changing configurations.
+    if (!force && m_renderedConfigurations == models) {
+        return;
+    }
+    m_renderedConfigurations = models;
     const QString focusedName =
         QApplication::focusWidget() != nullptr && isAncestorOf(QApplication::focusWidget())
             ? QApplication::focusWidget()->objectName()
@@ -150,7 +156,6 @@ void TextTranslationSettingsWidget::rebuild() {
         delete item->widget();
         delete item;
     }
-    const auto models = m_session.textTranslationConfigurations();
     if (models.isEmpty()) {
         auto* empty = new QLabel(tr("No translation configurations added"), this);
         empty->setObjectName(QStringLiteral("textTranslationConfigurationsEmpty"));
@@ -269,7 +274,6 @@ void TextTranslationSettingsWidget::deleteModel(const QString& id) {
     connect(modal, &AdModal::finished, this, [this, modal](AdModal::DialogCode) {
         m_deleteModal = nullptr;
         modal->deleteLater();
-        m_add->setFocus();
     });
     modal->open();
 }
@@ -383,11 +387,6 @@ void TextTranslationSettingsWidget::openEditor(const QString& id) {
         m_modal = nullptr;
         m_modalError = nullptr;
         modal->deleteLater();
-        QTimer::singleShot(0, this, [this]() {
-            auto* button =
-                m_editing ? findChild<AdButton*>(QStringLiteral("edit:") + m_editId) : m_add;
-            (button != nullptr ? button : m_add)->setFocus();
-        });
     });
     modal->setInitialFocusWidget(m_inputs[0]);
     // Resolve nested form size hints before the centered modal gets its first paint.
@@ -544,7 +543,7 @@ void TextTranslationSettingsWidget::retranslateUi() {
                         "writable and try again."));
     m_add->setText(tr("Add Configuration"));
     m_title->setText(QCoreApplication::translate("SettingsCatalog", "Translation Configurations"));
-    rebuild();
+    rebuild(true);
     translateModal();
     if (m_modal != nullptr &&
         std::any_of(m_fields.cbegin(), m_fields.cend(),

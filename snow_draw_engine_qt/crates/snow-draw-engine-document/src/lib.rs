@@ -1,3 +1,4 @@
+mod angle;
 #[path = "arrow/data.rs"]
 mod arrow;
 #[path = "arrow/binding_core.rs"]
@@ -30,10 +31,15 @@ mod auto_filter;
 mod bindings;
 mod distance;
 mod document;
+pub use angle::*;
 pub use auto_filter::*;
 pub use distance::*;
+mod diamond;
 mod document_geometry;
+pub use diamond::*;
 mod free_draw;
+mod magnifier;
+pub use magnifier::*;
 mod serial_number_format;
 mod transaction;
 pub use serial_number_format::{SerialNumberNumericType, format_serial_number};

@@ -1,6 +1,7 @@
 #include "physical_key_test_support.h"
 #include "snow_shot/presentation/screenshotsaveasfiledialog.h"
 #include "snow_shot/presentation/screenshotsavepreviewcanvas.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/components/aspectratiolockbutton.h"
 #include "snow_shot/presentation/components/pathinput.h"
@@ -330,13 +331,30 @@ void persistence(const QTemporaryDir& temp) {
     require(backend.applySelectValue(settings::SettingsSelectBinding::ScreenshotSaveAsFileDialog,
                                      QStringLiteral("snow_shot")),
             "settings backend failed to write dialog selection");
-    require(adapter.setAutoSaveAfterCopy(true) && adapter.setCopyImageFileToClipboard(true) &&
+    constexpr auto autoSaveBinding =
+        settings::SettingsMultiSelectBinding::ScreenshotAutoSaveAfterExecution;
+    const QStringList executionActions{
+        QStringLiteral("copy_screenshot"),         QStringLiteral("copy_scrolling_screenshot"),
+        QStringLiteral("copy_pinned_image"),       QStringLiteral("capture_focused_window"),
+        QStringLiteral("capture_current_monitor"), QStringLiteral("pin_to_screen")};
+    for (const QString& action : executionActions) {
+        require(backend.applyMultiSelectValue(autoSaveBinding, {action}) &&
+                    adapter.autoSaveAfterExecutionActions() == QStringList{action} &&
+                    backend.multiSelectValue(autoSaveBinding) == QVariantList{action},
+                "each automatic save scenario must round-trip through the settings backend");
+    }
+    const QStringList autoSaveActions{QStringLiteral("copy_screenshot"),
+                                      QStringLiteral("pin_to_screen")};
+    require(adapter.setAutoSaveAfterExecutionActions(autoSaveActions) &&
+                adapter.setCopyImageFileToClipboard(true) &&
                 backend.resetSection(settings::SettingsSectionReset::ScreenshotSettings) &&
-                adapter.autoSaveAfterCopy() && adapter.copyImageFileToClipboard() &&
+                adapter.autoSaveAfterExecutionActions() == autoSaveActions &&
+                adapter.copyImageFileToClipboard() &&
                 adapter.saveAsFileDialog() == QStringLiteral("snow_shot"),
             "function reset must preserve screenshot output settings");
     require(backend.resetSection(settings::SettingsSectionReset::ScreenshotOutput) &&
-                !adapter.autoSaveAfterCopy() && !adapter.copyImageFileToClipboard() &&
+                adapter.autoSaveAfterExecutionActions().isEmpty() &&
+                !adapter.copyImageFileToClipboard() &&
                 adapter.saveAsFileDialog() == QStringLiteral("system"),
             "output reset must restore all moved screenshot settings");
 
@@ -1021,11 +1039,24 @@ void canvasZoomHint() {
     canvas.setSource(fixture(), QSize(160, 100));
     canvas.show();
     flush();
-    auto* hint = child<QLabel>(&canvas, "savePreviewZoom");
+    auto* hint = child<CanvasStatusReadout>(&canvas, "savePreviewZoom");
+    auto* busy = child<CanvasStatusReadout>(&canvas, "savePreviewStatus");
+    require(child<QLabel>(&canvas, "savePreviewZoom") == hint &&
+                child<QLabel>(&canvas, "savePreviewStatus") == busy &&
+                hint->message() == CanvasStatusReadout::Message::Scale &&
+                busy->message() == CanvasStatusReadout::Message::RenderingPreview,
+            "export zoom and rendering hints must use the shared QLabel-compatible component");
     require(hint->isHidden(), "initial preview fitting must not show the zoom hint");
     auto* timer = child<QTimer>(&canvas, "savePreviewZoomTimer");
-    require(timer->isSingleShot() && timer->interval() == 1000 && !timer->isActive(),
+    require(timer == hint->dismissalTimer() && timer->isSingleShot() && timer->interval() == 1000 &&
+                !timer->isActive(),
             "zoom hint must use the pinned-window one-second dismissal interval");
+    canvas.setBusy(true);
+    require(busy->isVisible() && busy->pos() == QPoint(8, 8) &&
+                !busy->dismissalTimer()->isActive() &&
+                busy->toolTip() == QStringLiteral("Rendering preview") &&
+                busy->accessibleName() == busy->toolTip(),
+            "rendering status must persist at the shared top-left inset with accessible copy");
     const auto expire = [&] {
         timer->stop();
         require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
@@ -1059,7 +1090,8 @@ void canvasZoomHint() {
     expire();
     canvas.setOutput(fixture(QSize(80, 50)));
     canvas.resize(640, 440);
-    require(hint->isHidden() && !timer->isActive(),
+    require(hint->isHidden() && !timer->isActive() && busy->isVisible() &&
+                busy->pos() == QPoint(8, 8) && !busy->dismissalTimer()->isActive(),
             "output and layout changes must not show the zoom hint");
     pressKey(Qt::Key_Home);
     require(hint->isVisible() && timer->isActive(),
@@ -1074,6 +1106,40 @@ void canvasZoomHint() {
     pressKey(Qt::Key_Plus);
     require(hint->isHidden() && !timer->isActive(),
             "zoom input clamped to the current value must not show the hint");
+    canvas.setSource(fixture(), QSize(12000, 8000));
+    require(qAbs(canvas.zoom() - 0.05) < 0.000001 &&
+                hint->text() == QStringLiteral("Scale: 5.0%") && hint->isHidden(),
+            "export zoom below ten percent must retain one decimal without showing a hint");
+    pressKey(Qt::Key_Plus);
+    require(hint->text() == QStringLiteral("Scale: %1%").arg(canvas.zoom() * 100, 0, 'f', 1) &&
+                hint->accessibleName() == hint->toolTip(),
+            "transient export zoom must retain decimal precision and complete accessible text");
+    expire();
+    class HintTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            if (QByteArray(context) == "CanvasStatusReadout")
+                return QStringLiteral("Translated ") + QString::fromUtf8(source);
+            return {};
+        }
+    } translator;
+    require(QApplication::installTranslator(&translator), "shared hint translator unavailable");
+    QEvent languageChange(QEvent::LanguageChange);
+    QApplication::sendEvent(hint, &languageChange);
+    QApplication::sendEvent(busy, &languageChange);
+    require(hint->isHidden() && !timer->isActive() &&
+                hint->text().startsWith(QStringLiteral("Translated Scale: ")) &&
+                busy->isVisible() &&
+                busy->toolTip() == QStringLiteral("Translated Rendering preview"),
+            "shared language updates must preserve hidden zoom and persistent rendering status");
+    QApplication::removeTranslator(&translator);
+    canvas.setBusy(false);
+    require(busy->isHidden() && !busy->dismissalTimer()->isActive(),
+            "rendering completion must dismiss its status synchronously");
 }
 
 void canvasOriginalSizeBaseline() {
@@ -1251,10 +1317,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     QCursor::setPos(outside);
     leave(trigger);
     settle();
-    require(menu != nullptr, "hover popup was unexpectedly replaced during pointer movement");
-    std::cerr << "Shortcut popup width: " << popupWidth
-              << "; visible after leaving trigger: " << menu->isVisible() << '\n';
-    require(!menu->isVisible(), "leaving the trigger without entering its menu must hide it");
+    require(menu.isNull(),
+            "leaving the trigger without entering its menu must retire the popup session");
     require(!trigger->isHidden(), "leaving a custom save path must keep its menu button visible");
     require(popupWidth < 160, "two-action shortcut popup must size to its content");
     flush();
@@ -1265,7 +1329,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     leave(trigger);
     enter(menu);
     settle();
-    require(menu->isVisible(), "moving from the shortcut arrow into its menu must keep it open");
+    require(menu && menu->isVisible(),
+            "moving from the shortcut arrow into its menu must keep its session open");
     auto requireLabelsFit = [&] {
         const auto theme = adqt::theme::ThemeManager::instance().resolve(menu, trigger).values;
         QFont font = menu->font();
@@ -1299,7 +1364,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     leave(menu);
     enter(trigger);
     settle();
-    require(menu->isVisible(), "returning to the shortcut arrow must cancel pending dismissal");
+    require(menu && menu->isVisible(),
+            "returning to the shortcut arrow must cancel pending dismissal");
 
     // A native popup can grab mouse moves outside its bounds without another Leave event.
     QCursor::setPos(outside);
@@ -1307,8 +1373,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
                      Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(menu, &move);
     settle();
-    require(!menu->isVisible(),
-            "grabbed mouse movement outside the hover region must hide the menu");
+    require(menu.isNull(),
+            "grabbed mouse movement outside the hover region must retire the popup session");
     flush();
 
     enter(trigger);
@@ -1318,7 +1384,7 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     QCursor::setPos(outside);
     leave(menu);
     settle();
-    require(!menu->isVisible(), "leaving the popup must hide it without a click");
+    require(menu.isNull(), "leaving the popup must retire its session without a click");
 
     flush();
     trigger->click();
@@ -1338,8 +1404,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
                             Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(menu, &coveredMove);
     settle();
-    require(!menu->isVisible(),
-            "a covered trigger must not keep the hover popup open after pointer movement");
+    require(menu.isNull(),
+            "a covered trigger must retire its hover popup session after pointer movement");
     const QPoint triggerCenter = trigger->rect().center();
     QEnterEvent coveredEnter(triggerCenter, triggerCenter, coveredTrigger);
     QApplication::sendEvent(trigger, &coveredEnter);
@@ -1712,7 +1778,8 @@ class ExportTestTranslator final : public QTranslator {
         return false;
     }
     QString translate(const char* context, const char* source, const char*, int) const override {
-        if (QByteArray(context).startsWith("ScreenshotSave"))
+        if (QByteArray(context).startsWith("ScreenshotSave") ||
+            QByteArray(context) == "CanvasStatusReadout")
             return QStringLiteral("Translated ") + QString::fromUtf8(source);
         return {};
     }

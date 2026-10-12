@@ -72,9 +72,73 @@ impl Editor {
 
     pub fn view_state(&self) -> EditorViewState {
         EditorViewState {
-            surface: self.view.surface,
-            camera: self.view.camera,
+            surface: self.view.get().surface,
+            camera: self.view.get().camera,
             clear_color: self.config.clear_color,
+        }
+    }
+
+    /// Uncropped Smart Erase extraction needs filter previews, without text or selection UI.
+    pub fn smart_erase_presentation(&self, document: &DocumentModel) -> EditorPresentationState {
+        use crate::ElementCreationPreview;
+        use snow_draw_engine_document::CanvasFilterType;
+
+        let copying = matches!(
+            &self.state.interaction,
+            InteractionState::EditingSelection(state) if state.duplicate
+        );
+        let mut preview_elements = if copying {
+            Vec::new()
+        } else {
+            self.selection_preview_elements()
+                .unwrap_or_default()
+                .iter()
+                .filter(|preview| {
+                    document
+                        .element(preview.id)
+                        .is_ok_and(|element| element.data.is_smart_erase())
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        if !copying {
+            for id in &self.state.eraser.pending_ids {
+                if !document
+                    .element(*id)
+                    .is_ok_and(|element| element.data.is_smart_erase())
+                {
+                    continue;
+                }
+                preview_elements.retain(|preview| preview.id != *id);
+                if let Some(mut rect) = document.element_rect_proxy(*id) {
+                    rect.opacity = (rect.opacity * 0.5).clamp(0.0, 1.0);
+                    preview_elements.push(SelectionRectState { id: *id, rect });
+                }
+            }
+        }
+        let is_smart_erase = |preview: &ElementCreationPreview| match preview {
+            ElementCreationPreview::Filter(filter) => {
+                filter.filter_type == CanvasFilterType::SmartErase
+            }
+            ElementCreationPreview::PenFilter(filter) => {
+                filter.filter_type == CanvasFilterType::SmartErase
+            }
+            _ => false,
+        };
+        let creation_preview = self
+            .pen_filter_creation_preview()
+            .filter(is_smart_erase)
+            .or_else(|| {
+                self.state
+                    .creation_preview
+                    .as_ref()
+                    .filter(|preview| is_smart_erase(preview))
+                    .cloned()
+            });
+        EditorPresentationState {
+            preview_elements,
+            creation_preview,
+            ..Default::default()
         }
     }
 
@@ -84,6 +148,14 @@ impl Editor {
             .map(<[SelectionRectState]>::to_vec)
             .unwrap_or_default();
         let mut preview_arrows = self.preview_selection_arrows(document);
+        let mut preview_magnifiers = match &self.state.interaction {
+            InteractionState::EditingSelection(state) => self.selection_magnifier_previews(state),
+            InteractionState::EditingMagnifier(state) => vec![crate::SelectionMagnifierState {
+                id: state.id,
+                magnifier: state.preview,
+            }],
+            _ => Vec::new(),
+        };
         if let InteractionState::CreatingSerialNumber(state) = &self.state.interaction
             && let Some((id, text)) = &state.text
             && let Some(mut rect) = document.element_rect_proxy(*id)
@@ -133,6 +205,23 @@ impl Editor {
             .map_or_else(Vec::new, |(arrow_id, arrow)| {
                 self.arrow_handle_states(document, arrow_id, &arrow)
             });
+        let magnifier_previews_by_id: std::collections::HashMap<_, _> = preview_magnifiers
+            .iter()
+            .map(|value| (value.id, value.magnifier))
+            .collect();
+        let selected_magnifiers = self
+            .state
+            .selection
+            .ids
+            .iter()
+            .filter_map(|id| {
+                magnifier_previews_by_id
+                    .get(id)
+                    .copied()
+                    .or_else(|| document.magnifier(*id).ok().copied())
+                    .map(|magnifier| crate::SelectionMagnifierState { id: *id, magnifier })
+            })
+            .collect();
         let duplicate_preview = if let InteractionState::EditingSelection(state) =
             &self.state.interaction
             && state.duplicate
@@ -143,6 +232,7 @@ impl Editor {
             );
             preview_elements.clear();
             preview_arrows.clear();
+            preview_magnifiers.clear();
             crate::document_ops::duplicate_selection_transaction(
                 document,
                 &self.state.selection.ids,
@@ -171,6 +261,8 @@ impl Editor {
                 .or_else(|| self.state.creation_preview.clone()),
             active_text_draft: self.active_text_draft_display_presentation(),
             preview_arrows,
+            preview_magnifiers,
+            selected_magnifiers,
             preview_elements,
             preview_text_paints: self.selection_preview_text_paints(document),
             marquee: self.state.ui.marquee,
@@ -178,6 +270,7 @@ impl Editor {
             marquee_candidate_arrows,
             text_rect_ids,
             hovered_rect: self.hovered_rect(document),
+            hovered_magnifier: self.hovered_magnifier(document),
             hovered_free_draw: self.hovered_free_draw(document),
             hovered_pen_filter: self.hovered_pen_filter(document),
             hovered_text_rect: self.hovered_text_rect(document),
@@ -416,6 +509,9 @@ impl Editor {
             return None;
         }
         let id = self.state.selection.ids[0];
+        if let Some(value) = self.magnifier_snapshot(document, id) {
+            return Some((id, value.source_rect()));
+        }
         if document.rectangle(id).is_err() {
             return None;
         }
@@ -570,7 +666,7 @@ impl Editor {
                     .collect::<Vec<_>>();
                 let mut preview_arrows = state.preview_arrows.clone();
                 preview_arrows.extend(
-                    self.recompute_bound_arrows(document, &state.preview_elements)
+                    self.recompute_bound_arrows(document, &state.binding_overrides())
                         .into_iter()
                         .filter(|(id, _, _)| !selected_arrow_ids.contains(id))
                         .map(|(id, arrow, _)| SelectionArrowState { id, arrow }),
@@ -645,12 +741,25 @@ impl Editor {
             }
         }
 
-        let focus_points = visible_arrow_focus_points(
-            arrow_id,
-            arrow,
-            &self.bindable_elements(document, &[]),
-            self.camera().zoom,
-        );
+        if let Some(center) = snow_draw_engine_document::angle_arc_control_point(arrow) {
+            handles.push(ArrowHandleState {
+                kind: ArrowHandleKind::AngleArc,
+                center,
+                anchor: None,
+                fixed_segment: false,
+            });
+        }
+
+        let focus_points = if arrow.start_binding.is_some() || arrow.end_binding.is_some() {
+            visible_arrow_focus_points(
+                arrow_id,
+                arrow,
+                &self.bindable_elements(document, &[]),
+                self.camera().zoom,
+            )
+        } else {
+            Vec::new()
+        };
         for focus in focus_points {
             let anchor = points
                 .get(arrow_endpoint_index(points.len(), focus.edge))
@@ -682,7 +791,7 @@ impl Editor {
         if arrow.is_pen_highlight() {
             return Vec::new();
         }
-        let show_segment_handles = !arrow.is_distance()
+        let show_segment_handles = !arrow.is_generated_annotation()
             && (arrow.is_line() || arrow.is_elbow() || arrow.points.len() <= 2);
         if show_segment_handles {
             arrow_segment_midpoints(arrow)
@@ -745,12 +854,22 @@ impl Editor {
             return Some(ArrowHitTarget::Point(index));
         }
 
-        let focus_points = visible_arrow_focus_points(
-            arrow_id,
-            arrow,
-            &self.bindable_elements(document, &[]),
-            self.camera().zoom,
-        );
+        if let Some(center) = snow_draw_engine_document::angle_arc_control_point(arrow)
+            && point_distance(center, canvas_point) <= turning_radius
+        {
+            return Some(ArrowHitTarget::AngleArc);
+        }
+
+        let focus_points = if arrow.start_binding.is_some() || arrow.end_binding.is_some() {
+            visible_arrow_focus_points(
+                arrow_id,
+                arrow,
+                &self.bindable_elements(document, &[]),
+                self.camera().zoom,
+            )
+        } else {
+            Vec::new()
+        };
         for focus in focus_points {
             if point_distance(focus.point, canvas_point) <= handle_tolerance {
                 return Some(ArrowHitTarget::FocusPoint(focus.edge));
@@ -766,11 +885,21 @@ impl Editor {
 
         // Every visible control handle takes precedence over the bound label.
         if self.arrow_label_hit(document, arrow_id, canvas_point) {
-            return Some(if arrow.is_distance() {
+            return Some(if arrow.is_generated_annotation() {
                 ArrowHitTarget::Move
             } else {
                 ArrowHitTarget::Label
             });
+        }
+
+        if arrow.stroke.a != 0
+            && snow_draw_engine_document::angle_arc_hit_test(
+                arrow,
+                canvas_point,
+                arrow.stroke_width / 2.0 + element_hit_tolerance(self.camera().zoom),
+            )
+        {
+            return Some(ArrowHitTarget::AngleArc);
         }
 
         arrow_hit_test(
@@ -1308,6 +1437,10 @@ mod tests {
         let mut editor = editor_with_surface();
         editor.select_element(&document, text_id).unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
+            original_magnifiers: Default::default(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,
@@ -1379,6 +1512,10 @@ mod tests {
         let mut editor = editor_with_surface();
         editor.select_element(&document, text_id).unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
+            original_magnifiers: Default::default(),
+            preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
             pointer_id: 1,
             button: snow_draw_engine_interaction::PointerButton::Primary,

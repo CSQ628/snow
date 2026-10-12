@@ -24,6 +24,7 @@ struct ScreenshotCapturePresentationCallbacks {
     std::function<void()> updateColorPicker;
     std::function<void()> capturePresented;
     std::function<void()> beforeCapturePresented = []() {};
+    std::function<void()> resetPresentation = []() {};
 };
 
 struct ScreenshotCaptureWorkflowContext {
@@ -48,6 +49,8 @@ struct ScreenshotCaptureWorkflowContext {
     std::function<QPoint()> cursorPosition = [] { return QCursor::pos(); };
     // Navigation's live desktop backup belongs to the ending capture, not its exports.
     std::function<void()> releaseCaptureHistory = []() {};
+    std::function<bool()> screenshotSoundNotification = []() { return false; };
+    std::function<void()> playShutterSound = []() {};
 };
 
 class ScreenshotCaptureWorkflow final : private ScreenshotCaptureWorkerEventSink {

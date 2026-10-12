@@ -126,6 +126,17 @@ void contracts(QApplication& app) {
         editAction->setFocus();
         require(QApplication::focusWidget() == editAction,
                 "focus the translation action before theming");
+        for (const auto phase :
+             {settings::SettingsWritePhase::Pending, settings::SettingsWritePhase::Clean}) {
+            auto state = session.state(QStringLiteral("api.text-translation"));
+            state.phase = phase;
+            state.busy = phase == settings::SettingsWritePhase::Pending;
+            state.dirty = state.busy;
+            emit session.fieldChanged(QStringLiteral("api.text-translation"), state);
+            settle();
+            require(originalAction && QApplication::focusWidget() == originalAction,
+                    "unchanged translation persistence notifications preserve actions and focus");
+        }
         auto& themes = presentation::styles::ThemeManager::instance();
         const auto initialMode = themes.themeMode();
         themes.setThemeMode(presentation::styles::ThemeMode::Dark);
@@ -140,6 +151,9 @@ void contracts(QApplication& app) {
         require(session.textTranslationConfigurations().size() == 2 &&
                     session.textTranslationConfigurations().last().id != original.id,
                 "copy creates distinct same-provider identity");
+        require(widget->findChild<QWidget*>(QStringLiteral("textTranslationRow:") +
+                                            session.textTranslationConfigurations().last().id),
+                "a changed translation list renders its new configuration");
         widget->findChild<AdButton*>(QStringLiteral("edit:") + original.id)->click();
         settle();
         modal = widget->findChild<AdModal*>(QStringLiteral("textTranslationEditor"));
@@ -177,8 +191,13 @@ void contracts(QApplication& app) {
         require(presentation::LanguageManager::instance().setLanguage(QStringLiteral("zh_TW")),
                 "Traditional Chinese");
         settle();
+        AdButton currentFocus(&page);
+        currentFocus.show();
+        currentFocus.setFocus(Qt::MouseFocusReason);
+        require(currentFocus.hasFocus(), "establish focus before dismissing translation editor");
         modal->reject();
         settle();
+        require(currentFocus.hasFocus(), "translation editor dismissal must not refocus Add");
         require(session.textTranslationConfigurations().size() == 2 && cancelledEdits == 1 &&
                     cancelledCommits == 0,
                 "language refresh stays silent and Cancel does not commit or save shared drafts");
@@ -190,6 +209,14 @@ void contracts(QApplication& app) {
         auto* confirmation =
             widget->findChild<AdModal*>(QStringLiteral("textTranslationDeleteModal"));
         require(confirmation, "delete confirmation");
+        currentFocus.setFocus(Qt::MouseFocusReason);
+        confirmation->reject();
+        settle();
+        require(currentFocus.hasFocus(), "translation delete dismissal must not refocus Add");
+        widget->findChild<AdButton*>(QStringLiteral("delete:") + original.id)->click();
+        settle();
+        confirmation = widget->findChild<AdModal*>(QStringLiteral("textTranslationDeleteModal"));
+        require(confirmation, "reopen translation delete confirmation");
         confirmation->acceptButton()->click();
         settle();
         require(session.textTranslationConfigurations().size() == 1, "delete saved");

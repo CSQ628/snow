@@ -1,5 +1,6 @@
 #include "modal.h"
 #include "detail/pointer_region.h"
+#include "detail/native_window_chrome.h"
 
 #include "antd_icons.h"
 #include "theme/theme.h"
@@ -68,9 +69,6 @@ namespace {
 namespace filled_icons = adqt::icons::antd::filled;
 namespace outlined_icons = adqt::icons::antd::outlined;
 
-#if defined(Q_OS_WIN) || defined(_WIN32)
-constexpr int kWindowModeDwmFrameMargin = 1;
-#endif
 constexpr int kWindowModeFallbackDragHeight = 48;
 
 void activateWidgetLayouts(QWidget* widget) {
@@ -241,10 +239,13 @@ class ModalPanelWidget final : public QFrame {
 
 class ModalOverlayWidget final : public QWidget {
  public:
-  explicit ModalOverlayWidget(QWidget* parent = nullptr, Qt::WindowFlags flags = Qt::WindowFlags())
+  explicit ModalOverlayWidget(QWidget* parent, Qt::WindowFlags flags, bool windowMode)
       : QWidget(parent, flags) {
     setAttribute(Qt::WA_StyledBackground, false);
-    setAttribute(Qt::WA_TranslucentBackground, true);
+    // Reparenting native content or delivering accessibility events can create
+    // the surface before chrome is applied. Qt freezes the alpha format at
+    // native creation, so select the final backing-store mode up front.
+    setAttribute(Qt::WA_TranslucentBackground, !windowMode);
     setAutoFillBackground(false);
     setFocusPolicy(Qt::StrongFocus);
   }
@@ -287,14 +288,36 @@ class ModalOverlayWidget final : public QWidget {
       windowModalBlocker_->setWindowModality(Qt::WindowModal);
       windowModalBlocker_->installEventFilter(this);
     }
-    QWidget::setWindowModality(surfaceModality);
+    applySurfaceModality(surfaceModality);
     if (wasVisible) {
       show();
     }
 #else
     Q_UNUSED(owner)
-    QWidget::setWindowModality(modality);
+    if (windowModality() == modality) {
+      return;
+    }
+    // QWidget only applies a modality change to a hidden window. Re-enter the
+    // modal stack so its blocking scope matches the newly requested modality.
+    const bool wasVisible = isVisible();
+    if (wasVisible) {
+      hide();
+    }
+    applySurfaceModality(modality);
+    if (wasVisible) {
+      show();
+    }
 #endif
+  }
+
+  void applySurfaceModality(Qt::WindowModality modality) {
+    QWidget::setWindowModality(modality);
+    // QWidget updates an existing QWindow only when WA_ShowModal changes.
+    // WindowModal <-> ApplicationModal keeps that boolean set, so explicitly
+    // synchronize the native surface as well as the widget's requested scope.
+    if (windowHandle()) {
+      windowHandle()->setModality(modality);
+    }
   }
 
   void setFocusNavigator(std::function<bool(bool)> navigator) {
@@ -306,19 +329,30 @@ class ModalOverlayWidget final : public QWidget {
       return;
     }
     windowModeChromeEnabled_ = enabled;
-    if (enabled) {
-      setAttribute(Qt::WA_TranslucentBackground, false);
-    }
     applyWindowModeNativeChrome();
   }
 
   void setWindowResizable(bool value) { windowResizable_ = value; }
 
-#ifdef Q_OS_MACOS
   void setVisible(bool visible) override {
+    if (visible && isWindow()) {
+      // Qt skips Tool owners when creating a dialog's transient parent. These
+      // modals explicitly retain their capture/toolbar owner, including native
+      // stacking and WindowModal input blocking, until the caller detaches them.
+      QWidget* owner = parentWidget();
+      if (owner) {
+        owner->winId();
+      }
+      winId();
+      windowHandle()->setTransientParent(owner ? owner->windowHandle() : nullptr);
+    }
+#ifdef Q_OS_MACOS
     if (visible && windowModalBlocker_) {
       winId();
+      windowModalBlocker_->parentWidget()->winId();
       windowModalBlocker_->winId();
+      windowModalBlocker_->windowHandle()->setTransientParent(
+          windowModalBlocker_->parentWidget()->windowHandle());
       windowHandle()->setTransientParent(windowModalBlocker_->windowHandle());
       windowModalBlocker_->show();
     }
@@ -334,7 +368,9 @@ class ModalOverlayWidget final : public QWidget {
       // visible state. Stop redirecting focus before entering that transition.
       macModalSession_->beginHide();
     }
+#endif
     QWidget::setVisible(visible);
+#ifdef Q_OS_MACOS
     if (!visible) {
       macModalSession_.reset();
     }
@@ -345,8 +381,8 @@ class ModalOverlayWidget final : public QWidget {
       // Cocoa can replace the NSWindow when showing a new surface type.
       applyWindowModeNativeChrome();
     }
-  }
 #endif
+  }
 
   void applyWindowSurfaceFlags(Qt::WindowFlags flags) {
     if (windowFlags() == flags) {
@@ -489,43 +525,14 @@ class ModalOverlayWidget final : public QWidget {
 #endif
 
   void applyWindowModeNativeChrome() {
+    if (!windowModeChromeEnabled_) return;
+    detail::applyNativeWindowChrome(this);
 #ifdef Q_OS_MACOS
-    if (windowModeChromeEnabled_ && QGuiApplication::platformName() == QStringLiteral("cocoa")) {
-      detail::applyMacModalChrome(this);
+    if (QGuiApplication::platformName() == QStringLiteral("cocoa")) {
       if (macModalSession_) {
         macModalSession_->synchronize();
       }
     }
-#endif
-#if defined(Q_OS_WIN) || defined(_WIN32)
-    if (!windowModeChromeEnabled_ || QGuiApplication::platformName() != QStringLiteral("windows")) {
-      return;
-    }
-
-    const HWND hwnd = hwndForWidget(this);
-    if (hwnd == nullptr) {
-      return;
-    }
-
-    LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
-    style |= WS_CAPTION | WS_SYSMENU | WS_THICKFRAME;
-    style &= ~(WS_MAXIMIZEBOX | WS_MINIMIZEBOX);
-    SetWindowLongPtr(hwnd, GWL_STYLE, style);
-
-    LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-    exStyle &= ~WS_EX_LAYERED;
-    SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
-
-    const DWMNCRENDERINGPOLICY renderingPolicy = DWMNCRP_ENABLED;
-    DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &renderingPolicy,
-                          sizeof(renderingPolicy));
-
-    const MARGINS margins = {kWindowModeDwmFrameMargin, kWindowModeDwmFrameMargin,
-                             kWindowModeDwmFrameMargin, kWindowModeDwmFrameMargin};
-    DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 #endif
   }
 
@@ -2039,14 +2046,7 @@ QRect AdModal::windowModeAnchorGeometry() const {
 }
 
 Qt::WindowFlags AdModal::windowSurfaceFlags() const {
-#ifdef Q_OS_MACOS
-  // Keep a native titled frame so AppKit supplies corner clipping and shadow.
-  // The modal paints its own header and controls across the full content area.
-  Qt::WindowFlags flags = Qt::CustomizeWindowHint | Qt::WindowTitleHint |
-                          Qt::ExpandedClientAreaHint | Qt::NoTitleBarBackgroundHint;
-#else
-  Qt::WindowFlags flags = Qt::FramelessWindowHint;
-#endif
+  Qt::WindowFlags flags = detail::nativeWindowChromeFlags();
   // A taskbar-visible surface must be a plain window: Qt::Tool surfaces never
   // get a taskbar button and owned dialogs only appear while their owner does.
   flags |= windowTaskbarVisible_ ? Qt::Window : (windowModeDetached_ ? Qt::Tool : Qt::Dialog);
@@ -2097,7 +2097,7 @@ void AdModal::ensureOverlay() {
   QWidget* nativeParent = renderContainer_
                               ? renderContainer_.data()
                               : (windowMode && windowModeDetached_ ? nullptr : ownerWindow_.data());
-  auto* overlay = new ModalOverlayWidget(nativeParent, overlayFlags);
+  auto* overlay = new ModalOverlayWidget(nativeParent, overlayFlags, windowMode);
   overlay->setObjectName(QStringLiteral("ad-modal-overlay"));
   overlay->setProperty("adqt.interaction.surface", true);
   overlay->setProperty("adqt.popup.container", true);
@@ -2782,23 +2782,6 @@ void AdModal::updateAccessibility() {
   }
 }
 
-void AdModal::saveFocusBeforeOpen() {
-  QWidget* focusWidget = QApplication::focusWidget();
-  if (focusWidget && overlay_ && overlay_->isAncestorOf(focusWidget)) {
-    return;
-  }
-  focusBeforeOpen_ = focusWidget;
-}
-
-void AdModal::restoreFocusAfterClose() {
-  QWidget* target = focusBeforeOpen_.data();
-  focusBeforeOpen_.clear();
-  if (!target || !target->isVisible() || !target->isEnabled()) {
-    return;
-  }
-  target->setFocus(Qt::OtherFocusReason);
-}
-
 QWidget* AdModal::nextFocusableFrom(QWidget* start, bool next) const {
   if (!overlay_ || !start) {
     return nullptr;
@@ -3260,7 +3243,6 @@ void AdModal::setOpenInternal(bool value, bool emitSignal) {
   open_ = value;
   windowGeometryInitialized_ = false;
   if (open_) {
-    saveFocusBeforeOpen();
     ensureOverlay();
     refreshTexts();
     refreshVisibility();
@@ -3295,7 +3277,6 @@ void AdModal::setOpenInternal(bool value, bool emitSignal) {
             ->setWindowModeModality(Qt::NonModal, nullptr);
       }
     }
-    restoreFocusAfterClose();
   }
 
   if (emitSignal) {

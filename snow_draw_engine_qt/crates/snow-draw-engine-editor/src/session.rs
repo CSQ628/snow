@@ -32,10 +32,16 @@ pub struct PersistedEditorSession {
     config: EngineConfig,
     #[serde(default)]
     spotlight_shape: snow_draw_engine_document::HighlightShape,
+    #[serde(default)]
+    spotlight_corner_radii: snow_draw_engine_core::CornerRadii,
     rectangle: RectangleShapeStyle,
     arrow: ArrowStyle,
     #[serde(default)]
     distance: crate::DistanceStyle,
+    #[serde(default)]
+    angle: crate::AngleStyle,
+    #[serde(default)]
+    magnifier: crate::MagnifierStyle,
     line: super::ShapeStyle,
     free_draw: super::ShapeStyle,
     rectangle_highlight: super::ShapeStyle,
@@ -86,6 +92,23 @@ impl EditorSession {
     ) -> Vec<crate::ArrowTextLayoutRequest> {
         self.editor.arrow_text_layout_requests(document)
     }
+    pub fn arrow_text_request_build_count(&self) -> u64 {
+        self.editor.arrow_text_request_build_count()
+    }
+    pub fn arrow_text_cached_owner_count(&self) -> usize {
+        self.editor.arrow_text_cached_owner_count()
+    }
+    pub fn arrow_text_preview_candidate_count(&self) -> usize {
+        self.editor.arrow_text_preview_candidate_count()
+    }
+    pub fn sync_arrow_text_cache_after_document_change(
+        &mut self,
+        document: &DocumentModel,
+        delta: &snow_draw_engine_document::DocumentDelta,
+    ) {
+        self.editor
+            .sync_arrow_text_cache_after_document_change(document, delta);
+    }
     pub fn invalidate_arrow_text_measurements(&mut self) {
         self.editor.invalidate_arrow_text_measurements();
     }
@@ -114,6 +137,19 @@ impl EditorSession {
         transaction: &mut snow_draw_engine_document::Transaction,
     ) {
         self.editor.append_arrow_text_layouts(document, transaction);
+    }
+
+    pub fn append_arrow_text_layouts_preserving_labels(
+        &self,
+        document: &DocumentModel,
+        transaction: &mut snow_draw_engine_document::Transaction,
+        preserved_labels: &std::collections::HashSet<ElementId>,
+    ) {
+        self.editor.append_arrow_text_layouts_preserving_labels(
+            document,
+            transaction,
+            preserved_labels,
+        );
     }
 
     pub fn can_begin_arrow_text(&self) -> bool {
@@ -150,9 +186,12 @@ impl EditorSession {
         PersistedEditorSession {
             config: self.editor.config,
             spotlight_shape: state.default_spotlight_shape,
+            spotlight_corner_radii: state.default_spotlight_corner_radii,
             rectangle: state.default_rectangle_shape_style,
             arrow: state.default_arrow_style,
             distance: state.default_distance_style,
+            angle: state.default_angle_style,
+            magnifier: state.default_magnifier_style,
             line: state.default_line_style,
             free_draw: state.default_free_draw_style,
             rectangle_highlight: state.default_rectangle_highlight_style,
@@ -186,8 +225,12 @@ impl EditorSession {
         let state = &mut session.editor.state;
         state.default_rectangle_shape_style = persisted.rectangle;
         state.default_spotlight_shape = persisted.spotlight_shape;
+        state.default_spotlight_corner_radii = persisted.spotlight_corner_radii;
         state.default_arrow_style = persisted.arrow;
         state.default_distance_style = persisted.distance;
+        state.default_angle_style = persisted.angle;
+        state.default_magnifier_style = persisted.magnifier;
+        crate::validate_angle_style(persisted.angle)?;
         state.default_line_style = ShapeStyle {
             arrow_type: crate::style::normalized_line_arrow_type(persisted.line.arrow_type),
             arrow_shaft_type: Default::default(),
@@ -218,6 +261,18 @@ impl EditorSession {
             persisted.serial_number_values.unwrap_or([1; 5]);
         state.serial_number_sequence_overridden = persisted.serial_number_sequence_overridden;
         session.reset_editing_state();
+        Ok(session)
+    }
+
+    pub fn from_persisted_with_document(
+        persisted: PersistedEditorSession,
+        document: &DocumentModel,
+    ) -> Result<Self, ErrorCode> {
+        let has_creation_counters = persisted.serial_number_values.is_some();
+        let mut session = Self::from_persisted(persisted)?;
+        if !has_creation_counters {
+            session.advance_serial_number_counters_for_insertions(document, document.paint_order());
+        }
         Ok(session)
     }
 
@@ -267,6 +322,22 @@ impl EditorSession {
         self.editor.reset_editing_state();
     }
 
+    /// Discard fractional input at history replay or document-session transfer boundaries.
+    pub fn reset_magnifier_wheel_input(&mut self) {
+        self.editor.magnifier_wheel = None;
+    }
+
+    /// Native pointer capture belongs to the current runtime, not its persisted document.
+    pub fn has_pointer_capture(&self) -> bool {
+        self.editor.captured_pointer.is_some()
+    }
+
+    /// A cloned document session does not inherit native pointer ownership or queued releases.
+    pub fn reset_pointer_capture_state(&mut self) {
+        self.editor.captured_pointer = None;
+        self.editor.pending_capture_release = false;
+    }
+
     /// Discards measurements, numbering sequences, and transient storage from the old document.
     pub fn reset_document_retained_state(&mut self, initial_serial_number: &SerialNumberStyle) {
         self.editor.reset_editing_state();
@@ -292,6 +363,23 @@ impl EditorSession {
         self.editor.selected_element_count(document)
     }
 
+    pub fn magnifier_style(&self, document: &DocumentModel) -> crate::MagnifierStyle {
+        self.editor.magnifier_style(document)
+    }
+    pub fn magnifier_style_mixed(&self, document: &DocumentModel) -> u32 {
+        self.editor.magnifier_style_mixed(document)
+    }
+    pub fn set_magnifier_style_patch(
+        &mut self,
+        document: &DocumentModel,
+        style: crate::MagnifierStyle,
+        properties: u32,
+        creation_defaults: bool,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor
+            .set_magnifier_style_patch(document, style, properties, creation_defaults)
+    }
+
     pub fn shape_style(&self, document: &DocumentModel) -> ShapeStyle {
         self.editor.shape_style(document)
     }
@@ -304,11 +392,37 @@ impl EditorSession {
         self.editor.rectangle_shape_style(document)
     }
 
+    pub fn angle_style(&self, document: &DocumentModel) -> crate::AngleStyle {
+        self.editor.angle_style(document)
+    }
+    pub fn angle_style_mixed(&self, document: &DocumentModel) -> u32 {
+        self.editor.angle_style_mixed(document)
+    }
+    pub fn set_angle_style_patch(
+        &mut self,
+        document: &DocumentModel,
+        style: crate::AngleStyle,
+        properties: u32,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor
+            .set_angle_style_patch(document, style, properties)
+    }
+    pub fn adjust_angle_value(
+        &mut self,
+        document: &DocumentModel,
+        delta_radians: f64,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor.adjust_angle_value(document, delta_radians)
+    }
+
     pub fn distance_style(&self, document: &DocumentModel) -> crate::DistanceStyle {
         self.editor.distance_style(document)
     }
     pub fn distance_style_mixed(&self, document: &DocumentModel) -> u32 {
         self.editor.distance_style_mixed(document)
+    }
+    pub fn distance_measured_length(&self, document: &DocumentModel) -> f64 {
+        self.editor.distance_measured_length(document)
     }
     pub fn set_distance_style_patch(
         &mut self,
@@ -345,13 +459,16 @@ impl EditorSession {
         document: &DocumentModel,
         view: &EditorViewportState,
     ) -> SerialNumberToolbarState {
-        let mut editor = self.editor.clone();
-        editor.view = *view;
-        editor.serial_number_toolbar_state(document)
+        self.editor
+            .with_view(view, |editor| editor.serial_number_toolbar_state(document))
     }
 
     pub fn capture_document_sync_snapshot(&self, document: &DocumentModel) -> DocumentSyncSnapshot {
         self.editor.capture_document_sync_snapshot(document)
+    }
+
+    pub fn smart_erase_presentation(&self, document: &DocumentModel) -> EditorPresentationState {
+        self.editor.smart_erase_presentation(document)
     }
 
     pub fn serial_number_types_following_document(
@@ -373,6 +490,29 @@ impl EditorSession {
                     == crate::document_ops::next_serial_number(document, *numeric_type)
         })
         .collect()
+    }
+
+    pub fn advance_serial_number_counters_for_insertions(
+        &mut self,
+        document: &DocumentModel,
+        ids: &[ElementId],
+    ) {
+        let state = &mut self.editor.state;
+        for id in ids {
+            let Ok(serial) = document.serial_number(*id) else {
+                continue;
+            };
+            if !serial.serial_number_type.supports_number()
+                || state.serial_number_sequence_overridden[serial.numeric_type as usize]
+            {
+                continue;
+            }
+            let next = serial
+                .number
+                .saturating_add(1)
+                .max(state.serial_number_values()[serial.numeric_type as usize]);
+            state.set_serial_number_value(serial.numeric_type, next);
+        }
     }
 
     pub fn sync_serial_number_types_after_document_change(
@@ -473,9 +613,9 @@ impl EditorSession {
         point: Point<f64>,
         button: snow_draw_engine_interaction::PointerButton,
     ) -> Option<ElementId> {
-        let mut editor = self.editor.clone();
-        editor.view = *view;
-        editor.hit_quick_selection_at(document, point, button)
+        self.editor.with_view(view, |editor| {
+            editor.hit_quick_selection_at(document, point, button)
+        })
     }
 
     pub fn selected_ids(&self) -> Vec<ElementId> {
@@ -684,9 +824,9 @@ impl EditorSession {
         view: &mut EditorViewportState,
         event: InputEvent,
     ) -> Result<EditorUpdate, ErrorCode> {
-        self.editor.view = *view;
+        self.editor.view.set(*view);
         let update = self.editor.process_input(document, event)?;
-        *view = self.editor.view;
+        *view = self.editor.view.get();
         Ok(update)
     }
 
@@ -710,6 +850,10 @@ impl EditorSession {
         self.editor.scene_input_revision()
     }
 
+    pub fn angle_adjustment_target_revision(&self, document: &DocumentModel) -> u64 {
+        self.editor.angle_adjustment_target_revision(document)
+    }
+
     pub fn overlay_input_revision(&self) -> u64 {
         self.editor.overlay_input_revision()
     }
@@ -727,9 +871,8 @@ impl EditorSession {
         document: &DocumentModel,
         view: &EditorViewportState,
     ) -> EditorPresentationState {
-        let mut editor = self.editor.clone();
-        editor.view = *view;
-        editor.presentation_state(document)
+        self.editor
+            .with_view(view, |editor| editor.presentation_state(document))
     }
 
     pub fn presentation_state_for_refresh(
@@ -737,10 +880,8 @@ impl EditorSession {
         document: &DocumentModel,
         view: &EditorViewportState,
     ) -> EditorPresentationState {
-        let previous_view = std::mem::replace(&mut self.editor.view, *view);
-        let presentation = self.editor.presentation_state(document);
-        self.editor.view = previous_view;
-        presentation
+        self.editor
+            .with_view(view, |editor| editor.presentation_state(document))
     }
 }
 
@@ -748,10 +889,147 @@ const fn default_rectangle_filter_stroke_width() -> f64 {
     2.0
 }
 
+#[cfg(test)]
+mod borrowed_view_query_tests {
+    use super::*;
+    use snow_draw_engine_core::{
+        Camera, ColorRgba8, SurfaceSize,
+        arrow::{ArrowType, StrokeStyle},
+    };
+    use snow_draw_engine_document::{ArrowData, ElementMeta, SerialNumberData, Transaction};
+    use snow_draw_engine_interaction::PointerButton;
+
+    #[test]
+    fn serial_number_and_presentation_queries_borrow_the_view_and_reuse_label_cache() {
+        let mut document = DocumentModel::new();
+        let serial = document.allocate_element_id();
+        let owner = document.allocate_element_id();
+        let text = document.allocate_element_id();
+        let mut arrow = ArrowData::from_global_points(
+            &[
+                Point::new(10_100.0, 10_000.0),
+                Point::new(10_000.0, 10_000.0),
+                Point::new(10_000.0, 9_900.0),
+            ],
+            ColorRgba8::default(),
+            2.0,
+            StrokeStyle::Solid,
+            ArrowType::Straight,
+            None,
+            None,
+        )
+        .unwrap();
+        crate::AngleStyle::default().apply_to_arrow(&mut arrow);
+        arrow.text_element_id = Some(text);
+        let mut tx = Transaction::new("borrowed view fixture");
+        tx.insert_serial_number(serial, ElementMeta::default(), SerialNumberData::default());
+        let label = snow_draw_engine_document::generated_annotation_label(&arrow, None).unwrap();
+        tx.insert_arrow(owner, ElementMeta::default(), arrow);
+        tx.insert_text(text, ElementMeta::default(), label);
+        document.apply_transaction(tx).unwrap();
+        let mut session = EditorSession::new(Default::default()).unwrap();
+        session.set_active_tool(ActiveTool::Select).unwrap();
+        session.select_element(&document, serial).unwrap();
+        session
+            .editor
+            .set_camera(Camera {
+                center: Point::new(77.0, -88.0),
+                zoom: 3.0,
+            })
+            .unwrap();
+        let original = session.editor.view.get();
+        let snapshot = session.snapshot();
+        let first = EditorViewportState {
+            surface: SurfaceSize {
+                width: 800,
+                height: 600,
+            },
+            ..Default::default()
+        };
+        let second = EditorViewportState {
+            camera: Camera {
+                center: Point::new(10_000.0, 10_000.0),
+                zoom: 2.0,
+            },
+            ..first
+        };
+        assert!(
+            session
+                .serial_number_toolbar_state(&document, &first)
+                .visible
+        );
+        assert!(
+            !session
+                .serial_number_toolbar_state(&document, &second)
+                .visible
+        );
+        assert!(
+            session
+                .presentation_state(&document, &first)
+                .arrow_text_previews
+                .is_empty()
+        );
+        let builds = session.arrow_text_request_build_count();
+        session.presentation_state(&document, &second);
+        assert_eq!(session.arrow_text_request_build_count(), builds);
+        assert_eq!(
+            session.hit_quick_selection_at(
+                &document,
+                &first,
+                Point::new(0.0, 0.0),
+                PointerButton::Primary
+            ),
+            Some(serial)
+        );
+        assert_eq!(session.editor.view.get(), original);
+        assert_eq!(
+            session.snapshot(),
+            snapshot,
+            "read-only viewport queries preserve retained editor state"
+        );
+    }
+
+    #[test]
+    fn borrowed_view_scopes_restore_after_nested_queries_and_unwind() {
+        let editor = Editor::new(Default::default()).unwrap();
+        let original = editor.view.get();
+        let first = EditorViewportState {
+            camera: Camera {
+                center: Point::new(1.0, 2.0),
+                zoom: 2.0,
+            },
+            ..original
+        };
+        let second = EditorViewportState {
+            camera: Camera {
+                center: Point::new(3.0, 4.0),
+                zoom: 4.0,
+            },
+            ..original
+        };
+        editor.with_view(&first, |editor| {
+            assert_eq!(editor.camera(), first.camera);
+            editor.with_view(&second, |editor| assert_eq!(editor.camera(), second.camera));
+            assert_eq!(editor.camera(), first.camera);
+        });
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            editor.with_view(&second, |_| panic!("test view restoration"));
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(editor.view.get(), original);
+    }
+}
+
 pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<(), ErrorCode> {
+    crate::validate_magnifier_style(defaults.magnifier)?;
     super::style::validate_rectangle_shape_style(defaults.rectangle)?;
+    super::style::validate_rectangle_shape_style(RectangleShapeStyle {
+        corner_radii: defaults.spotlight_corner_radii,
+        ..defaults.rectangle
+    })?;
     super::style::validate_arrow_style(defaults.arrow)?;
     crate::validate_distance_style(defaults.distance)?;
+    crate::validate_angle_style(defaults.angle)?;
     for style in [
         defaults.line,
         defaults.free_draw,
@@ -789,7 +1067,9 @@ pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<
 }
 
 fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Result<(), ErrorCode> {
+    crate::validate_magnifier_style(persisted.magnifier)?;
     crate::validate_distance_style(persisted.distance)?;
+    crate::validate_angle_style(persisted.angle)?;
     fn finite_non_negative(value: f64) -> bool {
         value.is_finite() && value >= 0.0
     }
@@ -818,6 +1098,7 @@ fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Resul
             == snow_draw_engine_document::CanvasFilterType::RestoreBackground
         || !finite_non_negative(persisted.rectangle.stroke_width)
         || !valid_corner_radii(persisted.rectangle.corner_radii)
+        || !valid_corner_radii(persisted.spotlight_corner_radii)
         || !finite_non_negative(persisted.arrow.stroke_width)
         || !valid_shape(persisted.line)
         || !valid_shape(persisted.free_draw)

@@ -24,6 +24,7 @@ class QFocusEvent;
 class QEvent;
 class QContextMenuEvent;
 class QMouseEvent;
+class QMimeData;
 class QPaintEvent;
 class QResizeEvent;
 class QScreen;
@@ -32,6 +33,8 @@ class QStackedLayout;
 class QTextDocument;
 class QTextBrowser;
 class QTextEdit;
+class QTimer;
+class ScreenshotLatexRenderer;
 class QUrl;
 class ScreenshotFormattedTextLayer;
 class ScreenshotImageConversionView;
@@ -42,7 +45,9 @@ class ScreenshotTableEditor;
 struct ScreenshotTableCommandState;
 namespace adqt::widgets {
 class AdSpin;
-}
+class AdButton;
+class AdAlert;
+} // namespace adqt::widgets
 namespace snow_shot::presentation {
 class WindowShortcutManager;
 }
@@ -124,6 +129,9 @@ class ScreenshotRecognitionWindow final : public QWidget {
         bool takeFocus = true);
     void updateOcrSelection();
     void clearOcrSelection();
+    void clearTextSelection();
+    [[nodiscard]] bool textSelectionActive() const;
+    [[nodiscard]] std::unique_ptr<QMimeData> textSelectionClipboardMimeData() const;
     void updateOcrText(int lineIndex, const QString& text);
     void clearOcrPresentation();
     [[nodiscard]] std::optional<ScreenshotRecognitionImageSnapshot>
@@ -133,11 +141,14 @@ class ScreenshotRecognitionWindow final : public QWidget {
                                                const QRectF& canvasRect = {}, QImage filtered = {},
                                                const QRectF& filteredRect = {},
                                                qreal contentOpacity = 1.0);
-    void showFormattedText(std::shared_ptr<QTextDocument> document);
+    void showFormattedText(
+        std::shared_ptr<QTextDocument> document,
+        ScreenshotOcrTextLayer::RenderingMode mode = ScreenshotOcrTextLayer::RenderingMode::Normal,
+        bool takeFocus = true, std::optional<QTransform> documentToCanvas = std::nullopt);
     void clearFormattedText();
 
     void setTableSession(std::shared_ptr<ScreenshotTableEditingSession> session);
-    void clearTableSession();
+    void clearTableSession(bool retainEditor = false);
     [[nodiscard]] ScreenshotTableCommandState tableCommandState() const;
     void mergeTableSelection();
     void splitTableSelection();
@@ -147,14 +158,23 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void commitActiveTableEdit();
 
     void showTextEditor(QTextDocument* document, bool readOnly = false, bool streaming = false);
+    void showTextEditor(std::shared_ptr<QTextDocument> document, bool readOnly = false,
+                        bool streaming = false);
     void setTextEditorStreaming(bool streaming);
     void hideTextEditor();
+    void showLatexEditor(QTextDocument* document, std::function<QString()> source = {});
+    void showLatexEditor(std::shared_ptr<QTextDocument> document,
+                         std::function<QString()> source = {});
+    void setLatexPreviewEnabled(bool enabled);
+    void clearLatexPreview();
 
     void showQrContents(const QStringList& contents, bool detectLinks = true);
     void clearQrContents();
     void showImageConversion(SnowShotImageConversionFormat format, const QString& source, bool busy,
                              const QString& error);
     void clearImageConversion();
+    void showRecognitionError(const QString& error);
+    void clearRecognitionError();
 
     [[nodiscard]] bool copyVisibleContentToClipboard();
     [[nodiscard]] bool isOcrBackgroundAt(const QPointF& localPosition) const;
@@ -165,6 +185,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
   signals:
     void embeddedContextMenuRequested(const QPoint& globalPosition);
     void imageConversionRetryRequested();
+    void recognitionRetryRequested();
 
   protected:
     void changeEvent(QEvent* event) override;
@@ -179,6 +200,12 @@ class ScreenshotRecognitionWindow final : public QWidget {
     bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
+    void showTextEditorWithOwner(QTextDocument* document,
+                                 std::shared_ptr<QTextDocument> documentOwner, bool readOnly,
+                                 bool streaming);
+    void showLatexEditorWithOwner(QTextDocument* document,
+                                  std::shared_ptr<QTextDocument> documentOwner,
+                                  std::function<QString()> source);
     [[nodiscard]] QPointF canvasPositionForLocalPoint(const QPointF& localPosition) const;
     [[nodiscard]] QTransform canvasToLocalTransform() const;
     void registerWindowShortcuts();
@@ -187,6 +214,14 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void updateOriginalImagePreview();
     void destroyOriginalImagePreview();
     void observeOriginalImagePreviewHost();
+    [[nodiscard]] bool companionPreviewEnabled() const;
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    void prepareLatexPreview(ScreenshotOriginalImagePreviewState& state);
+    void scheduleLatexPreview();
+    [[nodiscard]] QString currentLatexSource() const;
+    [[nodiscard]] QString currentLatexSource(int selectionStart, int selectionEnd) const;
+    [[nodiscard]] QString latexPreviewStatus() const;
+#endif
     void installSelectionResizeEventFilters(QWidget* widget);
     [[nodiscard]] bool activeContentOwnsContextMenu(const QObject* watched) const;
     void showOcrContextMenu(const QPoint& globalPosition);
@@ -195,6 +230,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
     [[nodiscard]] ScreenshotSelectionDragMode
     selectionResizeDragModeAtLocalPoint(const QPointF& localPosition) const;
     [[nodiscard]] bool handleSelectionResizeEvent(QObject* watched, QEvent* event);
+    [[nodiscard]] bool forwardFormattedTextPointerEvent(QObject* watched, QEvent* event);
     void updateSelectionResizeCursor(const QPointF& localPosition);
     void updateLineBoxSelection(const QPointF& localPosition);
     [[nodiscard]] static Qt::CursorShape
@@ -215,16 +251,50 @@ class ScreenshotRecognitionWindow final : public QWidget {
     bool m_originalImagePreviewSuppressed = false;
     bool m_originalImagePreviewRefreshPending = false;
     bool m_originalImagePreviewStaysOnTop = true;
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    struct LatexRenderKey {
+        QString source;
+        QSize size;
+        qreal dpr = 0;
+        QColor foreground;
+
+        [[nodiscard]] bool operator==(const LatexRenderKey& other) const {
+            return source == other.source && size == other.size && qFuzzyCompare(dpr, other.dpr) &&
+                   foreground == other.foreground;
+        }
+    };
+    bool m_latexPreviewEnabled = false;
+    QPointer<QTextDocument> m_latexDocument;
+    std::function<QString()> m_latexSource;
+    QMetaObject::Connection m_latexDocumentConnection;
+    ScreenshotLatexRenderer* m_latexRenderer = nullptr;
+    QTimer* m_latexPreviewTimer = nullptr;
+    QImage m_latexPreviewImage;
+    LatexRenderKey m_latexValidKey;
+    LatexRenderKey m_latexPendingKey;
+    LatexRenderKey m_latexFallbackAttemptKey;
+    QString m_latexRequestedSource;
+    QSize m_latexRequestedSize;
+    QColor m_latexRequestedForeground;
+    qreal m_latexRequestedDpr = 0;
+    quint64 m_latexRequestToken = 0;
+    int m_latexPreviewError = 0;
+    bool m_latexRenderPending = false;
+    bool m_latexFallbackPending = false;
+#endif
     std::unique_ptr<snow_shot::presentation::WindowShortcutManager> m_ownedShortcutManager;
     snow_shot::presentation::WindowShortcutManager* m_shortcutManager = nullptr;
     std::shared_ptr<ScreenshotOcrPresentation> m_ocrPresentation;
     bool m_ocrCopyDefaultsEnabled = true;
     QWidget* m_contentContainer = nullptr;
+    QWidget* m_recognitionErrorPage = nullptr;
+    adqt::widgets::AdButton* m_recognitionRetry = nullptr;
     bool m_showOriginalImage = false;
     QStackedLayout* m_stack = nullptr;
     ScreenshotOcrTextLayer* m_textLayer = nullptr;
     QWidget* m_textEditorContainer = nullptr;
     QTextEdit* m_textEditor = nullptr;
+    std::shared_ptr<QTextDocument> m_textEditorDocumentOwner;
     adqt::widgets::AdSpin* m_textEditorSpin = nullptr;
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     QTextBrowser* m_qrBrowser = nullptr;

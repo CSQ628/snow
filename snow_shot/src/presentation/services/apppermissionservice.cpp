@@ -47,6 +47,8 @@ AppPermissions requiredPermissions(GlobalShortcutAction action, bool /*microphon
     case Action::ScreenshotOcr:
     case Action::ScreenshotTranslation:
     case Action::ScreenshotCopy:
+    case Action::ScreenshotSave:
+    case Action::ScreenshotQuickSave:
     case Action::ScreenshotFullScreen:
     case Action::ScreenshotFocusedWindow:
         return {P::ScreenRecording};
@@ -65,6 +67,7 @@ AppPermissions requiredPermissions(GlobalShortcutAction action, bool /*microphon
     case Action::OpenSettings:
     case Action::PinClipboardContent:
     case Action::RestoreLastClosedWindows:
+    case Action::HideShowAllWindows:
     case Action::PinSelectedFiles:
     case Action::ToggleGlobalHotkeys:
     case Action::ToggleDisableOnFocusedFullscreenWindow:

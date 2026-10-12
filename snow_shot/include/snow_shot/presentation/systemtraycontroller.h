@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "snow_shot/presentation/globalshortcuttypes.h"
+#include "snow_shot/platform/systemnotification.h"
 
 namespace snow_shot::presentation::settings {
 struct TrayCommandManifest;
@@ -41,7 +42,6 @@ class SystemTrayController final : public QObject {
     void showWarningMessage(const QString& title, const QString& message);
     void showUpdateMessage(const QString& message);
     void showRecordingExportMessage(const QString& path);
-    [[nodiscard]] bool canShowMessages() const;
     void setEnabled(bool enabled);
     [[nodiscard]] bool isEnabled() const;
     void setIconSelection(const QString& selection);
@@ -59,8 +59,11 @@ class SystemTrayController final : public QObject {
     void setMenuOptions(const QStringList& options);
     [[nodiscard]] QStringList menuOptions() const;
     void setQuickActionChecked(GlobalShortcutAction action, bool checked);
+    void setFocusedFullscreenSuppressionActive(bool active);
 
   signals:
+    void notificationDeliveryFinished(const snow_shot::platform::SystemNotificationRequest& request,
+                                      const snow_shot::platform::SystemNotificationResult& result);
     void screenshotRequested();
     void showMainWindowRequested();
     void restartRequested();

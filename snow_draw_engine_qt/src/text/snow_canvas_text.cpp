@@ -15,6 +15,12 @@ SnowTextStyle patchedTextStyle(SnowTextStyle current, const SnowTextStyle& reque
     if (properties & SNOW_TEXT_STYLE_MIXED_COLOR) {
         current.color = requested.color;
     }
+    if (properties & SNOW_TEXT_STYLE_MIXED_BOLD) {
+        current.bold = requested.bold;
+    }
+    if (properties & SNOW_TEXT_STYLE_MIXED_ITALIC) {
+        current.italic = requested.italic;
+    }
     if (properties & SNOW_TEXT_STYLE_MIXED_FONT_SIZE) {
         current.font_size = requested.font_size;
     }
@@ -114,6 +120,24 @@ QString textFromElementInfo(const SnowTextElementInfo& info) {
     return stringFromUtf8Field(info.text_utf8, info.text_utf8_len);
 }
 
+std::optional<QString> completeTextFromElementInfo(const SnowTextElementInfo& info,
+                                                   SnowRuntime runtime) {
+    if (info.text_truncated == 0) {
+        return textFromElementInfo(info);
+    }
+    std::uint32_t length = 0;
+    if (runtime == nullptr ||
+        snow_runtime_get_text_utf8(runtime, info.id, nullptr, 0, &length) != SNOW_OK) {
+        return std::nullopt;
+    }
+    QByteArray utf8(static_cast<qsizetype>(length), Qt::Uninitialized);
+    if (snow_runtime_get_text_utf8(runtime, info.id, reinterpret_cast<std::uint8_t*>(utf8.data()),
+                                   length, &length) != SNOW_OK) {
+        return std::nullopt;
+    }
+    return QString::fromUtf8(utf8);
+}
+
 QString fontFamilyFromSceneItem(const SnowSceneDisplayItem& item) {
     return stringFromUtf8View(item.font_family_utf8, item.font_family_utf8_len).trimmed();
 }
@@ -125,6 +149,8 @@ void copyTextToSceneItem(SnowCanvasSceneItem& item, const QString& text) {
 void applyTextStyleToSceneItem(SnowCanvasSceneItem& item, const SnowTextStyle& style) {
     item.text_color = style.color;
     item.font_size = resolvedTextFontSize(style.font_size);
+    item.text_bold = style.bold;
+    item.text_italic = style.italic;
     item.fill = style.fill;
     item.fill_style = style.fill_style;
     item.stroke = style.stroke;
@@ -140,6 +166,8 @@ SnowTextStyle textStyleFromSceneItem(const SnowSceneDisplayItem& item) {
     SnowTextStyle style{};
     style.color = item.text_color;
     style.font_size = resolvedTextFontSize(item.font_size);
+    style.bold = item.text_bold;
+    style.italic = item.text_italic;
     style.fill = item.fill;
     style.fill_style = item.fill_style;
     style.stroke = item.stroke;
@@ -160,7 +188,11 @@ SnowTextElementInfo newTextInfoAt(const QPointF& canvasPoint, const QFont& baseF
     info.center_x = canvasPoint.x();
     info.center_y = canvasPoint.y();
     info.font_size = resolvedTextFontSize(style.font_size);
+    info.bold = style.bold;
+    info.italic = style.italic;
     info.auto_resize = 1;
+    info.horizontal_align = style.horizontal_align;
+    info.vertical_align = style.vertical_align;
     SnowCanvasSceneItem item = defaultPreviewItem(info);
     applyTextStyleToSceneItem(item, style);
     const QSizeF initialSize = text_layout::measureNaturalText(QString(), baseFont, item);
@@ -186,9 +218,11 @@ SnowCanvasSceneItem defaultPreviewItem(const SnowTextElementInfo& info) {
     item.stroke_width = 0.0;
     item.corner_radii = SnowCornerRadii{6.0, 6.0, 6.0, 6.0};
     item.font_size = resolvedTextFontSize(info.font_size);
+    item.text_bold = info.bold;
+    item.text_italic = info.italic;
     item.opacity = 1.0;
-    item.text_horizontal_align = SNOW_TEXT_HORIZONTAL_ALIGN_LEFT;
-    item.text_vertical_align = SNOW_TEXT_VERTICAL_ALIGN_CENTER;
+    item.text_horizontal_align = info.horizontal_align;
+    item.text_vertical_align = info.vertical_align;
     item.fill_style = SNOW_FILL_STYLE_SOLID;
     item.stroke_style = SNOW_STROKE_STYLE_SOLID;
     copyTextToSceneItem(item, textFromElementInfo(info));
@@ -203,11 +237,11 @@ SnowCanvasSceneItem defaultPreviewItem(const SnowTextElementInfo& info) {
 }
 
 void updatePreviewFromEditorText(SnowCanvasSceneItem& item, const QString& text, bool autoResize,
-                                 const QFont& baseFont) {
+                                 const QFont& baseFont, std::optional<double> maximumWidth) {
     copyTextToSceneItem(item, text);
     if (autoResize) {
         const text_layout::TextMeasuredLayout measured =
-            text_layout::measureNaturalTextLayout(text, baseFont, item);
+            text_layout::measureAutomaticTextLayout(text, baseFont, item, maximumWidth);
         item.width = measured.layout.width();
         item.height = measured.layout.height();
         item.content_width = measured.content.width();

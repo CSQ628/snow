@@ -69,6 +69,8 @@ enum class SettingsSelectBinding {
     AppFont,
     ApplicationPriority,
     ApplicationQoS,
+    MemoryOptimizationPolicy,
+    ContextMenuMode,
     Proxy,
     UpdateMode,
     OcrModelType,
@@ -137,11 +139,11 @@ enum class SettingsSwitchBinding {
     ShowEditSelectionToolbar,
     TrayEnabled,
     FloatingToolbarEnabled,
-    ScreenshotAutoSaveAfterCopy,
     ScreenshotQuickSelectionModification,
     ScreenshotShowCursor,
     ScreenshotCaptureUiInScrollingScreenshot,
     ScreenshotShutterSoundNotification,
+    ScreenshotSoundNotification,
     ScreenshotConfirmBeforeExitingViaShortcut,
     ScreenshotAutoRecognizeQrCode,
     ScreenshotRestoreOriginalScreenColors,
@@ -151,6 +153,8 @@ enum class SettingsSwitchBinding {
     PinAutomaticTextRecognition,
     PinAutoResizeWindow,
     PinShowWindowButtons,
+    PinShowBorderByDefault,
+    PinShowShadowByDefault,
     PinConfirmBeforeClosingWindow,
     PinConfirmBeforeDestroyingWindow,
     OriginalImageTranslation,
@@ -162,6 +166,7 @@ enum class SettingsSwitchBinding {
     ScreenRecordingCaptureToolbar,
     ScreenRecordingAutoExitAfterRecordingEnds,
     ScreenRecordingNotifyAfterExportCompletes,
+    ScreenRecordingDeleteFilesOnRecordingClose,
     DisableHotkeysOnFocusedFullscreen,
     McpEnabled,
     AutoStartAtBoot,
@@ -187,12 +192,14 @@ enum class SettingsIntegerBinding {
 enum class SettingsMultiSelectBinding {
     DrawingQuickSelectionDisabledTools,
     TrayMenuOptions,
+    ScreenshotAutoSaveAfterExecution,
 };
 
 struct SettingsMultiSelectDefinition {
     SettingsMultiSelectBinding binding =
         SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools;
     QVector<SettingsOptionDefinition> options;
+    TranslatableText placeholder = {};
 };
 
 struct SettingsIntegerDefinition {
@@ -227,11 +234,25 @@ enum class SettingsColorBinding {
     PinBorderColor,
     PinBorderActiveColor,
     PinLockedBorderColor,
+    PinShadowColor,
+    PinShadowActiveColor,
+    PinLockedShadowColor,
 };
 
 struct SettingsColorDefinition {
     SettingsColorBinding binding = SettingsColorBinding::SelectionMaskColor;
     bool alphaChannelEnabled = true;
+};
+
+enum class SettingsColorPaletteBinding {
+    StrokeColors,
+    FillColors,
+};
+
+struct SettingsColorPaletteDefinition {
+    SettingsColorPaletteBinding binding = SettingsColorPaletteBinding::StrokeColors;
+    int colorCount = 5;
+    TranslatableText buttonLabel;
 };
 
 enum class SettingsRadioBinding {
@@ -421,12 +442,14 @@ struct TrayCommandManifest {
                                               int screenshotDelaySeconds = 3) const;
 };
 
-using SettingsItemPayload = std::variant<
-    SettingsSelectDefinition, SettingsSwitchDefinition, SettingsIntegerDefinition,
-    SettingsMultiSelectDefinition, SettingsSliderDefinition, SettingsColorDefinition,
-    SettingsRadioDefinition, SettingsFilePathDefinition, SettingsDirectoryPathDefinition,
-    SettingsTextDefinition, SettingsShortcutActionDefinition, SettingsLocalShortcutDefinition,
-    SettingsActionDefinition, SettingsCustomDefinition, SettingsGlobalMouseActionDefinition>;
+using SettingsItemPayload =
+    std::variant<SettingsSelectDefinition, SettingsSwitchDefinition, SettingsIntegerDefinition,
+                 SettingsMultiSelectDefinition, SettingsSliderDefinition, SettingsColorDefinition,
+                 SettingsColorPaletteDefinition, SettingsRadioDefinition,
+                 SettingsFilePathDefinition, SettingsDirectoryPathDefinition,
+                 SettingsTextDefinition, SettingsShortcutActionDefinition,
+                 SettingsLocalShortcutDefinition, SettingsActionDefinition,
+                 SettingsCustomDefinition, SettingsGlobalMouseActionDefinition>;
 
 struct SettingsItemDefinition {
     // Item IDs are globally stable within a registry. They are used as the

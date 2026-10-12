@@ -32,10 +32,13 @@ ScreenshotToolPalette::Options recordingToolbarOptions() {
     options.showArrowTool = true;
     options.showLineTool = true;
     options.showDistanceTool = true;
+    options.showAngleTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showPenHighlightTool = true;
     options.showSpotlightTool = true;
+    // Magnifiers sample captured images; recording annotations have no image source.
+    options.showMagnifierTool = false;
     options.showEraserTool = true;
     options.showFilterTool = true;
     options.showWatermarkTool = true;

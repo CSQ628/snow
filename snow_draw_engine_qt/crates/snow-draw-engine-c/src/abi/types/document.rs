@@ -177,6 +177,8 @@ pub struct SnowTextElementInfo {
     pub content_height: f64,
     pub rotation: f64,
     pub font_size: f64,
+    pub horizontal_align: SnowTextHorizontalAlign,
+    pub vertical_align: SnowTextVerticalAlign,
     pub text_utf8_len: u32,
     pub text_truncated: u8,
     pub auto_resize: u8,
@@ -187,7 +189,9 @@ pub struct SnowTextElementInfo {
     pub text_utf8: [std::ffi::c_char; SNOW_TEXT_UTF8_CAPACITY],
     pub font_family_utf8_len: u32,
     pub font_family_truncated: u8,
-    pub reserved1: [u8; 3],
+    pub bold: u8,
+    pub italic: u8,
+    pub reserved1: [u8; 1],
     pub font_family_utf8: [std::ffi::c_char; SNOW_FONT_FAMILY_UTF8_CAPACITY],
 }
 
@@ -205,6 +209,8 @@ impl Default for SnowTextElementInfo {
             content_height: 0.0,
             rotation: 0.0,
             font_size: 0.0,
+            horizontal_align: SnowTextHorizontalAlign::Left,
+            vertical_align: SnowTextVerticalAlign::Center,
             text_utf8_len: 0,
             text_truncated: 0,
             auto_resize: 0,
@@ -213,7 +219,9 @@ impl Default for SnowTextElementInfo {
             text_utf8: [0; SNOW_TEXT_UTF8_CAPACITY],
             font_family_utf8_len: 0,
             font_family_truncated: 0,
-            reserved1: [0; 3],
+            bold: 0,
+            italic: 0,
+            reserved1: [0; 1],
             font_family_utf8: [0; SNOW_FONT_FAMILY_UTF8_CAPACITY],
         }
     }

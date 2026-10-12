@@ -1,7 +1,9 @@
 #include "physical_key_test_support.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
+#include "snow_shot/presentation/screenshotlatexrenderer.h"
 #include "snow_shot/presentation/screenshottableeditor.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -18,7 +20,9 @@
 #include <QClipboard>
 #include <QContextMenuEvent>
 #include <QDir>
+#include <QFileInfo>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QFrame>
 #include <QFontDatabase>
 #include <QFocusEvent>
@@ -40,15 +44,18 @@
 #include <QScopeGuard>
 #include <QStyleOptionGraphicsItem>
 #include <QTextBlock>
+#include <QTextLayout>
 #include <QTextBrowser>
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTextFragment>
 #include <QTimer>
 #include <QThread>
+#include <QTranslator>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <QWheelEvent>
 
 #include <cstdlib>
 #include <algorithm>
@@ -67,11 +74,60 @@
 #endif
 
 namespace {
+class LatexPreviewTranslator final : public QTranslator {
+  public:
+    bool isEmpty() const override {
+        return false;
+    }
+
+    QString translate(const char* context, const char* source, const char*, int) const override {
+        if (qstrcmp(context, "ScreenshotRecognitionWindow") == 0 ||
+            (qstrcmp(context, "adqt::widgets::AdTextEdit") == 0 &&
+             qstrcmp(source, "Multiline input") == 0))
+            return QStringLiteral("Translated ") + QString::fromUtf8(source);
+        return {};
+    }
+};
+
 void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+void companionWheelZoomPreservesRecognition(ScreenshotOriginalImagePreviewWindow& preview,
+                                            QWidget& owner, QTextDocument& document,
+                                            bool bottomRight = false) {
+    const QRect originalGeometry = preview.geometry();
+    const QRect ownerGeometry = owner.geometry();
+    const QString originalText = document.toPlainText();
+    QWidget* const focus = QApplication::focusWidget();
+    const auto wheel = [&](int angle) {
+        const QPointF localPosition;
+        QWheelEvent event(localPosition, QPointF(preview.mapToGlobal(QPoint())), QPoint(),
+                          QPoint(0, angle), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        event.ignore();
+        QApplication::sendEvent(&preview, &event);
+        require(event.isAccepted(), "wheel input over the companion must be consumed");
+    };
+    wheel(120);
+    require(preview.size() == QSize(qRound(originalGeometry.width() * 1.1),
+                                    qRound(originalGeometry.height() * 1.1)) &&
+                (bottomRight ? preview.geometry().bottomRight() == originalGeometry.bottomRight()
+                             : preview.geometry().topLeft() == originalGeometry.topLeft()) &&
+                owner.geometry() == ownerGeometry && document.toPlainText() == originalText &&
+                QApplication::focusWidget() == focus && !preview.hasFocus(),
+            "companion wheel zoom must preserve recognition geometry, text and focus");
+    wheel(-120);
+    require(preview.geometry() == originalGeometry,
+            "reversing companion wheel zoom must return to the initial selection-sized preview");
+    auto* readout = preview.findChild<CanvasStatusReadout*>();
+    require(readout != nullptr, "the companion must use the shared zoom hint");
+    auto* timer = readout->dismissalTimer();
+    timer->stop();
+    require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
+            "hiding the integration fixture zoom hint failed");
 }
 
 void clickCell(ScreenshotTableEditor& editor, int row, int column) {
@@ -1411,6 +1467,57 @@ QGraphicsTextItem* formattedTextItem(QGraphicsView* layer) {
     return nullptr;
 }
 
+void formattedTextHoverUpdatesCursorWithoutClicking() {
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load the formatted hover test font");
+    }
+#endif
+    using Mode = ScreenshotRecognitionWindow::PresentationMode;
+    using Rendering = ScreenshotOcrTextLayer::RenderingMode;
+    for (const auto mode : {Mode::TopLevelWindow, Mode::EmbeddedChild}) {
+        for (const auto rendering : {Rendering::Normal, Rendering::SelectionOnly}) {
+            QWidget host;
+            host.resize(300, 180);
+            host.show();
+            ScreenshotRecognitionWindow recognition({}, &host, mode);
+            require(recognition.present({QGuiApplication::primaryScreen(), &host, host.rect(),
+                                         QRectF(QPointF(), QSizeF(host.size()) * 2.0), mode, 2.0}),
+                    "present formatted text hover at a scaled canvas");
+            auto document = std::make_shared<QTextDocument>();
+            document->setHtml(QStringLiteral("<p><b>Hover</b> text</p>"));
+            document->setTextWidth(140);
+            recognition.showFormattedText(document, rendering, false);
+            QApplication::processEvents();
+            auto* layer =
+                recognition.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+            auto* item = formattedTextItem(layer);
+            require(item != nullptr, "formatted hover requires a selectable document");
+            const auto block = document->firstBlock();
+            const auto line = block.layout()->lineAt(0);
+            const QPoint text = layer->mapFromScene(
+                item->mapToScene(block.layout()->position() +
+                                 QPointF(line.cursorToX(2), line.y() + line.height() / 2)));
+            const QPoint blank = layer->viewport()->rect().bottomRight() - QPoint(20, 20);
+            const auto hover = [&](QPoint point, Qt::CursorShape cursor) {
+                QMouseEvent move(QEvent::MouseMove, QPointF(point),
+                                 layer->viewport()->mapToGlobal(point), Qt::NoButton, Qt::NoButton,
+                                 Qt::NoModifier);
+                QApplication::sendEvent(layer->viewport(), &move);
+                require(layer->viewport()->cursor().shape() == cursor,
+                        "formatted hover must distinguish text from background without clicking");
+                require(!item->textCursor().hasSelection() && !recognition.textSelectionActive(),
+                        "formatted hover must not begin a selection");
+            };
+            hover(text, Qt::IBeamCursor);
+            hover(blank, Qt::ArrowCursor);
+            hover(text, Qt::IBeamCursor);
+        }
+    }
+}
+
 QImage renderFormattedTextItem(QGraphicsTextItem* item, bool focused) {
     const QRectF bounds = item->boundingRect();
     QImage image(bounds.size().toSize(), QImage::Format_ARGB32_Premultiplied);
@@ -1499,6 +1606,99 @@ void shortRecognitionWindowPreservesExactSelectionGeometryAcrossModes() {
                 editor->geometry() == editorContainer->rect(),
             "edit mode must remain exactly within a short screenshot selection");
     window.hideTextEditor();
+}
+
+void textRecognitionEditorsCollapseMarginsInSmallAreas() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalTheme = themes.theme();
+    const auto restoreTheme = qScopeGuard([&] { themes.setTheme(originalTheme); });
+    themes.setPreset(adqt::theme::ThemeScheme::Light, adqt::theme::ThemeDensity::Compact);
+    for (const auto mode : {ScreenshotRecognitionWindow::PresentationMode::TopLevelWindow,
+                            ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild}) {
+        QWidget parent;
+        parent.resize(400, 240);
+        parent.show();
+        QTextDocument document;
+        document.setPlainText(QStringLiteral("Editable recognition text"));
+        ScreenshotRecognitionWindow window({}, &parent, mode);
+        window.resize(320, 24);
+        window.showTextEditor(&document);
+        window.show();
+        QApplication::processEvents();
+        auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+        require(editor != nullptr && editor->geometry() == window.rect() &&
+                    editor->viewport()->geometry() == editor->rect(),
+                "a short recognition editor must give its entire area to text");
+
+        window.resize(320, 200);
+        QApplication::processEvents();
+        const QRect paddedViewport = editor->viewport()->geometry();
+        require(paddedViewport.left() > 0 && paddedViewport.top() > 0 &&
+                    paddedViewport.width() < editor->width() &&
+                    paddedViewport.height() < editor->height(),
+                "a roomy recognition editor must retain its themed padding");
+
+        QTextCursor selection(&document);
+        selection.setPosition(0);
+        selection.setPosition(8, QTextCursor::KeepAnchor);
+        editor->setTextCursor(selection);
+        for (const QSize& size : {QSize(320, 24), QSize(80, 200), QSize(80, 24)}) {
+            window.resize(size);
+            QApplication::processEvents();
+            require(editor->geometry() == window.rect() &&
+                        editor->viewport()->geometry() == editor->rect() &&
+                        editor->textCursor().selectedText() == QStringLiteral("Editable"),
+                    "resizing a short or narrow editor must remove margins and preserve selection");
+
+            window.showTextEditor(&document, true, true);
+            document.setPlainText(QStringLiteral("Streaming translation result"));
+            QApplication::processEvents();
+            require(editor->isReadOnly() && editor->viewport()->geometry() == editor->rect(),
+                    "streaming translation must retain the compact text area after updates");
+            window.setTextEditorStreaming(false);
+            QApplication::processEvents();
+            require(!editor->isReadOnly() && editor->viewport()->geometry() == editor->rect(),
+                    "completed translation must retain the compact text area");
+
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+            window.showLatexEditor(&document);
+            QApplication::processEvents();
+            require(editor->viewport()->geometry() == editor->rect(),
+                    "LaTeX source editing must share the compact text area");
+#endif
+            for (const auto scheme :
+                 {adqt::theme::ThemeScheme::Dark, adqt::theme::ThemeScheme::Light}) {
+                themes.setPreset(scheme, adqt::theme::ThemeDensity::Compact);
+                QApplication::processEvents();
+                require(editor->viewport()->geometry() == editor->rect(),
+                        "theme refreshes must not restore padding in a small text area");
+            }
+            window.resize(320, 200);
+            QApplication::processEvents();
+            require(editor->viewport()->geometry() == paddedViewport,
+                    "growing the recognition editor must restore its original themed padding");
+            window.showTextEditor(&document);
+            document.setPlainText(QStringLiteral("Editable recognition text"));
+            selection = QTextCursor(&document);
+            selection.setPosition(0);
+            selection.setPosition(8, QTextCursor::KeepAnchor);
+            editor->setTextCursor(selection);
+        }
+        window.hideTextEditor();
+    }
+
+    adqt::widgets::AdTextEdit formEditor;
+    formEditor.setHeightMode(adqt::widgets::AdTextEdit::HeightMode::FixedGeometry);
+    formEditor.resize(80, 24);
+    formEditor.show();
+    QApplication::processEvents();
+    require(formEditor.viewport()->geometry().left() > 0,
+            "an outlined form editor must retain its padding in a small area");
+    formEditor.setVariant(adqt::widgets::AdTextEdit::Variant::Borderless);
+    formEditor.setHeightMode(adqt::widgets::AdTextEdit::HeightMode::FixedRows);
+    QApplication::processEvents();
+    require(formEditor.viewport()->geometry().left() > 0,
+            "a borderless form editor sized by rows must retain its padding");
 }
 
 void formattedClipboardTextUsesASelectableQtDocument() {
@@ -1612,6 +1812,77 @@ void formattedClipboardTextUsesASelectableQtDocument() {
     window.clearFormattedText();
     require(window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText")) == nullptr,
             "leaving formatted-text mode should remove its selectable surface");
+}
+
+void selectionOnlyFormattedTextPaintsOnlyHighlights() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "formatted selection rendering requires a screen");
+    for (const qreal dpr : {1.0, 2.0}) {
+        QWidget host;
+        host.resize(360, 150);
+        QPalette palette = host.palette();
+        palette.setColor(QPalette::Window, QColor(24, 72, 120));
+        host.setPalette(palette);
+        host.setAutoFillBackground(true);
+        host.show();
+        ScreenshotRecognitionWindow window(
+            {}, &host, ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild);
+        require(window.present({screen, &host, host.rect(),
+                                QRectF(QPointF(), QSizeF(host.size()) * dpr),
+                                ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild, dpr}),
+                "present the formatted selection-only overlay");
+        QApplication::processEvents();
+        const auto original = host.grab().toImage();
+        auto document = std::make_shared<QTextDocument>();
+        QImage inlineImage(20, 20, QImage::Format_ARGB32_Premultiplied);
+        inlineImage.fill(Qt::red);
+        document->addResource(QTextDocument::ImageResource, QUrl(QStringLiteral("inline-image")),
+                              inlineImage);
+        document->setHtml(
+            QStringLiteral("<p style=\"color: red; background-color: yellow\"><b>Rich</b> "
+                           "<u>wrapped</u> selection text <img src=\"inline-image\"></p>"
+                           "<table border=\"1\"><tr><td>Cell</td></tr></table>"));
+        document->setTextWidth(160);
+        const QString originalHtml = document->toHtml();
+        window.showFormattedText(document, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly,
+                                 false);
+        QApplication::processEvents();
+        require(host.grab().toImage() == original,
+                "hidden formatted text must not repaint text, HTML backgrounds, or table borders");
+        auto* layer = window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+        auto* item = formattedTextItem(layer);
+        require(item && item->document() == document.get(),
+                "selection-only rendering must use the original document layout");
+        QTextCursor cursor(document.get());
+        cursor.select(QTextCursor::Document);
+        item->setTextCursor(cursor);
+        QApplication::processEvents();
+        const auto selected = host.grab().toImage();
+        require(selected != original, "formatted selection must paint visible highlights");
+        QImage overlay(host.size(), QImage::Format_ARGB32_Premultiplied);
+        overlay.fill(Qt::transparent);
+        QPainter painter(&overlay);
+        layer->render(&painter);
+        painter.end();
+        int maximumAlpha = 0;
+        for (int y = 0; y < overlay.height(); ++y)
+            for (int x = 0; x < overlay.width(); ++x)
+                maximumAlpha = std::max(maximumAlpha, qAlpha(overlay.pixel(x, y)));
+        require(maximumAlpha == 102,
+                "formatted selection paints only translucent highlights, without rich text glyphs");
+        require(document->toHtml() == originalHtml, "paint policy must not modify the source HTML");
+        window.showFormattedText(document, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly,
+                                 false);
+        require(item->textCursor().hasSelection(), "synchronization preserves native selection");
+        window.clearTextSelection();
+        QApplication::processEvents();
+        require(host.grab().toImage() == original,
+                "clearing formatted selection must restore the original pixels");
+        window.showFormattedText(document);
+        QApplication::processEvents();
+        require(host.grab().toImage() != original,
+                "displayed formatted text retains normal painting");
+    }
 }
 
 void qrContentsUseStrictRichTextLinksAndPreserveOrder() {
@@ -2546,6 +2817,12 @@ void tableCommandsUsePhysicalKeys() {
 }
 
 void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const QString previousAnchor = settings.mouseWheelZoomMode();
+    const auto restoreAnchor =
+        qScopeGuard([&] { static_cast<void>(settings.setMouseWheelZoomMode(previousAnchor)); });
+    require(settings.setMouseWheelZoomMode(QStringLiteral("bottom_right")),
+            "configure the ordinary companion wheel anchor");
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "preview fixture requires a screen");
     auto* window = new ScreenshotRecognitionWindow(ScreenshotRecognitionWindowActions{});
@@ -2601,6 +2878,11 @@ void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
     window->showTextEditor(&document);
     flush();
     require(preview->isVisible(), "text editing preserves the separate preview");
+    companionWheelZoomPreservesRecognition(*preview, *window, document, true);
+    window->refreshOriginalImagePreview();
+    flush();
+    require(preview->size() == geometry.size(),
+            "ordinary recognition refresh must preserve the manually selected preview zoom");
     window->setShowOriginalImage(true);
     require(preview->isHidden(), "original-image mode must hide the preview immediately");
     requirePreviewDestroyed("showing the original image destroys its separate preview");
@@ -2680,6 +2962,269 @@ void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
     flush();
 }
 
+void latexPreviewUsesPassiveCompanionAndSurvivesEditing() {
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load offscreen recognition font");
+        QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+    }
+#endif
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalTheme = themes.theme();
+    const auto restoreTheme = qScopeGuard([&] { themes.setTheme(originalTheme); });
+    themes.setPreset(adqt::theme::ThemeScheme::Light, adqt::theme::ThemeDensity::Compact);
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "LaTeX preview fixture has a screen");
+    // An externally owned Qt document must outlive the editor using it.
+    QTextDocument document;
+    LatexPreviewTranslator translator;
+    ScreenshotRecognitionWindow window(ScreenshotRecognitionWindowActions{});
+    const QRect geometry(screen->availableGeometry().topLeft() + QPoint(320, 120), QSize(200, 100));
+    require(window.present({screen, nullptr, geometry, QRectF(0, 0, 200, 100)}),
+            "LaTeX editor selection presents");
+    QImage original(200, 100, QImage::Format_ARGB32_Premultiplied);
+    original.fill(Qt::blue);
+    window.setOriginalImagePreviewProvider(
+        [&]() -> std::optional<ScreenshotOriginalImagePreviewState> {
+            ScreenshotOriginalImagePreviewState state;
+            state.image = original;
+            state.imageRectInViewport = QRectF(0, 0, 200, 100);
+            state.resultRect = geometry;
+            state.transientOwner = &window;
+            state.mouseWheelZoomMode = QStringLiteral("top_left");
+            return state;
+        },
+        &window);
+    window.setOriginalImagePreviewEnabled(false);
+    document.setPlainText(QStringLiteral("\\frac{a}{b}+\\sqrt{x}"));
+    window.showLatexEditor(&document);
+    const auto waitFor = [](const std::function<bool()>& predicate) {
+        QElapsedTimer timer;
+        timer.start();
+        do {
+            QApplication::processEvents();
+            QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            if (predicate())
+                return true;
+            QThread::msleep(1);
+        } while (timer.elapsed() < 10000);
+        return false;
+    };
+    const auto preview = [&]() {
+        return window.findChild<ScreenshotOriginalImagePreviewWindow*>();
+    };
+    require(waitFor([&] {
+                return preview() && preview()->isVisible() &&
+                       preview()->accessibleDescription().isEmpty();
+            }),
+            "real MicroTeX preview renders even when text preview is disabled");
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && !editor->isReadOnly() && editor->document() == &document,
+            "LaTeX uses the shared writable input component");
+    require(preview()->windowFlags().testFlag(Qt::WindowDoesNotAcceptFocus) &&
+                preview()->testAttribute(Qt::WA_ShowWithoutActivating) &&
+                preview()->focusPolicy() == Qt::NoFocus,
+            "the formula companion declares passive activation and focus on every backend");
+    // Offscreen does not implement passive tool-window activation. The Windows backend
+    // can verify that showing the companion preserves the real editor's native focus.
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+        require(
+            waitFor([&] { return editor->hasFocus() && QApplication::activeWindow() == &window; }),
+            "showing the native formula companion must preserve editor focus");
+    }
+    require(window.geometry() == geometry && preview()->size() == geometry.size() &&
+                preview()->geometry().right() < window.geometry().left() && !preview()->hasFocus(),
+            "formula companion preserves selection size, left placement and passive focus");
+    companionWheelZoomPreservesRecognition(*preview(), window, document);
+    const QImage valid = preview()->grab().toImage();
+    require(valid.pixelColor(0, 0) != QColor(Qt::blue),
+            "host preview provider contributes geometry rather than original image pixels");
+    const QString capturePath = qEnvironmentVariable("SNOW_TEST_LATEX_PREVIEW_OUTPUT");
+    const auto saveVisualFixture = [&](const QImage& formulaImage, const QString& path) {
+        const QImage editorImage = window.grab().toImage();
+        QImage capture(QSize(formulaImage.width() + 16 + editorImage.width(),
+                             std::max(formulaImage.height(), editorImage.height())),
+                       QImage::Format_ARGB32_Premultiplied);
+        capture.fill(Qt::transparent);
+        {
+            QPainter painter(&capture);
+            painter.drawImage(QRect(QPoint(), formulaImage.size()), formulaImage);
+            painter.drawImage(QRect(QPoint(formulaImage.width() + 16, 0), editorImage.size()),
+                              editorImage);
+        }
+        require(capture.save(path), "save the optional formula/editor visual fixture");
+    };
+    if (!capturePath.isEmpty())
+        saveVisualFixture(valid, capturePath);
+    const QPointer<ScreenshotOriginalImagePreviewWindow> originalImagePreview = preview();
+    window.refreshOriginalImagePreview();
+    window.setShowOriginalImage(true);
+    require(!editor->isVisible(), "original-image mode hides the formula source editor");
+    require(waitFor([&] {
+                return originalImagePreview && originalImagePreview == preview() &&
+                       preview()->isVisible() && preview()->accessibleDescription().isEmpty();
+            }),
+            "showing the original image preserves the rendered formula companion");
+    document.setPlainText(QStringLiteral("x^2"));
+    require(waitFor([&] {
+                return originalImagePreview && originalImagePreview == preview() &&
+                       preview()->isVisible() && preview()->accessibleDescription().isEmpty() &&
+                       preview()->grab().toImage() != valid;
+            }),
+            "source updates rerender the formula while the original image is shown");
+    window.setShowOriginalImage(false);
+    require(editor->isVisible() && editor->document() == &document &&
+                editor->toPlainText() == QStringLiteral("x^2"),
+            "returning from the original image preserves the formula draft and editor");
+    window.setShowOriginalImage(true);
+    document.setPlainText(QStringLiteral("\\frac{a}{b}+\\sqrt{x}"));
+    window.showLatexEditor(&document);
+    require(waitFor([&] {
+                return preview() && preview()->isVisible() &&
+                       preview()->accessibleDescription().isEmpty() &&
+                       preview()->grab().toImage() == valid;
+            }),
+            "a formula session renders when original-image mode is already enabled");
+    require(!editor->isVisible(), "starting a formula session preserves original-image mode");
+    window.setShowOriginalImage(false);
+    const QPointer<ScreenshotOriginalImagePreviewWindow> initialPreview = preview();
+    editor->moveCursor(QTextCursor::End);
+    QKeyEvent type(QEvent::KeyPress, Qt::Key_C, Qt::NoModifier, QStringLiteral("c"));
+    QApplication::sendEvent(editor, &type);
+    require(document.toPlainText().endsWith(QLatin1Char('c')) &&
+                editor->accessibleName() == QStringLiteral("LaTeX formula source"),
+            "typing preserves the formula source's accessible name");
+    QFocusEvent blur(QEvent::FocusOut, Qt::OtherFocusReason);
+    QFocusEvent focus(QEvent::FocusIn, Qt::OtherFocusReason);
+    QApplication::sendEvent(editor, &blur);
+    require(editor->accessibleName() == QStringLiteral("LaTeX formula source"),
+            "losing focus preserves the formula source's accessible name");
+    QApplication::sendEvent(editor, &focus);
+    require(editor->accessibleName() == QStringLiteral("LaTeX formula source"),
+            "gaining focus preserves the formula source's accessible name");
+    document.setPlainText(QStringLiteral("\\unknownSnowShotCommand"));
+    require(waitFor([&] {
+                return preview() && preview()->accessibleDescription().contains(
+                                        QStringLiteral("Check the LaTeX source"));
+            }),
+            "invalid source produces an inline preview error");
+    require(initialPreview == preview() && preview()->grab().toImage() != valid,
+            "invalid source dims the retained formula in the same companion");
+    if (!capturePath.isEmpty()) {
+        const QFileInfo output(capturePath);
+        saveVisualFixture(
+            preview()->grab().toImage(),
+            output.dir().filePath(output.completeBaseName() + QStringLiteral("-invalid.png")));
+    }
+    themes.setPreset(adqt::theme::ThemeScheme::Dark, adqt::theme::ThemeDensity::Compact);
+    require(editor->accessibleName() == QStringLiteral("LaTeX formula source"),
+            "theme changes preserve the formula source's accessible name");
+    const QColor darkBackground = themes.resolveTheme(&window).colorBgContainer;
+    const auto retainedFormulaVisible = [&](const QImage& image) {
+        int lightPixels = 0;
+        // The status occupies the lower footer. Inspect the upper formula area so that
+        // the new error text cannot make an old, dark foreground pass this regression.
+        for (int y = image.height() / 8; y < image.height() / 2; ++y) {
+            for (int x = image.width() / 8; x < image.width() * 7 / 8; ++x) {
+                if (qGray(image.pixel(x, y)) > qGray(darkBackground.rgb()) + 40)
+                    ++lightPixels;
+            }
+        }
+        return lightPixels > 10;
+    };
+    require(waitFor([&] {
+                if (!preview() || !preview()->accessibleDescription().contains(
+                                      QStringLiteral("Check the LaTeX source")))
+                    return false;
+                const QImage image = preview()->grab().toImage();
+                return image.pixelColor(0, 0) == darkBackground && retainedFormulaVisible(image);
+            }),
+            "a theme change rerenders the retained valid formula while preserving the draft error");
+    require(initialPreview == preview() &&
+                editor->toPlainText() == QStringLiteral("\\unknownSnowShotCommand"),
+            "fallback rendering preserves the companion and editable invalid source");
+    document.setPlainText(QStringLiteral("x^2"));
+    document.setPlainText(QStringLiteral("\\int_0^1 x\\,dx"));
+    require(waitFor([&] { return preview() && preview()->accessibleDescription().isEmpty(); }),
+            "latest valid edit clears the error");
+    document.setPlainText(QString());
+    require(waitFor([&] {
+                return preview() && preview()->accessibleDescription() ==
+                                        QStringLiteral("No formula to preview");
+            }),
+            "an empty draft clears the formula without losing the companion");
+    require(editor->toPlainText().isEmpty(), "preview failure must not alter the editable source");
+    window.setOriginalImagePreviewSuppressed(true);
+    require(waitFor([&] { return preview() == nullptr; }),
+            "host interaction suppression tears down a formula companion");
+    window.setOriginalImagePreviewSuppressed(false);
+    require(waitFor([&] { return preview() && preview()->isVisible(); }),
+            "ending suppression restores the formula companion");
+    document.setPlainText(QStringLiteral("\\sum_{n=0}^{100} n"));
+    window.hide();
+    require(waitFor([&] { return preview() == nullptr; }),
+            "hiding the host discards pending rendering and the companion");
+    window.show();
+    require(waitFor([&] { return preview() && preview()->accessibleDescription().isEmpty(); }),
+            "restoring the host renders its current draft");
+    window.showTextEditor(&document);
+    require(waitFor([&] { return preview() == nullptr; }),
+            "switching back to text editing disables the formula companion");
+    window.setOriginalImagePreviewProvider({}, &window);
+    window.setOriginalImagePreviewEnabled(true);
+    window.showLatexEditor(&document);
+    require(waitFor([&] {
+                return preview() && preview()->isVisible() &&
+                       preview()->accessibleDescription().isEmpty();
+            }),
+            "formula placement does not require original pixels when text preview is enabled");
+    document.setPlainText(QStringLiteral("\\unknownSnowShotCommand"));
+    require(waitFor([&] {
+                return preview() && preview()->accessibleDescription() ==
+                                        QStringLiteral("Unable to preview this formula. Check the "
+                                                       "LaTeX source.");
+            }),
+            "language-change fixture starts with an invalid formula draft");
+    QPointer<ScreenshotOriginalImagePreviewWindow> textPreview;
+    {
+        require(QCoreApplication::installTranslator(&translator),
+                "install the focused preview translator");
+        const auto uninstallTranslator =
+            qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
+        require(waitFor([&] {
+                    return preview() &&
+                           editor->accessibleName() ==
+                               QStringLiteral("Translated LaTeX formula source") &&
+                           preview()->accessibleName() ==
+                               QStringLiteral("Translated LaTeX formula preview") &&
+                           preview()->accessibleDescription() ==
+                               QStringLiteral("Translated Unable to preview this formula. Check "
+                                              "the LaTeX source.");
+                }),
+                "live language changes retranslate formula source, preview name and cached error");
+        window.showTextEditor(&document);
+        require(editor->accessibleName() == QStringLiteral("Translated Multiline input"),
+                "text reuse restores the input component's translated generic source label");
+        window.setOriginalImagePreviewSource(original, QRectF(0, 0, 200, 100));
+        require(waitFor([&] {
+                    return preview() && preview()->isVisible() &&
+                           preview()->accessibleName() ==
+                               QStringLiteral("Translated Original image preview");
+                }),
+                "text mode retains its translated original-image companion name");
+        textPreview = preview();
+    }
+    require(waitFor([&] {
+                return textPreview && textPreview == preview() &&
+                       preview()->accessibleName() == QStringLiteral("Original image preview");
+            }),
+            "a live text companion refreshes its cached name when the language changes");
+    require(document.toPlainText() == QStringLiteral("\\unknownSnowShotCommand"),
+            "retranslation and text reuse preserve the editable draft");
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
@@ -2692,6 +3237,14 @@ int main(int argc, char** argv) {
 #endif
         ocrBoxSelectionUsesCurrentRectangleAndCommitsOnRelease();
         ocrBoxSelectionCancelsWithoutTriggeringWindowCommands();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--text-editor-layout-only"))) {
+        textRecognitionEditorsCollapseMarginsInSmallAreas();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--latex-preview-only"))) {
+        latexPreviewUsesPassiveCompanionAndSurvivesEditing();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--preview-window-only"))) {
@@ -2725,6 +3278,8 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--selection-only-rendering"))) {
         selectionOnlyTextLayerPaintsOnlyHighlights();
+        selectionOnlyFormattedTextPaintsOnlyHighlights();
+        formattedClipboardTextUsesASelectableQtDocument();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--image-snapshot-only"))) {
@@ -2737,6 +3292,7 @@ int main(int argc, char** argv) {
     }
 
     ocrHoverUpdatesCursorWithoutClicking();
+    formattedTextHoverUpdatesCursorWithoutClicking();
     if (application.arguments().contains(QStringLiteral("--ocr-hover-only"))) {
         return 0;
     }
@@ -2754,7 +3310,9 @@ int main(int argc, char** argv) {
     recognitionMessageUsesOnlyItsPaintedShadow();
     recognitionWindowUsesOrdinaryQtWindowBehavior();
     shortRecognitionWindowPreservesExactSelectionGeometryAcrossModes();
+    textRecognitionEditorsCollapseMarginsInSmallAreas();
     formattedClipboardTextUsesASelectableQtDocument();
+    selectionOnlyFormattedTextPaintsOnlyHighlights();
     qrContentsUseStrictRichTextLinksAndPreserveOrder();
     emptyOcrResultCopiesEmptyText();
     tableClipboardPreservesLargeValuesForWholeTableAndSelection();

@@ -32,10 +32,12 @@ class ScreenshotToolCommandWorkflow final {
     void setArrowTool();
     void setLineTool();
     void setDistanceTool();
+    void setAngleTool();
     void setFreeDrawTool();
     void setHighlightTool();
     void setPenHighlightTool();
     void setSpotlightTool();
+    void setMagnifierTool();
     void setEraserTool();
     void setRectangleEraserTool();
     void setBrushEraserTool();

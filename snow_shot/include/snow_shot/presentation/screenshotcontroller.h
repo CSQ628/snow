@@ -17,7 +17,8 @@ struct SelectedFileTarget;
 }
 namespace snow_shot::presentation {
 class PinnedWindowGroupManager;
-}
+enum class GlobalShortcutAction;
+} // namespace snow_shot::presentation
 class ScreenshotOcrRecognitionService;
 class ScreenshotQrRecognitionPort;
 class SnowShotApiClient;
@@ -50,7 +51,11 @@ class ScreenshotController : public QObject {
     };
     Q_ENUM(CaptureAction)
     [[nodiscard]] bool captureForAction(CaptureAction action);
+    // Consumes supported global tool shortcuts in an active capture, including rejected tools.
+    [[nodiscard]] bool
+    handleActiveScreenshotShortcut(snow_shot::presentation::GlobalShortcutAction action);
     void pinDroppedContent(ScreenshotClipboardContentSnapshot snapshot, QStringList paths);
+    void pinImageFilesToScreen(QStringList paths);
     explicit ScreenshotController(
         QObject* parent = nullptr,
         snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr,
@@ -62,6 +67,7 @@ class ScreenshotController : public QObject {
     void setCaptureSuspended(bool suspended);
     [[nodiscard]] bool captureAcquisitionActive() const;
     [[nodiscard]] bool blocksApplicationUpdate() const;
+    [[nodiscard]] bool blocksMemoryTrimming() const;
     [[nodiscard]] bool beginGlobalMouseCapture(
         snow_shot::presentation::settings::SettingsGlobalMouseAction action, quint64 gestureId,
         const QPointF& position,
@@ -101,6 +107,7 @@ class ScreenshotController : public QObject {
     void prewarmResources();
     void restorePinnedWindows();
     void restoreLastClosedPinnedWindow();
+    void togglePinnedWindowsVisibility();
     void showPinnedRecord(const QString& id);
     void destroyPinnedRecords(const QVector<QString>& ids);
     void restoreActivePinnedGroupWindows();

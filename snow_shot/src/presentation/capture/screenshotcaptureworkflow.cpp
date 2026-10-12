@@ -118,6 +118,8 @@ void ScreenshotCaptureWorkflow::startCapture(StartMode mode, ToolbarPreparation 
     m_startup->phase = ScreenshotStartupContext::Phase::Preparing;
     if (!m_state.presentationSuppressed)
         m_context.runtime.createColorPicker(initialCursorGlobalPosition);
+    if (m_context.screenshotSoundNotification())
+        m_context.playShutterSound();
     beginCapturePreparation(sessionId);
 }
 
@@ -220,6 +222,9 @@ void ScreenshotCaptureWorkflow::resetCaptureModels() {
     m_context.selection.reset();
     m_context.intelligentSelection.reset();
     m_context.runtime.resetColorPicker();
+    if (m_context.presentation.resetPresentation) {
+        m_context.presentation.resetPresentation();
+    }
     m_captureModelsClean = true;
 }
 
@@ -751,8 +756,15 @@ void ScreenshotCaptureWorkflow::handleLayoutReady(const ScreenshotCaptureLayout&
     if (!m_state.presentationSuppressed && m_startMode != StartMode::ExternalDrag &&
         m_context.selection.regionType() == ScreenshotRegionType::Rectangle)
         m_context.runtime.startWorkflowRefresh();
-    if (beginCapturePresentation(layout.requestId))
+    if (beginCapturePresentation(layout.requestId)) {
         prepareOverlayPresentation(layout.requestId);
+        // Native acquisition is already running and the native/Qt layout now
+        // agrees. Prepare the real hidden pixels without delaying capture dispatch
+        // or publishing an incomplete screenshot/selection frame.
+        if (!m_state.presentationSuppressed && m_state.captureInProgress &&
+            layout.requestId == m_state.sessionId)
+            m_context.runtime.prepareOverlayBackingStores(m_context.displaySession);
+    }
 }
 
 void ScreenshotCaptureWorkflow::handleCapturePrepared(quint64, bool ok) {

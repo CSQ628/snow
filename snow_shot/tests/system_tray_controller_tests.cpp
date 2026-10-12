@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QImageReader>
+#include <QJsonArray>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPalette>
@@ -48,6 +49,7 @@
 #include <functional>
 
 #ifdef Q_OS_MACOS
+#include "systemnotificationservice.h"
 int runNativeSystemTrayMenuTests(snow_shot::presentation::SystemTrayController& controller);
 #endif
 
@@ -57,6 +59,24 @@ void require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(1);
     }
+}
+
+void clickNotification(snow_shot::presentation::SystemTrayController& controller,
+                       QSystemTrayIcon* trayIcon,
+                       snow_shot::platform::SystemNotificationAction action,
+                       const QString& path = {}) {
+#ifdef Q_OS_MACOS
+    Q_UNUSED(trayIcon);
+    auto* notifications =
+        controller.findChild<snow_shot::platform::macos::SystemNotificationService*>();
+    require(notifications != nullptr, "macOS must own its native notification service");
+    notifications->activated(action, path);
+#else
+    Q_UNUSED(controller);
+    Q_UNUSED(action);
+    Q_UNUSED(path);
+    trayIcon->messageClicked();
+#endif
 }
 
 void requireActionText(const QAction* action, const QString& expected, const char* message) {
@@ -126,6 +146,147 @@ void verifyTrayMenuPosition() {
             "mouse context requests inside the icon must retain their pointer position");
     require(systemTrayMenuPosition(QRect(), mouseClick) == mouseClick,
             "platforms without tray geometry must keep a usable pointer-based placement");
+}
+
+void verifyTraySkinDestruction(snow_shot::presentation::SystemTrayController& controller) {
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    require(configuration.setValue(QStringLiteral("interface/tray_menu_skin_path"), QString()),
+            "use an unskinned tray for destruction callbacks");
+    for (int state = 0; state < 3; ++state) {
+        QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+        menu->setNativeMenuEnabled(false);
+        if (state > 0)
+            menu->popupAt(QPoint(20, 20));
+        if (state == 2)
+            menu->dismissPopup();
+        bool settingsUpdated = false;
+        QObject::connect(menu, &QObject::destroyed, &controller, [&] {
+            // Qt emits destroyed after AdContextMenu's private state has been released,
+            // but before deleting its child observers. Settings must be safe to change here.
+            settingsUpdated =
+                configuration.setValue(QStringLiteral("interface/skin_opacity"), 70 + state);
+        });
+        delete menu.data();
+        require(!menu && settingsUpdated,
+                "tray menu teardown must detach skin settings before destruction observers run");
+        drainMenus();
+    }
+    require(configuration.setValue(QStringLiteral("interface/skin_opacity"), 100),
+            "restore skin opacity");
+}
+
+void verifyConfiguredTrayMenuOptions(snow_shot::presentation::SystemTrayController& controller) {
+    using snow_shot::storage::TraySettings;
+    auto& appStorage = snow_shot::storage::ApplicationStorage::instance();
+    require(snow_shot::storage::ExtendedFeaturesSettings().setTranslationPageEnabled(true),
+            "enable all optional tray commands");
+    QStringList options;
+    for (const auto& group :
+         snow_shot::presentation::settings::builtInTrayCommandManifest().groups) {
+        for (const auto& option : group.options)
+            options.append(option.id);
+    }
+    require(TraySettings().setMenuOptions(options) && TraySettings().menuOptions() == options,
+            "saving every tray option must preserve the final Restart App and Exit selections");
+    require(appStorage.configuration().flushNow().success,
+            "all tray selections must flush to disk");
+    snow_shot::storage::ConfigurationStore reloaded(
+        QDir(appStorage.status().effectiveDirectory).filePath(QStringLiteral("config.json")), true,
+        false, 60000);
+    QStringList persisted;
+    for (const auto& value : reloaded.value(QStringLiteral("tray/menu_options")).toArray()) {
+        persisted.append(value.toString());
+    }
+    require(persisted == options, "loading saved tray selections must preserve every option");
+    controller.setMenuOptions(persisted);
+    QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+    QApplication::processEvents();
+    QStringList visible;
+    for (auto* action : menu->actions()) {
+        if (!action->isSeparator() && action->isVisible())
+            visible.append(action->data().toString());
+    }
+    require(visible == options, "the tray must display every persisted selection, including Exit");
+    menu->dismissPopup();
+    drainMenus();
+    require(!menu, "the configured tray session retires after dismissal");
+
+    options.removeAll(QStringLiteral("tray.restart-app"));
+    options.removeAll(QStringLiteral("tray.exit"));
+    require(TraySettings().setMenuOptions(options) && TraySettings().menuOptions() == options,
+            "a customized selection must not automatically re-enable unchecked system commands");
+    require(TraySettings().setMenuOptions({}) && TraySettings().menuOptions().isEmpty(),
+            "an intentionally empty tray selection must remain empty");
+}
+
+void verifyFullscreenSuppressionBadge(snow_shot::presentation::SystemTrayController& controller,
+                                      const QTemporaryDir& storageDirectory) {
+    using Action = snow_shot::presentation::GlobalShortcutAction;
+    auto* trayIcon =
+        controller.findChild<QSystemTrayIcon*>(QStringLiteral("snowShotSystemTrayIcon"));
+    require(trayIcon != nullptr, "fullscreen suppression requires a tray icon");
+    controller.setMenuOptions(
+        {QStringLiteral("quick.toggle-global-hotkeys"),
+         QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window")});
+    QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+    require(menu != nullptr, "fullscreen suppression requires a tray menu");
+    QAction* manualToggle = nullptr;
+    for (auto* action : menu->actions()) {
+        if (action && action->data().toString() == QStringLiteral("quick.toggle-global-hotkeys")) {
+            manualToggle = action;
+        }
+    }
+    require(manualToggle != nullptr, "the manual toggle must be available for state checks");
+    int quickActions = 0;
+    const auto connection = QObject::connect(
+        &controller, &snow_shot::presentation::SystemTrayController::quickActionRequested,
+        &controller, [&](Action) { ++quickActions; });
+    const auto artwork = [&]() { return trayIcon->icon().pixmap(QSize(32, 32), 1.0).toImage(); };
+    const auto verify = [&]() {
+        const QImage original = artwork();
+        controller.setQuickActionChecked(Action::ToggleDisableOnFocusedFullscreenWindow, true);
+        require(artwork() == original,
+                "enabling the fullscreen setting alone must not add a badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, true);
+        const QImage disabled = artwork();
+        require(disabled != original, "manual disablement must provide the reference badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, false);
+        controller.setFocusedFullscreenSuppressionActive(true);
+        require(
+            artwork() == disabled && !manualToggle->isChecked(),
+            "fullscreen suppression uses the disabled badge without checking the manual toggle");
+        controller.show();
+        require(artwork() == disabled, "tray refresh must retain the fullscreen suppression badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, true);
+        controller.setFocusedFullscreenSuppressionActive(false);
+        require(artwork() == disabled && manualToggle->isChecked(),
+                "leaving fullscreen must preserve the badge when hotkeys are manually disabled");
+        controller.setFocusedFullscreenSuppressionActive(true);
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, false);
+        require(artwork() == disabled && !manualToggle->isChecked(),
+                "re-enabling manual hotkeys must retain the badge while fullscreen is focused");
+        controller.setFocusedFullscreenSuppressionActive(false);
+        require(artwork() == original, "clearing both disablement reasons restores tray artwork");
+    };
+    for (const auto& selection : {QStringLiteral("default"), QStringLiteral("light"),
+                                  QStringLiteral("dark"), QStringLiteral("snow-default"),
+                                  QStringLiteral("snow-light"), QStringLiteral("snow-dark")}) {
+        controller.setIconSelection(selection);
+        verify();
+    }
+    const QString customPath = storageDirectory.filePath(QStringLiteral("fullscreen-tray.png"));
+    QImage custom(32, 32, QImage::Format_ARGB32_Premultiplied);
+    custom.fill(Qt::blue);
+    require(custom.save(customPath), "save the fullscreen suppression custom icon fixture");
+    controller.setCustomIconPath(customPath);
+    verify();
+    controller.setCustomIconPath(storageDirectory.filePath(QStringLiteral("missing.png")));
+    verify();
+    require(quickActions == 0,
+            "suppression and manual state synchronization never dispatch commands");
+    QObject::disconnect(connection);
+    menu->dismissPopup();
+    drainMenus();
 }
 
 void verifyTraySkins(snow_shot::presentation::SystemTrayController& controller,
@@ -371,6 +532,46 @@ void verifyLazyGroupMenuRefresh() {
         groups.completePendingPin(QStringLiteral("lazy-tray-%1").arg(index));
 }
 
+void verifyHideShowTrayAction(snow_shot::presentation::SystemTrayController& controller) {
+    using Action = snow_shot::presentation::GlobalShortcutAction;
+    const QString id = QStringLiteral("quick.hide-show-all-windows");
+    const snow_shot::storage::TraySettings settings;
+    const auto defaults = settings.menuOptions();
+    require(!defaults.contains(id), "hide/show all windows is omitted from default tray options");
+    controller.setMenuOptions(defaults);
+    QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+    require(!menu.isNull(), "hide/show tray action requires a context menu");
+    QAction* hideShow = nullptr;
+    for (auto* action : menu->actions())
+        if (action && action->data().toString() == id)
+            hideShow = action;
+    require(hideShow && !hideShow->isVisible() &&
+                hideShow->text() == QStringLiteral("Hide/Show All Windows"),
+            "hide/show is an optional tray action with the canonical title");
+    auto customized = defaults;
+    customized.append(id);
+    require(settings.setMenuOptions(customized) && settings.menuOptions().contains(id),
+            "customized hide/show tray inclusion persists");
+    controller.setMenuOptions(settings.menuOptions());
+    require(hideShow->isVisible(), "users can include hide/show all windows in the tray");
+    int activations = 0;
+    const auto connection = QObject::connect(
+        &controller, &snow_shot::presentation::SystemTrayController::quickActionRequested,
+        &controller, [&](Action action) {
+            require(action == Action::HideShowAllWindows,
+                    "hide/show tray action dispatches the shared global action");
+            ++activations;
+        });
+    hideShow->trigger();
+    require(activations == 1, "customized hide/show tray action activates exactly once");
+    QObject::disconnect(connection);
+    require(settings.setMenuOptions(defaults), "restore default tray options");
+    controller.setMenuOptions(defaults);
+    require(!hideShow->isVisible(), "restoring default tray options hides hide/show again");
+    menu->dismissPopup();
+    drainMenus();
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -405,6 +606,21 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     snow_shot::presentation::SystemTrayController controller;
+    if (application.arguments().contains(QStringLiteral("--fullscreen-suppression-only"))) {
+        verifyFullscreenSuppressionBadge(controller, storageDirectory);
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--hide-show-tray-only"))) {
+        verifyHideShowTrayAction(controller);
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--configured-menu-only"))) {
+        verifyConfiguredTrayMenuOptions(controller);
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
 #ifdef Q_OS_MACOS
     if (application.arguments().contains(QStringLiteral("--native-menu"))) {
         int result = 1;
@@ -419,6 +635,7 @@ int main(int argc, char* argv[]) {
 #endif
     if (application.arguments().contains(QStringLiteral("--skin-only"))) {
         controller.setMenuOptions(snow_shot::storage::TraySettings().menuOptions());
+        verifyTraySkinDestruction(controller);
         verifyTraySkins(controller, storageDirectory);
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
@@ -428,6 +645,26 @@ int main(int argc, char* argv[]) {
     require(trayIcon != nullptr, "the controller should own a system tray icon");
     if (application.arguments().contains(QStringLiteral("--recording-export-only"))) {
         using snow_shot::presentation::SystemTrayController;
+        using Action = snow_shot::platform::SystemNotificationAction;
+#ifdef Q_OS_MACOS
+        using snow_shot::platform::macos::SystemNotificationService;
+        auto* notifications = controller.findChild<SystemNotificationService*>();
+        require(notifications != nullptr,
+                "macOS export notifications must use the authorized UserNotifications backend");
+        int notificationAttempts = 0;
+        QVector<snow_shot::platform::SystemNotificationRequest> attemptedRequests;
+        QObject::connect(
+            &controller, &SystemTrayController::notificationDeliveryFinished, &controller,
+            [&](const snow_shot::platform::SystemNotificationRequest& request,
+                const snow_shot::platform::SystemNotificationResult& result) {
+                require(
+                    result.status ==
+                        snow_shot::platform::SystemNotificationResult::Status::Unavailable,
+                    "an unbundled fixture must report unavailable delivery without native calls");
+                ++notificationAttempts;
+                attemptedRequests.append(request);
+            });
+#endif
         QStringList openedPaths;
         int aboutRequests = 0;
         QObject::connect(&controller, &SystemTrayController::openRecordingFileRequested,
@@ -439,30 +676,71 @@ int main(int argc, char* argv[]) {
         const QString second =
             storageDirectory.filePath(QStringLiteral("Video exports/second clip.mp4"));
         controller.showRecordingExportMessage(first);
+        QCoreApplication::processEvents();
+#ifdef Q_OS_MACOS
+        require(notificationAttempts == 1,
+                "recording completion must reach the native notification delivery service");
+#endif
         requireBalloon(trayIcon, QStringLiteral("Video export completed"),
                        QDir::toNativeSeparators(first), QSystemTrayIcon::Information,
                        "recording notification displays the exported file path");
-        trayIcon->messageClicked();
+        clickNotification(controller, trayIcon, Action::OpenRecording, first);
         require(openedPaths == QStringList{first} && aboutRequests == 0,
                 "clicking recording notification requests its file without opening About");
         controller.showRecordingExportMessage(second);
-        trayIcon->messageClicked();
+        clickNotification(controller, trayIcon, Action::OpenRecording, second);
         require(openedPaths == QStringList{first, second},
-                "new recording notifications replace their file action");
+                "recording notification clicks must use their own exported file");
+#ifdef Q_OS_MACOS
+        notifications->activated(SystemNotificationService::Action::OpenRecording, first);
+        require(openedPaths == QStringList{first, second, first},
+                "clicking an older macOS notification must open that notification's export");
+        openedPaths.removeLast();
+#endif
         controller.showWarningMessage(QStringLiteral("Warning"),
                                       QStringLiteral("Capture unavailable"));
-        trayIcon->messageClicked();
+        clickNotification(controller, trayIcon, Action::None);
         require(openedPaths.size() == 2,
                 "warning notifications clear the previous recording action");
         controller.showUpdateMessage(QStringLiteral("Update ready"));
-        trayIcon->messageClicked();
+        clickNotification(controller, trayIcon, Action::OpenAbout);
         require(openedPaths.size() == 2 && aboutRequests == 1,
                 "update clicks keep their existing About action");
+#ifdef Q_OS_MACOS
+        QCoreApplication::processEvents();
+        require(notificationAttempts == 4,
+                "recording, warning and update messages must share the native delivery service");
+        require(attemptedRequests.at(0).filePath == first &&
+                    attemptedRequests.at(1).filePath == second &&
+                    attemptedRequests.at(2).severity ==
+                        snow_shot::platform::SystemNotificationSeverity::Warning &&
+                    attemptedRequests.at(3).action == Action::OpenAbout,
+                "unavailable results must preserve each notification's content and action");
+#endif
         controller.showRecordingExportMessage(second);
         controller.setEnabled(false);
         controller.showRecordingExportMessage(first);
         trayIcon->messageClicked();
-        require(openedPaths.size() == 2, "disabled tray notifications cannot open exported files");
+#ifdef Q_OS_MACOS
+        notifications->activated(SystemNotificationService::Action::OpenRecording, first);
+        notifications->activated(SystemNotificationService::Action::OpenRecording, second);
+        QCoreApplication::processEvents();
+        require(notificationAttempts == 6,
+                "macOS notifications must remain independent of tray visibility");
+        require(openedPaths == QStringList{first, second, first, second},
+                "hidden tray icons must not disable new or previously delivered native actions");
+        controller.showCaptureMessage(QStringLiteral("Capture failed"), false);
+        QCoreApplication::processEvents();
+        require(notificationAttempts == 7 &&
+                    attemptedRequests.last().severity ==
+                        snow_shot::platform::SystemNotificationSeverity::Error,
+                "capture failure feedback must also reach delivery with the tray hidden");
+        controller.showRecordingExportMessage({});
+        QCoreApplication::processEvents();
+        require(notificationAttempts == 7, "empty export paths must not create notifications");
+#else
+        require(openedPaths.size() == 2, "disabled legacy tray notifications cannot open files");
+#endif
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -508,10 +786,16 @@ int main(int argc, char* argv[]) {
                    QStringLiteral("Screenshot is unavailable"), QSystemTrayIcon::Warning,
                    "a general tray warning must preserve its title and warning severity");
     controller.setEnabled(false);
-    controller.showUpdateMessage(QStringLiteral("Ignored while disabled"));
+    controller.showUpdateMessage(QStringLiteral("Update with tray hidden"));
+#ifdef Q_OS_MACOS
+    requireBalloon(trayIcon, QStringLiteral("Update"), QStringLiteral("Update with tray hidden"),
+                   QSystemTrayIcon::Information,
+                   "native notification delivery must remain enabled with the tray hidden");
+#else
     requireBalloon(trayIcon, QStringLiteral("Feature unavailable"),
                    QStringLiteral("Screenshot is unavailable"), QSystemTrayIcon::Warning,
                    "a disabled tray must not replace the last balloon with an update notice");
+#endif
     controller.setEnabled(true);
 
     const QStringList bundledSelections{
@@ -860,6 +1144,9 @@ int main(int argc, char* argv[]) {
     auto* restoreClosedAction = actionForId(QStringLiteral("quick.restore-last-closed-windows"));
     require(restoreClosedAction && restoreClosedAction->isVisible(),
             "restore closed pins must appear in the default tray menu");
+    require(actionForId(QStringLiteral("quick.hide-show-all-windows")) &&
+                !actionForId(QStringLiteral("quick.hide-show-all-windows"))->isVisible(),
+            "hide/show all windows must be excluded from the default tray menu");
     const QStringList normalizedDefaultMenuOptions = controller.menuOptions();
     require(
         QSet<QString>(normalizedDefaultMenuOptions.cbegin(), normalizedDefaultMenuOptions.cend()) ==
@@ -1285,7 +1572,8 @@ int main(int argc, char* argv[]) {
     const int showMainWindowRequestsBeforeMessageClicks = showMainWindowRequests;
     const int functionSettingsRequestsBeforeMessageClicks = functionSettingsRequests;
     controller.showUpdateMessage(QStringLiteral("Snow Shot 2.0.0 is available."));
-    trayIcon->messageClicked();
+    clickNotification(controller, trayIcon,
+                      snow_shot::platform::SystemNotificationAction::OpenAbout);
     require(aboutRequests == 1 && screenshotRequests == screenshotRequestsBeforeMessageClicks &&
                 showMainWindowRequests == showMainWindowRequestsBeforeMessageClicks &&
                 functionSettingsRequests == functionSettingsRequestsBeforeMessageClicks,
@@ -1293,15 +1581,20 @@ int main(int argc, char* argv[]) {
     controller.showCaptureMessage(QStringLiteral("Capture failed"), false);
     controller.showWarningMessage(QStringLiteral("Feature unavailable"),
                                   QStringLiteral("Screenshot is unavailable"));
-    trayIcon->messageClicked();
+    clickNotification(controller, trayIcon, snow_shot::platform::SystemNotificationAction::None);
     require(aboutRequests == 1,
             "capture and warning balloon clicks must not request the About page");
     controller.setEnabled(false);
-    controller.showUpdateMessage(QStringLiteral("Ignored while disabled"));
-    trayIcon->messageClicked();
+    controller.showUpdateMessage(QStringLiteral("Update with tray hidden"));
+    clickNotification(controller, trayIcon,
+                      snow_shot::platform::SystemNotificationAction::OpenAbout);
     controller.setEnabled(true);
+#ifdef Q_OS_MACOS
+    require(aboutRequests == 2, "native notification actions must remain valid with a hidden tray");
+#else
     require(aboutRequests == 1,
             "a balloon suppressed while the tray is disabled must stay unclickable");
+#endif
 
     screenshotMenuAction->trigger();
     showMainWindowMenuAction->trigger();

@@ -58,6 +58,10 @@ void ScreenshotToolCommandWorkflow::setDistanceTool() {
     setCanvasTool(ScreenshotActiveTool::Distance, SnowCanvasTool::Distance);
 }
 
+void ScreenshotToolCommandWorkflow::setAngleTool() {
+    setCanvasTool(ScreenshotActiveTool::Angle, SnowCanvasTool::Angle);
+}
+
 void ScreenshotToolCommandWorkflow::setFreeDrawTool() {
     setCanvasTool(ScreenshotActiveTool::FreeDraw, SnowCanvasTool::FreeDraw);
 }
@@ -84,6 +88,10 @@ void ScreenshotToolCommandWorkflow::setBrushEraserTool() {
 
 void ScreenshotToolCommandWorkflow::setFilterTool() {
     setRectangleFilterTool();
+}
+
+void ScreenshotToolCommandWorkflow::setMagnifierTool() {
+    setCanvasTool(ScreenshotActiveTool::Magnifier, SnowCanvasTool::Magnifier);
 }
 
 void ScreenshotToolCommandWorkflow::setSpotlightTool() {

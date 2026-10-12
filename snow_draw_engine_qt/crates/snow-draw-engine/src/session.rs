@@ -7,8 +7,10 @@ use snow_draw_engine_model::DocumentModel;
 use crate::engine::EngineConfig as RuntimeEngineConfig;
 use crate::{Engine, history::HistoryStore};
 
-pub const DOCUMENT_SESSION_SCHEMA_VERSION: u32 = 8;
-pub const DOCUMENT_HISTORY_SCHEMA_VERSION: u32 = 6;
+// Persisted counters became authoritative for badge creation in version 9.
+const SERIAL_NUMBER_COUNTERS_SESSION_SCHEMA_VERSION: u32 = 9;
+pub const DOCUMENT_SESSION_SCHEMA_VERSION: u32 = 12;
+pub const DOCUMENT_HISTORY_SCHEMA_VERSION: u32 = 8;
 pub const MAX_DOCUMENT_SESSION_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -120,15 +122,22 @@ impl Engine {
         if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_SESSION_BYTES {
             return Err(ErrorCode::InvalidArgument);
         }
-        let session: DocumentSession =
+        let mut session: DocumentSession =
             serde_json::from_slice(bytes).map_err(|_| ErrorCode::InvalidArgument)?;
         if !(1..=DOCUMENT_SESSION_SCHEMA_VERSION).contains(&session.schema_version) {
             return Err(ErrorCode::Unsupported);
         }
 
         let model = DocumentModel::from_document(session.document)?;
+        session.history.normalize_angle_invariants()?;
         session.history.validate_session(&model)?;
-        let editor = snow_draw_engine_editor::EditorSession::from_persisted(session.editor)?;
+        let mut editor = snow_draw_engine_editor::EditorSession::from_persisted_with_document(
+            session.editor,
+            &model,
+        )?;
+        if session.schema_version < SERIAL_NUMBER_COUNTERS_SESSION_SCHEMA_VERSION {
+            editor.advance_serial_number_counters_for_insertions(&model, model.paint_order());
+        }
         let mut engine = Self::try_new(config)?;
         engine.model = model;
         engine.history = session.history;
@@ -160,18 +169,23 @@ impl Engine {
         if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_SESSION_BYTES {
             return Err(ErrorCode::InvalidArgument);
         }
-        let history: DocumentHistory =
+        let mut history: DocumentHistory =
             serde_json::from_slice(bytes).map_err(|_| ErrorCode::InvalidArgument)?;
         if !(1..=DOCUMENT_HISTORY_SCHEMA_VERSION).contains(&history.schema_version) {
             return Err(ErrorCode::Unsupported);
         }
 
         let model = DocumentModel::from_document(history.document)?;
+        history.history.normalize_angle_invariants()?;
         history.history.validate_session(&model)?;
         let mut engine = Self::try_new(config)?;
         engine.editor.reset_editing_state();
         engine.model = model;
         engine.history = history.history;
+        engine.editor.advance_serial_number_counters_for_insertions(
+            &engine.model,
+            engine.model.paint_order(),
+        );
         engine.scene_cache.sync(&engine.model, None);
         Ok(engine)
     }
@@ -185,6 +199,8 @@ impl Engine {
         self.model = replacement.model;
         self.history = replacement.history;
         self.editor.reset_editing_state();
+        self.editor
+            .advance_serial_number_counters_for_insertions(&self.model, self.model.paint_order());
         self.scene_cache = Default::default();
         self.scene_cache.sync(&self.model, None);
         self.refresh_all_viewports()

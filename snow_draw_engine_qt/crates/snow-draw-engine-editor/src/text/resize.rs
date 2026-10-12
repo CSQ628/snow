@@ -1,6 +1,7 @@
 use snow_draw_engine_core::Point;
 use snow_draw_engine_document::{
-    ElementId, InkBox, MIN_TEXT_FONT_SIZE, RectangleData, TextData, TextLayoutSize,
+    ElementId, InkBox, MIN_TEXT_FONT_SIZE, RectangleData, TextData, TextHorizontalAlign,
+    TextLayoutSize, TextVerticalAlign,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -13,7 +14,11 @@ pub struct TextResizeMeasurementRequest {
     pub rotation: f64,
     pub text: String,
     pub font_size: f64,
+    pub bold: bool,
+    pub italic: bool,
     pub font_family: Option<String>,
+    pub horizontal_align: TextHorizontalAlign,
+    pub vertical_align: TextVerticalAlign,
     pub auto_resize: bool,
     /// When true, the host should measure natural unwrapped width; otherwise it
     /// should measure wrapped height for `width`.

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use snow_draw_engine_core::{ErrorCode, Point, SnapGuide, arrow::ArrowEndpointEdge};
+use snow_draw_engine_core::{CornerRadii, ErrorCode, Point, SnapGuide, arrow::ArrowEndpointEdge};
 use snow_draw_engine_document::{
-    ArrowData, ArrowSuggestedBinding, ElementId, ElementKind, FilterData, PenFilterData,
-    RectangleData, SerialNumberData, SerialNumberNumericType, TextData,
+    ArrowData, ArrowSuggestedBinding, ElementId, ElementKind, FilterData, MagnifierData,
+    PenFilterData, RectangleData, SerialNumberData, SerialNumberNumericType, TextData,
 };
 use snow_draw_engine_interaction::{CursorStyle, PointerButton};
 use snow_draw_engine_model::DocumentModel;
@@ -23,6 +23,8 @@ pub(crate) enum ToolSelectionScope {
     RectangleOnly,
     ArrowOnly,
     DistanceOnly,
+    AngleOnly,
+    MagnifierOnly,
     LineOnly,
     FreeDrawOnly,
     RectangleHighlightOnly,
@@ -114,6 +116,8 @@ pub(crate) struct CreateArrowState {
     pub(crate) press_view_position: Point<f64>,
     pub(crate) phase: ArrowCreationPhase,
     pub(crate) distance_pixel_scale: Point<f64>,
+    pub(crate) angle_last_view_position: Option<Point<f64>>,
+    pub(crate) angle_wheel_lock: Option<(Point<f64>, f64)>,
     pub(crate) suggested_binding: Option<ArrowSuggestedBinding>,
 }
 
@@ -220,6 +224,10 @@ pub(crate) enum SelectionEditMode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EditSelectionState {
+    pub(crate) original_magnifiers: HashMap<ElementId, MagnifierData>,
+    pub(crate) last_magnifier_corner_input:
+        Option<(Point<f64>, snow_draw_engine_interaction::Modifiers)>,
+    pub(crate) magnifier_corner_input_offset: Point<f64>,
     pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
     pub(crate) button: PointerButton,
@@ -229,10 +237,12 @@ pub(crate) struct EditSelectionState {
     pub(crate) preview_arrows: Vec<SelectionArrowState>,
     pub(crate) original_bounds: SelectionBounds,
     pub(crate) preview_bounds: SelectionBounds,
+    pub(crate) preview_transform: crate::geometry::SelectionTransform,
     pub(crate) mode: SelectionEditMode,
 }
 
 pub(crate) struct BeginSelectionEditRequest {
+    pub(crate) original_magnifiers: HashMap<ElementId, MagnifierData>,
     pub(crate) pointer_id: u32,
     pub(crate) button: PointerButton,
     pub(crate) original_elements: Vec<SelectionRectState>,
@@ -257,6 +267,7 @@ pub(crate) struct BeginSelectionInteractionRequest {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PendingSelectionMoveState {
+    pub(crate) original_magnifiers: HashMap<ElementId, MagnifierData>,
     pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
     pub(crate) button: PointerButton,
@@ -281,6 +292,7 @@ pub(crate) struct PendingArrowMoveState {
 pub(crate) enum ArrowHitTarget {
     Move,
     Label,
+    AngleArc,
     Endpoint(ArrowEndpointEdge),
     Point(usize),
     FocusPoint(ArrowEndpointEdge),
@@ -291,6 +303,7 @@ pub(crate) enum ArrowHitTarget {
 pub(crate) enum ArrowEditMode {
     Move,
     Label,
+    AngleArc,
     Endpoint(ArrowEndpointEdge),
     Point(usize),
     FocusPoint(ArrowEndpointEdge),
@@ -311,6 +324,7 @@ pub(crate) struct EditArrowState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CanvasHit {
+    MagnifierLens(ElementId),
     SelectionHandle(SelectionHitTarget),
     ArrowHandle(ArrowHitTarget),
     EligibleElement(ElementId, ElementKind),
@@ -319,6 +333,7 @@ pub(crate) enum CanvasHit {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PrimaryPointerIntent {
+    BeginMagnifierLens { id: ElementId },
     ToggleSelection { id: ElementId },
     BeginSelectionInteraction { target: SelectionHitTarget },
     BeginSelectedArrowInteraction { target: ArrowHitTarget },
@@ -438,6 +453,56 @@ pub(crate) enum InteractionState {
     PendingArrowMove(PendingArrowMoveState),
     EditingSelection(EditSelectionState),
     EditingArrow(EditArrowState),
+    EditingMagnifier(EditMagnifierState),
+}
+
+impl InteractionState {
+    /// Document-bound gestures must stop before their snapshots can outlive a removed target.
+    pub(crate) fn contains_missing_document_target(&self, document: &DocumentModel) -> bool {
+        let selection_has_missing_target =
+            |elements: &[SelectionRectState], arrows: &[SelectionArrowState]| {
+                elements
+                    .iter()
+                    .map(|element| element.id)
+                    .chain(arrows.iter().map(|arrow| arrow.id))
+                    .any(|id| document.element(id).is_err())
+            };
+        match self {
+            Self::CreatingSerialNumber(state) => {
+                document.serial_number(state.serial_id).is_err()
+                    || state
+                        .text
+                        .as_ref()
+                        .is_some_and(|(id, _)| document.text(*id).is_err())
+            }
+            Self::PendingSelectionMove(state) => {
+                selection_has_missing_target(&state.original_elements, &state.original_arrows)
+            }
+            Self::EditingSelection(state) => {
+                selection_has_missing_target(&state.original_elements, &state.original_arrows)
+            }
+            Self::PendingArrowMove(state) => document.arrow(state.arrow_id).is_err(),
+            Self::EditingArrow(state) => document.arrow(state.arrow_id).is_err(),
+            Self::EditingMagnifier(state) => document.magnifier(state.id).is_err(),
+            Self::Idle
+            | Self::CreatingRectangle(_)
+            | Self::CreatingPenHighlight(_)
+            | Self::CreatingArrow(_)
+            | Self::CreatingFreeDraw(_)
+            | Self::CreatingPenFilter(_)
+            | Self::MarqueeSelection(_) => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct EditMagnifierState {
+    pub pointer_id: u32,
+    pub button: PointerButton,
+    pub id: ElementId,
+    pub original: snow_draw_engine_document::MagnifierData,
+    pub preview: snow_draw_engine_document::MagnifierData,
+    pub start: Point<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -455,8 +520,11 @@ pub(crate) struct EditorState {
     pub(crate) arrow_text_measurement_generation: u64,
     pub(crate) default_rectangle_shape_style: RectangleShapeStyle,
     pub(crate) default_spotlight_shape: snow_draw_engine_document::HighlightShape,
+    pub(crate) default_spotlight_corner_radii: CornerRadii,
     pub(crate) default_arrow_style: ArrowStyle,
     pub(crate) default_distance_style: crate::DistanceStyle,
+    pub(crate) default_angle_style: crate::AngleStyle,
+    pub(crate) default_magnifier_style: crate::MagnifierStyle,
     pub(crate) distance_creation_generation: u32,
     pub(crate) default_line_style: ShapeStyle,
     pub(crate) default_free_draw_style: ShapeStyle,
@@ -471,7 +539,7 @@ pub(crate) struct EditorState {
     // Inactive numeric types retain their own creation values. The active type's
     // authoritative value lives in default_serial_number, including explicit edits.
     pub(crate) serial_number_values_by_numeric_type: [i64; 5],
-    // Explicit starts keep incrementing independently of existing canvas numbers.
+    // Explicit value edits keep incrementing independently of existing canvas numbers.
     pub(crate) serial_number_sequence_overridden: [bool; 5],
     pub(crate) eraser: EraserState,
     pub(crate) stroke_cursor_active: bool,
@@ -531,6 +599,8 @@ impl EditorState {
         let default_text = TextData {
             color: default_styles.text.color,
             font_size: default_styles.text.font_size,
+            bold: default_styles.text.bold,
+            italic: default_styles.text.italic,
             font_family: default_styles.text.font_family.clone(),
             fill: default_styles.text.fill,
             fill_style: default_styles.text.fill_style,
@@ -571,7 +641,10 @@ impl EditorState {
             arrow_text_measurement_generation: 0,
             default_rectangle_shape_style: default_styles.rectangle,
             default_spotlight_shape: default_styles.spotlight_shape,
+            default_spotlight_corner_radii: default_styles.spotlight_corner_radii,
             default_distance_style: default_styles.distance,
+            default_angle_style: default_styles.angle,
+            default_magnifier_style: default_styles.magnifier,
             distance_creation_generation: 0,
             default_arrow_style: ArrowStyle {
                 arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(

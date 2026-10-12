@@ -83,6 +83,33 @@ pub(crate) fn binding_near_midpoint_dot_item(
     binding_midpoint_dot_item(mid_point, zoom, BINDING_NEAR_MIDPOINT_COLOR)
 }
 
+pub(crate) fn scene_item_from_magnifier(
+    id: ElementId,
+    value: snow_draw_engine_document::MagnifierData,
+) -> SceneDisplayItem {
+    let SceneDisplayItem::Rectangle(mut lens) = scene_item_from_rect(id, value.magnified_rect())
+    else {
+        unreachable!()
+    };
+    lens.fill = ColorRgba8::default();
+    let leader = value
+        .leader()
+        .and_then(|arrow| match scene_item_from_arrow(id, arrow) {
+            SceneDisplayItem::Arrow(arrow) => Some(arrow),
+            _ => None,
+        });
+    SceneDisplayItem::Magnifier(snow_draw_engine_display::MagnifierDisplayItem {
+        lens,
+        source_center: value.source_center,
+        source_width: value.width,
+        source_height: value.height,
+        factor: value.factor,
+        connection_type: value.connection_type,
+        source_outline: value.source_outline,
+        leader,
+    })
+}
+
 pub(crate) fn scene_item_from_rect(id: ElementId, rect: RectangleData) -> SceneDisplayItem {
     SceneDisplayItem::Rectangle(RectangleDisplayItem {
         id: display_item_id(id),
@@ -132,6 +159,7 @@ pub(crate) fn scene_item_from_arrow(id: ElementId, arrow: ArrowData) -> SceneDis
     SceneDisplayItem::Arrow(ArrowDisplayItem {
         bound_text_id: None,
         label_bounds: None,
+        bound_text_overlay: arrow.is_angle(),
         id: display_item_id(id),
         points: arrow
             .global_points()
@@ -190,6 +218,7 @@ pub(crate) fn scene_item_from_free_draw(
     SceneDisplayItem::Arrow(ArrowDisplayItem {
         bound_text_id: None,
         label_bounds: None,
+        bound_text_overlay: false,
         id: display_item_id(id),
         points: free_draw
             .global_vertices()
@@ -222,6 +251,7 @@ pub(crate) fn scene_item_from_free_draw_preview(
     SceneDisplayItem::Arrow(ArrowDisplayItem {
         bound_text_id: None,
         label_bounds: None,
+        bound_text_overlay: false,
         id: display_item_id(id),
         points: Vec::new(),
         path_commands: preview.geometry.flattened_commands(),
@@ -331,6 +361,8 @@ pub(crate) fn scene_item_from_text(id: ElementId, text: TextData) -> SceneDispla
         text: text.text,
         color: text.color,
         font_size: text.font_size,
+        bold: text.bold,
+        italic: text.italic,
         font_family: text.font_family,
         fill: text.fill,
         fill_style: display_fill_style(text.fill_style),
@@ -545,6 +577,14 @@ pub(crate) fn scene_item_from_selection_preview(
             Some((scene_item_from_rect(id, rect), rect_bounds(rect)))
         }
         ElementData::Rectangle(_) => None,
+        ElementData::Magnifier(value) => {
+            let mut preview = *value;
+            preview.opacity = rect.opacity;
+            Some((
+                scene_item_from_magnifier(id, preview),
+                snow_draw_engine_document::magnifier_bounds(&preview),
+            ))
+        }
         ElementData::Filter(filter) => {
             let mut preview = *filter;
             preview.center = rect.center;
@@ -754,7 +794,7 @@ pub(crate) fn hover_pen_filter_item(filter: &PenFilterData) -> UiFocusConnection
 
 pub(crate) fn arrow_handle_item(handle: ArrowHandleState, zoom: f64) -> UiRectangleDisplayItem {
     let (size, fill, stroke, stroke_width) = match handle.kind {
-        ArrowHandleKind::Endpoint => (
+        ArrowHandleKind::Endpoint | ArrowHandleKind::AngleArc => (
             arrow_point_handle_size(zoom),
             SNOW_SHOT_CONTROL_FILL,
             SNOW_SHOT_CONTROL_STROKE,
@@ -800,9 +840,10 @@ pub(crate) fn arrow_handle_item(handle: ArrowHandleState, zoom: f64) -> UiRectan
 
     ui_rect_item(
         match handle.kind {
-            ArrowHandleKind::Endpoint | ArrowHandleKind::LoopStart | ArrowHandleKind::LoopEnd => {
-                UiShapeKind::ArrowEndpointHandle
-            }
+            ArrowHandleKind::Endpoint
+            | ArrowHandleKind::AngleArc
+            | ArrowHandleKind::LoopStart
+            | ArrowHandleKind::LoopEnd => UiShapeKind::ArrowEndpointHandle,
             ArrowHandleKind::FocusPoint => UiShapeKind::ArrowFocusHandle,
             ArrowHandleKind::Segment => UiShapeKind::ArrowSegmentHandle,
         },
@@ -868,6 +909,35 @@ mod tests {
         ElementMeta, InkBox, TextLayoutSize, Transaction, pen_filter_rect_proxy, text_paint_bounds,
     };
     use snow_draw_engine_model::DocumentModel;
+
+    #[test]
+    fn angle_display_items_overlay_labels_while_other_arrows_keep_clipping() {
+        let mut arrow = ArrowData::from_global_points(
+            &[
+                Point::new(100.0, 0.0),
+                Point::new(0.0, 0.0),
+                Point::new(0.0, -100.0),
+            ],
+            ColorRgba8::default(),
+            2.0,
+            StrokeStyle::Solid,
+            ArrowType::Straight,
+            None,
+            None,
+        )
+        .unwrap();
+        for is_angle in [false, true] {
+            if is_angle {
+                snow_draw_engine_editor::AngleStyle::default().apply_to_arrow(&mut arrow);
+            }
+            let SceneDisplayItem::Arrow(display) =
+                scene_item_from_arrow(ElementId::default(), arrow.clone())
+            else {
+                panic!("arrow display item");
+            };
+            assert_eq!(display.bound_text_overlay, is_angle);
+        }
+    }
 
     #[test]
     fn pen_filter_selection_preview_consumes_outer_proxy_once() {

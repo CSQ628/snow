@@ -13,9 +13,12 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditorStyleDefaults {
     pub spotlight_shape: snow_draw_engine_document::HighlightShape,
+    pub spotlight_corner_radii: CornerRadii,
     pub rectangle: RectangleShapeStyle,
     pub arrow: ArrowStyle,
     pub distance: crate::DistanceStyle,
+    pub angle: crate::AngleStyle,
+    pub magnifier: crate::MagnifierStyle,
     pub line: ShapeStyle,
     pub free_draw: ShapeStyle,
     pub rectangle_highlight: ShapeStyle,
@@ -43,7 +46,10 @@ pub fn editor_style_defaults() -> EditorStyleDefaults {
 
     EditorStyleDefaults {
         distance: crate::DistanceStyle::default(),
+        angle: crate::AngleStyle::default(),
+        magnifier: crate::MagnifierStyle::default(),
         spotlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
+        spotlight_corner_radii: CornerRadii::default(),
         rectangle: RectangleShapeStyle {
             shape: snow_draw_engine_document::HighlightShape::Rectangle,
             fill: ColorRgba8::default(),
@@ -146,6 +152,8 @@ pub fn editor_style_defaults() -> EditorStyleDefaults {
         text: TextStyle {
             color: stroke,
             font_size: 30.0,
+            bold: false,
+            italic: false,
             font_family: None,
             fill: ColorRgba8::default(),
             fill_style: FillStyle::Solid,

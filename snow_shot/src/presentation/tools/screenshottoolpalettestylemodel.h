@@ -25,8 +25,8 @@ class ScreenshotToolPaletteRectangleStyleModel final {
     [[nodiscard]] int cornerRadius() const;
     [[nodiscard]] SnowCanvasRectangleShape shape() const;
     [[nodiscard]] const QVector<double>& strokeWidthValues() const;
-    [[nodiscard]] const QVector<QColor>& strokeColorValues() const;
-    [[nodiscard]] const QVector<QColor>& fillColorValues() const;
+    [[nodiscard]] QVector<QColor> strokeColorValues() const;
+    [[nodiscard]] QVector<QColor> fillColorValues() const;
 
     [[nodiscard]] bool stepStrokeWidth(int direction);
     [[nodiscard]] bool setStrokeWidth(double strokeWidth);
@@ -45,8 +45,6 @@ class ScreenshotToolPaletteRectangleStyleModel final {
     [[nodiscard]] static double clampedCornerRadius(double cornerRadius);
 
     QVector<double> m_strokeWidthValues;
-    QVector<QColor> m_strokeColorValues;
-    QVector<QColor> m_fillColorValues;
     double m_minimumStrokeWidth = 1.0;
     double m_strokeWidth = 2.0;
     QColor m_strokeColor;
@@ -70,14 +68,16 @@ class ScreenshotToolPaletteTextStyleModel final {
 
     [[nodiscard]] const QVector<double>& fontSizeValues() const;
     [[nodiscard]] const QVector<double>& strokeWidthValues() const;
-    [[nodiscard]] const QVector<QColor>& colorValues() const;
-    [[nodiscard]] const QVector<QColor>& fillColorValues() const;
+    [[nodiscard]] QVector<QColor> colorValues() const;
+    [[nodiscard]] QVector<QColor> fillColorValues() const;
 
     [[nodiscard]] bool setColor(const QColor& color);
     [[nodiscard]] bool setFontSize(double fontSize);
     [[nodiscard]] bool stepFontSize(int direction);
     [[nodiscard]] bool cycleFontSize();
     [[nodiscard]] bool setFontFamily(const QString& fontFamily);
+    [[nodiscard]] bool setBold(bool bold);
+    [[nodiscard]] bool setItalic(bool italic);
     [[nodiscard]] bool setStrokeColor(const QColor& color);
     [[nodiscard]] bool setStrokeWidth(double strokeWidth);
     [[nodiscard]] bool stepStrokeWidth(int direction);
@@ -94,8 +94,6 @@ class ScreenshotToolPaletteTextStyleModel final {
 
     QVector<double> m_fontSizeValues;
     QVector<double> m_strokeWidthValues;
-    QVector<QColor> m_colorValues;
-    QVector<QColor> m_fillColorValues;
     SnowCanvasTextStyle m_style;
 };
 
@@ -120,8 +118,18 @@ struct ScreenshotToolPaletteStyleState {
     SnowCanvasDistanceStyle creationDistanceStyle;
     SnowCanvasDistanceStyle distanceStyle;
     quint32 distanceStyleMixed = 0;
+    double distanceMeasuredLength = 0.0;
     bool showingSelectedDistance = false;
     bool distanceControlsActive = false;
+    SnowCanvasAngleStyle creationAngleStyle;
+    SnowCanvasAngleStyle angleStyle;
+    quint32 angleStyleMixed = 0;
+    bool showingSelectedAngle = false;
+    SnowCanvasMagnifierStyle creationMagnifierStyle;
+    SnowCanvasMagnifierStyle magnifierStyle;
+    quint32 magnifierStyleMixed = 0;
+    bool showingSelectedMagnifier = false;
+    bool angleControlsActive = false;
     ScreenshotToolPaletteTextStyleModel m_creationTextStyle;
     ScreenshotToolPaletteTextStyleModel m_textStyle;
     SnowCanvasSerialNumberStyle m_creationSerialNumberStyle;
@@ -138,6 +146,8 @@ struct ScreenshotToolPaletteStyleState {
     SnowCanvasSpotlightConfig spotlightConfig;
     SnowCanvasRectangleShape creationSpotlightShape = SnowCanvasRectangleShape::Rectangle;
     SnowCanvasRectangleShape spotlightShape = SnowCanvasRectangleShape::Rectangle;
+    SnowCanvasCornerRadii creationSpotlightCornerRadii;
+    SnowCanvasCornerRadii spotlightCornerRadii;
     bool showingSelectedSpotlight = false;
     quint32 spotlightShapeMixed = 0;
     bool m_arrowControlsActive = false;

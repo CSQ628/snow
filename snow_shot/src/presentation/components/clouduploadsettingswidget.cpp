@@ -155,7 +155,15 @@ void CloudUploadSettingsWidget::applyTheme(const presentation::styles::ThemeColo
         if (auto* row = dynamic_cast<ConfigurationRow*>(m_rows->itemAt(i)->widget()))
             row->applyTheme(scheme);
 }
-void CloudUploadSettingsWidget::rebuild() {
+void CloudUploadSettingsWidget::rebuild(bool force) {
+    const auto values = m_session.cloudUploadSettings();
+    // Persistence phase changes and selecting a destination do not change the list.
+    // Keep its live controls and focus intact while synchronizing the selection.
+    if (!force && m_renderedConfigurations == values.configurations) {
+        m_default->syncValue(values.defaultId);
+        return;
+    }
+    m_renderedConfigurations = values.configurations;
     const QString focused = QApplication::focusWidget() && isAncestorOf(QApplication::focusWidget())
                                 ? QApplication::focusWidget()->objectName()
                                 : QString();
@@ -163,7 +171,6 @@ void CloudUploadSettingsWidget::rebuild() {
         delete item->widget();
         delete item;
     }
-    const auto values = m_session.cloudUploadSettings();
     QVector<fields::Choice> choices{{QString(), {}, tr("None")}};
     for (const auto& value : values.configurations)
         choices.push_back({value.id, {}, value.name});
@@ -275,7 +282,6 @@ void CloudUploadSettingsWidget::deleteConfiguration(const QString& id) {
     connect(modal, &AdModal::finished, this, [this, modal](AdModal::DialogCode) {
         m_deleteModal = nullptr;
         modal->deleteLater();
-        m_add->setFocus();
     });
     modal->open();
 }
@@ -362,11 +368,6 @@ void CloudUploadSettingsWidget::openEditor(const QString& id) {
         m_modal = nullptr;
         m_modalError = nullptr;
         modal->deleteLater();
-        QTimer::singleShot(0, this, [this] {
-            auto* button =
-                m_editing ? findChild<AdButton*>(QStringLiteral("edit:") + m_editId) : m_add;
-            (button ? button : m_add)->setFocus();
-        });
     });
     modal->setInitialFocusWidget(m_fields[0]->focusWidget());
     body->ensurePolished();
@@ -499,7 +500,7 @@ void CloudUploadSettingsWidget::retranslateUi() {
     m_add->setText(tr("Add configuration"));
     m_title->setText(tr("Upload Configurations"));
     m_default->retranslateUi();
-    rebuild();
+    rebuild(true);
     translateEditor();
     if (m_modal && m_editorValidationAttempted)
         submitEditor(true);

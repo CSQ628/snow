@@ -42,6 +42,8 @@ enum class SnowCanvasTool {
     RectangleEraser,
     BrushEraser,
     Distance,
+    Angle,
+    Magnifier,
 };
 
 enum class SnowCanvasCursorLayer {
@@ -80,6 +82,10 @@ enum class SnowCanvasStyleToolbarSource {
     DefaultBrushEraser,
     DefaultDistance,
     SelectedDistance,
+    DefaultAngle,
+    SelectedAngle,
+    DefaultMagnifier,
+    SelectedMagnifier,
 };
 
 enum SnowCanvasTextStyleMixedFlag : quint32 {
@@ -94,8 +100,10 @@ enum SnowCanvasTextStyleMixedFlag : quint32 {
     SnowCanvasTextStyleMixedHorizontalAlign = 1u << 8,
     SnowCanvasTextStyleMixedVerticalAlign = 1u << 9,
     SnowCanvasTextStyleMixedOpacity = 1u << 10,
+    SnowCanvasTextStyleMixedBold = 1u << 11,
+    SnowCanvasTextStyleMixedItalic = 1u << 12,
 };
-inline constexpr quint32 SnowCanvasTextStyleAllProperties = (1u << 11) - 1u;
+inline constexpr quint32 SnowCanvasTextStyleAllProperties = (1u << 13) - 1u;
 
 enum SnowCanvasSerialNumberStyleMixedFlag : quint32 {
     SnowCanvasSerialNumberStyleMixedNumber = 1u << 0,
@@ -200,6 +208,25 @@ enum class SnowCanvasRectangleShape {
     Diamond,
 };
 
+enum class SnowCanvasMagnifierConnectionType {
+    None = 0,
+    LeaderLine = 1,
+    Gradient = 2,
+};
+
+enum SnowCanvasMagnifierStyleProperty : quint32 {
+    SnowCanvasMagnifierStylePropertyShape = 1u << 0,
+    SnowCanvasMagnifierStylePropertyStrokeColor = 1u << 1,
+    SnowCanvasMagnifierStylePropertyStrokeWidth = 1u << 2,
+    SnowCanvasMagnifierStylePropertyFactor = 1u << 3,
+    SnowCanvasMagnifierStylePropertyConnectionType = 1u << 4,
+    SnowCanvasMagnifierStylePropertyLeaderArrowhead = 1u << 5,
+    SnowCanvasMagnifierStylePropertyCornerRadius = 1u << 6,
+    SnowCanvasMagnifierStylePropertyArrowRatio = 1u << 7,
+    SnowCanvasMagnifierStylePropertySourceOutline = 1u << 8,
+};
+inline constexpr quint32 SnowCanvasMagnifierStyleAllProperties = (1u << 9) - 1u;
+
 enum class SnowCanvasFilterType {
     Mosaic,
     GaussianBlur,
@@ -212,6 +239,7 @@ enum class SnowCanvasFilterType {
 };
 
 // Capability flag returned alongside filterStyleMixed property bits.
+constexpr quint32 SnowCanvasFilterStyleMixedContainsBothFamilies = 1u << 30;
 constexpr quint32 SnowCanvasFilterStyleMixedContainsSmartErase = 1u << 31;
 
 enum SnowCanvasFilterStyleProperty : quint32 {
@@ -323,6 +351,36 @@ inline bool operator!=(const SnowCanvasCornerRadii& lhs, const SnowCanvasCornerR
     return !(lhs == rhs);
 }
 
+enum class SnowCanvasAngleUnit { Degrees, Radians };
+enum class SnowCanvasAngleType { Directed, Interior };
+
+enum class SnowCanvasAngleStyleProperty : quint32 {
+    Stroke = 1u << 0,
+    StrokeWidth = 1u << 1,
+    Unit = 1u << 2,
+    DecimalPlaces = 1u << 3,
+    Type = 1u << 4,
+    All = (1u << 5) - 1u,
+};
+
+struct SnowCanvasAngleStyle {
+    QColor stroke = QColor(0xf5, 0x22, 0x2d);
+    double strokeWidth = 2.0;
+    SnowCanvasAngleUnit unit = SnowCanvasAngleUnit::Degrees;
+    quint32 decimalPlaces = 0;
+    SnowCanvasAngleType angleType = SnowCanvasAngleType::Directed;
+};
+
+inline bool operator==(const SnowCanvasAngleStyle& lhs, const SnowCanvasAngleStyle& rhs) {
+    return lhs.stroke == rhs.stroke &&
+           snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) && lhs.unit == rhs.unit &&
+           lhs.decimalPlaces == rhs.decimalPlaces && lhs.angleType == rhs.angleType;
+}
+
+inline bool operator!=(const SnowCanvasAngleStyle& lhs, const SnowCanvasAngleStyle& rhs) {
+    return !(lhs == rhs);
+}
+
 enum class SnowCanvasDistanceUnit { Px, Cm, M, Km, Mm };
 
 enum SnowCanvasDistanceStyleProperty : quint32 {
@@ -382,6 +440,31 @@ struct SnowCanvasShapeStyle {
     SnowCanvasHighlightShape highlightShape = SnowCanvasHighlightShape::Rectangle;
     SnowCanvasRectangleShape shape = SnowCanvasRectangleShape::Rectangle;
 };
+
+struct SnowCanvasMagnifierStyle {
+    SnowCanvasRectangleShape shape = SnowCanvasRectangleShape::Rectangle;
+    QColor stroke{0xf5, 0x22, 0x2d};
+    double strokeWidth = 2.0;
+    double factor = 2.0;
+    SnowCanvasMagnifierConnectionType connectionType = SnowCanvasMagnifierConnectionType::Gradient;
+    bool sourceOutline = true;
+    SnowCanvasArrowhead leaderArrowhead = SnowCanvasArrowhead::None;
+    SnowCanvasCornerRadii cornerRadii{6.0, 6.0, 6.0, 6.0};
+    double arrowRatio = 1.0;
+};
+
+inline bool operator==(const SnowCanvasMagnifierStyle& lhs, const SnowCanvasMagnifierStyle& rhs) {
+    return lhs.shape == rhs.shape && lhs.stroke == rhs.stroke &&
+           snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
+           snowCanvasExactDoubleEqual(lhs.factor, rhs.factor) &&
+           lhs.connectionType == rhs.connectionType && lhs.sourceOutline == rhs.sourceOutline &&
+           lhs.leaderArrowhead == rhs.leaderArrowhead && lhs.cornerRadii == rhs.cornerRadii &&
+           snowCanvasExactDoubleEqual(lhs.arrowRatio, rhs.arrowRatio);
+}
+
+inline bool operator!=(const SnowCanvasMagnifierStyle& lhs, const SnowCanvasMagnifierStyle& rhs) {
+    return !(lhs == rhs);
+}
 
 inline bool operator==(const SnowCanvasShapeStyle& lhs, const SnowCanvasShapeStyle& rhs) {
     return lhs.fill == rhs.fill && lhs.fillStyle == rhs.fillStyle && lhs.stroke == rhs.stroke &&
@@ -515,6 +598,8 @@ struct SnowCanvasTextStyle {
     SnowCanvasTextHorizontalAlign horizontalAlign = SnowCanvasTextHorizontalAlign::Left;
     SnowCanvasTextVerticalAlign verticalAlign = SnowCanvasTextVerticalAlign::Center;
     double opacity = 1.0;
+    bool bold = false;
+    bool italic = false;
 };
 
 inline bool operator==(const SnowCanvasTextStyle& lhs, const SnowCanvasTextStyle& rhs) {
@@ -524,7 +609,8 @@ inline bool operator==(const SnowCanvasTextStyle& lhs, const SnowCanvasTextStyle
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
            lhs.cornerRadii == rhs.cornerRadii && lhs.horizontalAlign == rhs.horizontalAlign &&
            lhs.verticalAlign == rhs.verticalAlign &&
-           snowCanvasExactDoubleEqual(lhs.opacity, rhs.opacity);
+           snowCanvasExactDoubleEqual(lhs.opacity, rhs.opacity) && lhs.bold == rhs.bold &&
+           lhs.italic == rhs.italic;
 }
 
 inline bool operator!=(const SnowCanvasTextStyle& lhs, const SnowCanvasTextStyle& rhs) {
@@ -576,7 +662,10 @@ struct SnowCanvasStyleDefaults {
     SnowCanvasSpotlightConfig spotlight;
     SnowCanvasBrushEraserStyle brushEraser;
     SnowCanvasRectangleShape spotlightShape = SnowCanvasRectangleShape::Rectangle;
+    SnowCanvasCornerRadii spotlightCornerRadii;
     SnowCanvasDistanceStyle distance;
+    SnowCanvasAngleStyle angle;
+    SnowCanvasMagnifierStyle magnifier;
 };
 
 inline bool operator==(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyleDefaults& rhs) {
@@ -586,7 +675,9 @@ inline bool operator==(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyle
            lhs.penFilter == rhs.penFilter && lhs.text == rhs.text &&
            lhs.serialNumber == rhs.serialNumber && lhs.watermark == rhs.watermark &&
            lhs.spotlight == rhs.spotlight && lhs.brushEraser == rhs.brushEraser &&
-           lhs.spotlightShape == rhs.spotlightShape && lhs.distance == rhs.distance;
+           lhs.spotlightShape == rhs.spotlightShape &&
+           lhs.spotlightCornerRadii == rhs.spotlightCornerRadii && lhs.distance == rhs.distance &&
+           lhs.angle == rhs.angle && lhs.magnifier == rhs.magnifier;
 }
 
 inline bool operator!=(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyleDefaults& rhs) {
@@ -613,6 +704,12 @@ struct SnowCanvasStyleToolbarState {
     SnowCanvasBrushEraserStyle brushEraserStyle;
     SnowCanvasDistanceStyle distanceStyle;
     quint32 distanceStyleMixed = 0;
+    SnowCanvasAngleStyle angleStyle;
+    quint32 angleStyleMixed = 0;
+    // Calibrated length before applying the factor; zero without a single valid distance.
+    double distanceMeasuredLength = 0.0;
+    SnowCanvasMagnifierStyle magnifierStyle;
+    quint32 magnifierStyleMixed = 0;
 };
 
 inline bool operator==(const SnowCanvasStyleToolbarState& lhs,
@@ -626,7 +723,11 @@ inline bool operator==(const SnowCanvasStyleToolbarState& lhs,
            lhs.shapeStyleMixed == rhs.shapeStyleMixed && lhs.filterStyle == rhs.filterStyle &&
            lhs.filterStyleMixed == rhs.filterStyleMixed &&
            lhs.brushEraserStyle == rhs.brushEraserStyle && lhs.distanceStyle == rhs.distanceStyle &&
-           lhs.distanceStyleMixed == rhs.distanceStyleMixed;
+           lhs.distanceStyleMixed == rhs.distanceStyleMixed && lhs.angleStyle == rhs.angleStyle &&
+           lhs.angleStyleMixed == rhs.angleStyleMixed &&
+           lhs.distanceMeasuredLength == rhs.distanceMeasuredLength &&
+           lhs.magnifierStyle == rhs.magnifierStyle &&
+           lhs.magnifierStyleMixed == rhs.magnifierStyleMixed;
 }
 
 inline bool operator!=(const SnowCanvasStyleToolbarState& lhs,

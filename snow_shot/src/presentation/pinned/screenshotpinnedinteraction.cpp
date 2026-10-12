@@ -27,36 +27,6 @@
 namespace platform = snow_shot::presentation;
 namespace resize_geometry = screenshot_pinned_resize_geometry;
 namespace {
-constexpr int kPreciseWheelZoomStepDelta = 100;
-constexpr int kAngleWheelZoomStepDelta = 120;
-// Wheels without scroll phases need an idle boundary for a new immediate step.
-constexpr quint64 kWheelZoomBurstIntervalMs = 250;
-
-std::optional<int> resizeHandle(const QPointF& p, const QSize& size) {
-    constexpr qreal margin = 6;
-    if (!QRectF(QPointF(), QSizeF(size)).contains(p))
-        return {};
-    const bool left = p.x() < margin, right = p.x() >= size.width() - margin;
-    const bool top = p.y() < margin, bottom = p.y() >= size.height() - margin;
-    using H = resize_geometry::DragHandle;
-    if (left && top)
-        return int(H::TopLeft);
-    if (right && top)
-        return int(H::TopRight);
-    if (right && bottom)
-        return int(H::BottomRight);
-    if (left && bottom)
-        return int(H::BottomLeft);
-    if (left)
-        return int(H::Left);
-    if (right)
-        return int(H::Right);
-    if (top)
-        return int(H::Top);
-    if (bottom)
-        return int(H::Bottom);
-    return {};
-}
 Qt::CursorShape resizeCursor(int handle) {
     using H = resize_geometry::DragHandle;
     switch (H(handle)) {
@@ -82,8 +52,8 @@ bool ScreenshotPinnedWindow::exportDragEnabledAt(const QPoint& position,
     return m_presented && !m_closing && !m_clickThroughActive && !m_geometryAnimating &&
            !m_interactionPlacement && !m_windowDragActive && !m_ocrMode &&
            !(m_hiddenTextSelection && modifiers.testFlag(Qt::AltModifier)) && m_canvas &&
-           rect().contains(position) && !isControlsPanelPosition(position) &&
-           (!interactiveResizingEnabled() || !resizeHandle(position, size()));
+           contentViewRect().contains(position) && !isControlsPanelPosition(position) &&
+           (!interactiveResizingEnabled() || !resizeHandleAt(position));
 }
 
 void ScreenshotPinnedWindow::cancelExportDrag() {
@@ -265,7 +235,7 @@ bool ScreenshotPinnedWindow::beginControlledInteraction(const QPointF& desktopPo
     if (!begun)
         return false;
     if (!handle && m_recognitionContent && (m_ocrMode || m_hiddenTextSelection)) {
-        m_recognitionContent->clearOcrSelection();
+        m_recognitionContent->clearTextSelection();
     }
     resetPinnedGestures();
     m_interactionPlacement = placement;
@@ -325,7 +295,7 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
         if (!resize_geometry::dragResizeRect(
                 origin, delta, orientedInitialWindowSize(),
                 resize_geometry::DragHandle(*m_interactionResizeHandle), .1, 5., &effective,
-                &resized))
+                &resized, platform::pinnedShadowMargin()))
             return;
         m_interactionEffectiveResizeHandle = int(effective);
         setWindowDragCursor(resizeCursor(int(effective)));
@@ -372,9 +342,10 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
     static_cast<void>(m_nativeGeometryController->acceptInteractiveGeometry(
         platform::pinnedWindowRect(*m_platformPlacement, *target)));
     if (m_systemSizingActive)
-        setEffectiveScale(100. * m_platformPlacement->windowSize.width() /
-                              std::max(1, orientedInitialWindowSize().width()),
-                          true);
+        setEffectiveScale(
+            100. * (m_platformPlacement->windowSize.width() - 2 * platform::pinnedShadowMargin()) /
+                std::max(1, orientedInitialWindowSize().width()),
+            true);
     updateCanvasViewport();
     if (m_clickThroughActive)
         static_cast<void>(updateClickThroughExitButtonGeometry());
@@ -424,18 +395,20 @@ void ScreenshotPinnedWindow::endControlledInteraction(bool cancel) {
 }
 
 bool ScreenshotPinnedWindow::handleLockedPointer(QObject* watched, QEvent* event) {
-    if (!m_lockedMode || m_closing || !event || event->type() != QEvent::MouseButtonPress)
+    if (!m_lockedMode || m_closing || !event ||
+        (event->type() != QEvent::MouseButtonPress && event->type() != QEvent::MouseButtonDblClick))
         return false;
     const bool moveControl = watched == m_clickThroughMoveButton.get();
     if (watched != this && watched != m_canvas && watched != m_recognitionContent && !moveControl)
         return false;
     auto* mouse = static_cast<QMouseEvent*>(event);
-    if (mouse->button() != Qt::LeftButton)
+    if (mouse->button() != Qt::LeftButton || (event->type() == QEvent::MouseButtonDblClick &&
+                                              !mouse->modifiers().testFlag(Qt::AltModifier)))
         return false;
     if (!moveControl) {
         const QPointF local = windowPositionForEvent(watched, mouse->position());
         const bool resize =
-            !m_geometryAnimating && !m_thumbnailMode && resizeHandle(local, size()).has_value();
+            !m_geometryAnimating && !m_thumbnailMode && resizeHandleAt(local).has_value();
         if (!resize && !windowMoveEligibleForPointer(local.toPoint(), mouse->modifiers()))
             return false;
     }
@@ -503,12 +476,22 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
         clearWindowDragCursor();
         return false;
     }
-    if (event->type() != QEvent::MouseMove && event->type() != QEvent::MouseButtonPress)
+    if (event->type() != QEvent::MouseMove && event->type() != QEvent::MouseButtonPress &&
+        event->type() != QEvent::MouseButtonDblClick)
         return false;
     auto* mouse = static_cast<QMouseEvent*>(event);
+    if (event->type() == QEvent::MouseButtonDblClick &&
+        !mouse->modifiers().testFlag(Qt::AltModifier))
+        return false;
+    if (event->type() == QEvent::MouseMove && mouse->buttons() != Qt::NoButton) {
+        // A canvas/OCR press inside content owns its subsequent movement, even
+        // when the captured pointer enters the reserved frame or an edge band.
+        clearWindowDragCursor();
+        return false;
+    }
     const QPointF local = windowPositionForEvent(watched, mouse->position());
     const auto handle =
-        interactiveResizingEnabled() && !moveControl ? resizeHandle(local, size()) : std::nullopt;
+        interactiveResizingEnabled() && !moveControl ? resizeHandleAt(local) : std::nullopt;
     if (event->type() == QEvent::MouseMove) {
         if (handle) {
             setWindowDragCursor(resizeCursor(*handle));
@@ -527,10 +510,7 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
 }
 
 void ScreenshotPinnedWindow::resetPinnedGestures() {
-    m_scrollWheelRemainder = 0;
-    m_scrollWheelDirection = 0;
-    m_scrollWheelStepDelta = 0;
-    m_scrollWheelTimestamp = 0;
+    m_scrollWheelSteps.reset();
     m_scrollOpacity = 0;
     m_pinchActive = false;
 }
@@ -584,8 +564,7 @@ bool ScreenshotPinnedWindow::handlePinnedGesture(QObject* watched, QEvent* event
     const bool precise = platform::usesPreciseWheelDelta(*wheel);
     const int delta = precise ? wheel->pixelDelta().y() : wheel->angleDelta().y();
     if (wheel->modifiers().testFlag(Qt::ControlModifier)) {
-        m_scrollWheelRemainder = 0;
-        m_scrollWheelDirection = 0;
+        m_scrollWheelSteps.reset();
         if (!precise) {
             m_scrollOpacity = 0;
             return false;
@@ -596,24 +575,7 @@ bool ScreenshotPinnedWindow::handlePinnedGesture(QObject* watched, QEvent* event
         setOpacityPercent(qRound(m_scrollOpacity));
     } else if (delta != 0) {
         m_scrollOpacity = 0;
-        const int stepDelta = precise ? kPreciseWheelZoomStepDelta : kAngleWheelZoomStepDelta;
-        const int direction = delta > 0 ? 1 : -1;
-        const quint64 timestamp = wheel->timestamp();
-        const bool newBurst = wheel->phase() == Qt::NoScrollPhase &&
-                              timestamp > m_scrollWheelTimestamp &&
-                              timestamp - m_scrollWheelTimestamp >= kWheelZoomBurstIntervalMs;
-        if (direction != m_scrollWheelDirection || stepDelta != m_scrollWheelStepDelta ||
-            newBurst) {
-            // Advance on the first point, then once per full step of continued movement.
-            // Keeping this credit in the accumulator makes event coalescing irrelevant.
-            m_scrollWheelRemainder = direction * (stepDelta - 1);
-        }
-        m_scrollWheelDirection = direction;
-        m_scrollWheelStepDelta = stepDelta;
-        m_scrollWheelTimestamp = timestamp;
-        const qint64 accumulated = qint64(m_scrollWheelRemainder) + delta;
-        const int steps = int(accumulated / stepDelta);
-        m_scrollWheelRemainder = int(accumulated % stepDelta);
+        const int steps = m_scrollWheelSteps.consume(*wheel);
         if (steps != 0) {
             applyWheelScaleSteps(steps, nativePositionForWindowPosition(
                                             windowPositionForEvent(watched, wheel->position())));

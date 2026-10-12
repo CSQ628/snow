@@ -24,22 +24,15 @@ string(REPLACE "${_snow_nsis_init}" [=[Function .onInit
   !insertmacro MUI_LANGDLL_DISPLAY
   Push $0
   ReadRegStr $0 HKLM "Software\@CPACK_PACKAGE_VENDOR@\@CPACK_PACKAGE_INSTALL_REGISTRY_KEY@" ""
-  StrCmp $0 "" +5
-    Push "$0\bin\@SNOW_SHOT_EXECUTABLE_NAME@.exe"
-    Call SnowShotEnsureMainAppClosed
-    Push "$0\bin\crashpad_handler.exe"
-    Call SnowShotEnsureAppClosed
+  StrCmp $0 "" +3
+    Push "$0"
+    Call SnowShotEnsureInstallationClosed
   ReadRegStr $0 HKCU "Software\@CPACK_PACKAGE_VENDOR@\@CPACK_PACKAGE_INSTALL_REGISTRY_KEY@" ""
-  StrCmp $0 "" +5
-    Push "$0\bin\@SNOW_SHOT_EXECUTABLE_NAME@.exe"
-    Call SnowShotEnsureMainAppClosed
-    Push "$0\bin\crashpad_handler.exe"
-    Call SnowShotEnsureAppClosed
+  StrCmp $0 "" +3
+    Push "$0"
+    Call SnowShotEnsureInstallationClosed
   Pop $0
 ]=] _snow_nsis_template "${_snow_nsis_template}")
-# CPack does not carry project variables into its template configuration.
-string(REPLACE "@SNOW_SHOT_EXECUTABLE_NAME@" "${SNOW_SHOT_EXECUTABLE_NAME}"
-    _snow_nsis_template "${_snow_nsis_template}")
 # Restrict the wizard to languages with complete Snow Shot catalogs.
 string(REGEX MATCHALL "!insertmacro MUI_LANGUAGE \"[A-Za-z]+\"[^\n]*" _snow_nsis_languages
     "${_snow_nsis_template}")
@@ -120,9 +113,19 @@ snow_shot_nsis_replace([=[  Push "UninstallString"
   Call ConditionalAddToRegistry]=])
 snow_shot_nsis_replace([=[ExecWait '"$0" /S _?=$3']=]
     [=[StrCpy $SnowShotPreviousRoot $3
+  Push $3
+  Call SnowShotPrepareUpgradeHelper
+  ClearErrors
   ExecWait '"$0" /S /SNOWUPGRADE _?=$3' $2
-  StrCmp $2 0 +2
-    Goto uninst_failed]=])
+  IfErrors snowPreviousUninstallFailed
+  StrCmp $2 0 snowPreviousUninstallDone
+snowPreviousUninstallFailed:
+  Call SnowShotRestoreUpgradeHelper
+  Goto uninst_failed
+snowPreviousUninstallDone:
+  StrCpy $SnowShotUpgradeHelperRoot ""
+  StrCpy $SnowShotUpgradeHelperBackup ""
+  ClearErrors]=])
 snow_shot_nsis_replace("@CPACK_NSIS_INSTALLER_MUI_FINISHPAGE_RUN_CODE@" [=[
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION SnowShotLaunchDesktop
@@ -146,6 +149,8 @@ set(_snow_nsis_launch "${CMAKE_CURRENT_LIST_DIR}/../snow_shot/packaging/Installe
 cmake_path(NATIVE_PATH _snow_nsis_launch NORMALIZE _snow_nsis_launch_native)
 set(_snow_nsis_owned_cleanup "${CMAKE_CURRENT_LIST_DIR}/../snow_shot/packaging/OwnedCleanup.nsh")
 cmake_path(NATIVE_PATH _snow_nsis_owned_cleanup NORMALIZE _snow_nsis_owned_cleanup_native)
+set(_snow_nsis_upgrade_helper "${CMAKE_CURRENT_LIST_DIR}/../snow_shot/packaging/UpgradeHelper.nsh")
+cmake_path(NATIVE_PATH _snow_nsis_upgrade_helper NORMALIZE _snow_nsis_upgrade_helper_native)
 set(_snow_nsis_localization "${CMAKE_CURRENT_LIST_DIR}/../snow_shot/packaging/InstallerLanguages.nsh")
 cmake_path(NATIVE_PATH _snow_nsis_localization NORMALIZE _snow_nsis_localization_native)
 set(_snow_nsis_directory "${CMAKE_CURRENT_LIST_DIR}/../snow_shot/packaging/InstallDirectory.nsh")
@@ -158,6 +163,7 @@ endif()
 string(APPEND CPACK_NSIS_DEFINES "\nVar SnowShotPreviousRoot\nUnicode true\n!include \"${_snow_nsis_guard_native}\"\n"
     "!include \"${_snow_nsis_launch_native}\"\n"
     "!include \"${_snow_nsis_owned_cleanup_native}\"\n"
+    "!include \"${_snow_nsis_upgrade_helper_native}\"\n"
     "!include \"${_snow_nsis_directory_native}\"\n"
     "!include \"${_snow_nsis_localization_native}\"\n"
     "!define SNOW_SHOT_INSTALLER_ARCHITECTURE \"${SNOW_WINDOWS_ARCHITECTURE}\"\n"
@@ -168,9 +174,9 @@ string(APPEND CPACK_NSIS_DEFINES "\nVar SnowShotPreviousRoot\nUnicode true\n!inc
 # MUI normally saves on the visible progress page; also persist silent installs.
 string(APPEND CPACK_NSIS_EXTRA_INSTALL_COMMANDS "\n!insertmacro MUI_LANGDLL_SAVELANGUAGE\n")
 set(CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS
-    "Push \"$INSTDIR\\bin\\${SNOW_SHOT_EXECUTABLE_NAME}.exe\"\nCall SnowShotEnsureMainAppClosed\nPush \"$INSTDIR\\bin\\crashpad_handler.exe\"\nCall SnowShotEnsureAppClosed")
-set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
-    "Push \"$INSTDIR\\bin\\${SNOW_SHOT_EXECUTABLE_NAME}.exe\"\nCall un.SnowShotEnsureAppClosed\nPush \"$INSTDIR\\bin\\crashpad_handler.exe\"\nCall un.SnowShotEnsureAppClosed")
+    "Push \"$INSTDIR\"\nCall SnowShotEnsureInstallationClosed")
+# OwnedCleanup guards before deletion; a second check after deletion is too late.
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "")
 
 string(APPEND CPACK_NSIS_EXTRA_INSTALL_COMMANDS [=[
   StrCmp $SnowShotPreviousRoot "" snowStartupMigrated

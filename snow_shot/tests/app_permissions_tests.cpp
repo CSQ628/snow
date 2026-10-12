@@ -271,9 +271,10 @@ void freshSettingsActions() {
 }
 void routingPolicy() {
     using A = GlobalShortcutAction;
-    for (auto action : {A::Screenshot, A::ScreenshotDelay, A::ScreenshotFixed, A::ScreenshotOcr,
-                        A::ScreenshotTranslation, A::ScreenshotCopy, A::ScreenshotFullScreen,
-                        A::ScreenshotFocusedWindow})
+    for (auto action :
+         {A::Screenshot, A::ScreenshotDelay, A::ScreenshotFixed, A::ScreenshotOcr,
+          A::ScreenshotTranslation, A::ScreenshotCopy, A::ScreenshotSave, A::ScreenshotQuickSave,
+          A::ScreenshotFullScreen, A::ScreenshotFocusedWindow})
         require(requiredPermissions(action, true) == AppPermissions{P::ScreenRecording},
                 "capture must not require optional smart-selection access");
     for (auto action : {A::ScreenRecord, A::ScreenRecordCopy}) {
@@ -285,9 +286,9 @@ void routingPolicy() {
     require(requiredPermissions(A::TranslateSelectedText, false) ==
                 AppPermissions{P::Accessibility},
             "selected text needs Accessibility");
-    for (auto action :
-         {A::OpenScreenRecordingFolder, A::OpenCaptureHistory, A::OpenPinToScreenManagement,
-          A::GlobalCanvas, A::OpenSettings, A::PinClipboardContent, A::PinSelectedFiles})
+    for (auto action : {A::OpenScreenRecordingFolder, A::OpenCaptureHistory,
+                        A::OpenPinToScreenManagement, A::GlobalCanvas, A::OpenSettings,
+                        A::PinClipboardContent, A::PinSelectedFiles, A::HideShowAllWindows})
         require(requiredPermissions(action, true).isEmpty(),
                 "permission-free actions must remain usable");
     using M = settings::SettingsGlobalMouseAction;
@@ -625,6 +626,10 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("app-permissions-tests"));
+    if (app.arguments().contains(QStringLiteral("--routing-only"))) {
+        routingPolicy();
+        return 0;
+    }
     permissionDiagnostics();
     snapshotsAndLifecycle();
     freshAdmissionAndRequests();

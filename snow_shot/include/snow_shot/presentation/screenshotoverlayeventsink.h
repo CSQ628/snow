@@ -7,6 +7,7 @@
 #include <Qt>
 
 class ScreenshotOverlayWindow;
+class QWheelEvent;
 
 enum class ScreenshotOverlayRightClickResult { Ignored, Handled, CancelCapture };
 
@@ -16,6 +17,10 @@ class ScreenshotOverlayEventSink {
     virtual bool acceptOverlayInput(bool genuine) {
         Q_UNUSED(genuine);
         return true;
+    }
+    // Hosts may coalesce guide presentation even while the canvas owns input.
+    virtual bool presentOverlayPointer(ScreenshotOverlayWindow*, const QPointF&) {
+        return false;
     }
 
     [[nodiscard]] virtual bool shouldHandleOverlayMouseEvent(const ScreenshotOverlayWindow* overlay,
@@ -46,9 +51,7 @@ class ScreenshotOverlayEventSink {
     virtual void handleUnhandledLeftDoubleClick() {}
     virtual void handleUnhandledMiddleClick() {}
     [[nodiscard]] virtual bool handleOverlayWheel(ScreenshotOverlayWindow* overlay,
-                                                  const QPointF& localPosition,
-                                                  const QPoint& angleDelta,
-                                                  const QPoint& pixelDelta) = 0;
+                                                  const QWheelEvent& event) = 0;
     [[nodiscard]] virtual bool shouldBlockUnhandledOverlayKeyInput() const = 0;
     virtual void raiseToolbarForCanvasInteraction() = 0;
 };

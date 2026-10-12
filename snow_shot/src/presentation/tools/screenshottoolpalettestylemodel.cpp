@@ -40,7 +40,17 @@ void ScreenshotToolPaletteStyleState::reset(const SnowCanvasStyleDefaults& defau
     creationDistanceStyle = defaults.distance;
     distanceStyle = defaults.distance;
     distanceStyleMixed = 0;
+    distanceMeasuredLength = 0.0;
     showingSelectedDistance = false;
+    creationAngleStyle = defaults.angle;
+    angleStyle = defaults.angle;
+    angleStyleMixed = 0;
+    showingSelectedAngle = false;
+    creationMagnifierStyle = defaults.magnifier;
+    magnifierStyle = defaults.magnifier;
+    magnifierStyleMixed = 0;
+    showingSelectedMagnifier = false;
+    angleControlsActive = false;
     m_creationTextStyle.setTextStyle(defaults.text);
     m_textStyle.setTextStyle(defaults.text);
     m_creationSerialNumberStyle = defaults.serialNumber;
@@ -57,6 +67,8 @@ void ScreenshotToolPaletteStyleState::reset(const SnowCanvasStyleDefaults& defau
     spotlightConfig = defaults.spotlight;
     creationSpotlightShape = defaults.spotlightShape;
     spotlightShape = defaults.spotlightShape;
+    creationSpotlightCornerRadii = defaults.spotlightCornerRadii;
+    spotlightCornerRadii = defaults.spotlightCornerRadii;
     showingSelectedSpotlight = false;
     spotlightShapeMixed = 0;
     m_showingSelectedStyle = false;
@@ -128,8 +140,6 @@ SnowCanvasTextStyle defaultTextStyle() {
 ScreenshotToolPaletteRectangleStyleModel::ScreenshotToolPaletteRectangleStyleModel(
     double minimumStrokeWidth)
     : m_strokeWidthValues{style_presets::shapeStrokeWidths()},
-      m_strokeColorValues{style_presets::strokeColors()},
-      m_fillColorValues{style_presets::shapeFillColors()},
       m_minimumStrokeWidth(std::clamp(minimumStrokeWidth, 0.0, kMaxRectangleStrokeWidth)) {
     reset();
 }
@@ -216,12 +226,12 @@ const QVector<double>& ScreenshotToolPaletteRectangleStyleModel::strokeWidthValu
     return m_strokeWidthValues;
 }
 
-const QVector<QColor>& ScreenshotToolPaletteRectangleStyleModel::strokeColorValues() const {
-    return m_strokeColorValues;
+QVector<QColor> ScreenshotToolPaletteRectangleStyleModel::strokeColorValues() const {
+    return style_presets::strokeColors();
 }
 
-const QVector<QColor>& ScreenshotToolPaletteRectangleStyleModel::fillColorValues() const {
-    return m_fillColorValues;
+QVector<QColor> ScreenshotToolPaletteRectangleStyleModel::fillColorValues() const {
+    return style_presets::shapeFillColors();
 }
 
 bool ScreenshotToolPaletteRectangleStyleModel::stepStrokeWidth(int direction) {
@@ -347,9 +357,7 @@ double ScreenshotToolPaletteRectangleStyleModel::clampedCornerRadius(double corn
 
 ScreenshotToolPaletteTextStyleModel::ScreenshotToolPaletteTextStyleModel()
     : m_fontSizeValues{style_presets::fontSizes()},
-      m_strokeWidthValues{style_presets::strokePresetWidths()},
-      m_colorValues{style_presets::textColors()},
-      m_fillColorValues{style_presets::textFillColors()} {
+      m_strokeWidthValues{style_presets::strokePresetWidths()} {
     reset();
 }
 
@@ -389,12 +397,12 @@ const QVector<double>& ScreenshotToolPaletteTextStyleModel::strokeWidthValues() 
     return m_strokeWidthValues;
 }
 
-const QVector<QColor>& ScreenshotToolPaletteTextStyleModel::colorValues() const {
-    return m_colorValues;
+QVector<QColor> ScreenshotToolPaletteTextStyleModel::colorValues() const {
+    return style_presets::textColors();
 }
 
-const QVector<QColor>& ScreenshotToolPaletteTextStyleModel::fillColorValues() const {
-    return m_fillColorValues;
+QVector<QColor> ScreenshotToolPaletteTextStyleModel::fillColorValues() const {
+    return style_presets::textFillColors();
 }
 
 bool ScreenshotToolPaletteTextStyleModel::setColor(const QColor& color) {
@@ -436,6 +444,20 @@ bool ScreenshotToolPaletteTextStyleModel::setFontFamily(const QString& fontFamil
         return false;
     }
     m_style.fontFamily = trimmed;
+    return true;
+}
+
+bool ScreenshotToolPaletteTextStyleModel::setBold(bool bold) {
+    if (m_style.bold == bold)
+        return false;
+    m_style.bold = bold;
+    return true;
+}
+
+bool ScreenshotToolPaletteTextStyleModel::setItalic(bool italic) {
+    if (m_style.italic == italic)
+        return false;
+    m_style.italic = italic;
     return true;
 }
 

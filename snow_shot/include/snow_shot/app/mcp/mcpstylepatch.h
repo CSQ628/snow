@@ -56,6 +56,8 @@ inline const QHash<QString, SnowCanvasTool>& mcpCanvasTools() {
         {QStringLiteral("rectangle"), SnowCanvasTool::Shape},
         {QStringLiteral("arrow"), SnowCanvasTool::Arrow},
         {QStringLiteral("distance"), SnowCanvasTool::Distance},
+        {QStringLiteral("angle"), SnowCanvasTool::Angle},
+        {QStringLiteral("magnifier"), SnowCanvasTool::Magnifier},
         {QStringLiteral("line"), SnowCanvasTool::Line},
         {QStringLiteral("freehand"), SnowCanvasTool::FreeDraw},
         {QStringLiteral("rectangle_highlight"), SnowCanvasTool::RectangleHighlight},
@@ -78,10 +80,16 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
     const auto patch = params.value(QStringLiteral("style")).toObject();
     if (patch.isEmpty())
         return false;
+    const QStringList units =
+        target == QStringLiteral("angle")
+            ? QStringList{QStringLiteral("degrees"), QStringLiteral("radians")}
+            : QStringList{QStringLiteral("px"), QStringLiteral("cm"), QStringLiteral("m"),
+                          QStringLiteral("km"), QStringLiteral("mm")};
     const QHash<QString, QStringList> enums{
-        {QStringLiteral("unit"),
-         {QStringLiteral("px"), QStringLiteral("cm"), QStringLiteral("m"), QStringLiteral("km"),
-          QStringLiteral("mm")}},
+        {QStringLiteral("unit"), units},
+        {QStringLiteral("angle_type"), {QStringLiteral("directed"), QStringLiteral("interior")}},
+        {QStringLiteral("connection_type"),
+         {QStringLiteral("none"), QStringLiteral("leader_line"), QStringLiteral("gradient")}},
         {QStringLiteral("shape"),
          {QStringLiteral("rectangle"), QStringLiteral("ellipse"), QStringLiteral("diamond")}},
         {QStringLiteral("fill_style"),
@@ -171,6 +179,20 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
                    QStringLiteral("factor"),         QStringLiteral("unit"),
                    QStringLiteral("decimal_places"), QStringLiteral("endpoint_scale"),
                    QStringLiteral("endpoint_style")};
+    else if (target == QStringLiteral("angle"))
+        allowed = {QStringLiteral("stroke"), QStringLiteral("stroke_width"), QStringLiteral("unit"),
+                   QStringLiteral("decimal_places"), QStringLiteral("angle_type")};
+    else if (target == QStringLiteral("magnifier"))
+        allowed = {QStringLiteral("shape"),
+                   QStringLiteral("stroke"),
+                   QStringLiteral("stroke_width"),
+                   QStringLiteral("factor"),
+                   QStringLiteral("connection_type"),
+                   QStringLiteral("source_outline"),
+                   QStringLiteral("leader_arrowhead"),
+                   QStringLiteral("arrow_ratio"),
+                   QStringLiteral("corner_radius"),
+                   QStringLiteral("corner_radii")};
     else if (target == QStringLiteral("arrow"))
         allowed = {QStringLiteral("stroke"),           QStringLiteral("stroke_width"),
                    QStringLiteral("stroke_style"),     QStringLiteral("start_arrowhead"),
@@ -211,6 +233,9 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
                 if (!radius.isDouble() || !std::isfinite(radius.toDouble()) ||
                     radius.toDouble() < 0 || radius.toDouble() > 8192)
                     return false;
+        } else if (it.key() == QStringLiteral("source_outline")) {
+            if (!it->isBool())
+                return false;
         } else if (textFields.contains(it.key())) {
             if (!it->isString() || it->toString().toUtf8().size() > 65536)
                 return false;
@@ -231,15 +256,20 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
                 return false;
             if (it.key() == QStringLiteral("factor") && (value < 0.01 || value > 1000))
                 return false;
+            if (target == QStringLiteral("magnifier") &&
+                ((it.key() == QStringLiteral("factor") && (value < 1 || value > 10)) ||
+                 (it.key() == QStringLiteral("stroke_width") && value > 72)))
+                return false;
             if (it.key() == QStringLiteral("decimal_places") &&
                 (value > 3 || std::floor(value) != value))
                 return false;
-            if (target == QStringLiteral("distance") &&
+            if ((target == QStringLiteral("distance") || target == QStringLiteral("angle")) &&
                 it.key() == QStringLiteral("stroke_width") && (value < 1 || value > 72))
                 return false;
         } else {
             const auto key = (it.key() == QStringLiteral("end_arrowhead") ||
-                              it.key() == QStringLiteral("endpoint_style"))
+                              it.key() == QStringLiteral("endpoint_style") ||
+                              it.key() == QStringLiteral("leader_arrowhead"))
                                  ? QStringLiteral("start_arrowhead")
                                  : it.key();
             if (!enums.value(key).contains(it->toString()))
@@ -259,7 +289,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
     const auto enumeration = [&](const char* name, int fallback) {
         const auto value = patch.value(QLatin1String(name));
         const auto key = (QString::fromLatin1(name) == QStringLiteral("end_arrowhead") ||
-                          QString::fromLatin1(name) == QStringLiteral("endpoint_style"))
+                          QString::fromLatin1(name) == QStringLiteral("endpoint_style") ||
+                          QString::fromLatin1(name) == QStringLiteral("leader_arrowhead"))
                              ? QStringLiteral("start_arrowhead")
                              : QString::fromLatin1(name);
         return value.isUndefined() ? fallback : enums.value(key).indexOf(value.toString());
@@ -285,7 +316,79 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         }
         return fallback;
     };
-    if (target == QStringLiteral("distance")) {
+    if (target == QStringLiteral("magnifier")) {
+        auto style = state.magnifierStyle;
+        style.cornerRadii = cornerRadii(style.cornerRadii);
+        style.shape = static_cast<SnowCanvasRectangleShape>(
+            enumeration("shape", static_cast<int>(style.shape)));
+        style.stroke = color("stroke", style.stroke);
+        style.strokeWidth = number("stroke_width", style.strokeWidth);
+        style.factor = number("factor", style.factor);
+        style.connectionType = static_cast<SnowCanvasMagnifierConnectionType>(
+            enumeration("connection_type", static_cast<int>(style.connectionType)));
+        style.sourceOutline =
+            patch.value(QStringLiteral("source_outline")).toBool(style.sourceOutline);
+        style.leaderArrowhead = static_cast<SnowCanvasArrowhead>(
+            enumeration("leader_arrowhead", static_cast<int>(style.leaderArrowhead)));
+        style.arrowRatio = number("arrow_ratio", style.arrowRatio);
+        const QHash<QString, quint32> properties{
+            {QStringLiteral("shape"), SnowCanvasMagnifierStylePropertyShape},
+            {QStringLiteral("stroke"), SnowCanvasMagnifierStylePropertyStrokeColor},
+            {QStringLiteral("stroke_width"), SnowCanvasMagnifierStylePropertyStrokeWidth},
+            {QStringLiteral("factor"), SnowCanvasMagnifierStylePropertyFactor},
+            {QStringLiteral("connection_type"), SnowCanvasMagnifierStylePropertyConnectionType},
+            {QStringLiteral("source_outline"), SnowCanvasMagnifierStylePropertySourceOutline},
+            {QStringLiteral("leader_arrowhead"), SnowCanvasMagnifierStylePropertyLeaderArrowhead},
+            {QStringLiteral("arrow_ratio"), SnowCanvasMagnifierStylePropertyArrowRatio}};
+        const quint32 cornerProperties = patch.contains(QStringLiteral("corner_radius")) ||
+                                                 patch.contains(QStringLiteral("corner_radii"))
+                                             ? SnowCanvasMagnifierStylePropertyCornerRadius
+                                             : 0;
+        quint32 flags = cornerProperties;
+        for (auto it = patch.begin(); it != patch.end(); ++it)
+            flags |= properties.value(it.key());
+        const bool creationDefaults =
+            state.source != SnowCanvasStyleToolbarSource::SelectedMagnifier;
+        const auto editTarget = creationDefaults ? SnowCanvasStyleEditTarget::Creation
+                                                 : SnowCanvasStyleEditTarget::Selection;
+        if constexpr (requires {
+                          canvas.commitStyleEdit(SnowCanvasMagnifierEdit{style, flags, editTarget});
+                      })
+            return canvas.commitStyleEdit(SnowCanvasMagnifierEdit{style, flags, editTarget});
+        else
+            return canvas.setMagnifierStyleFromToolbar(style, flags, creationDefaults);
+    } else if (target == QStringLiteral("angle")) {
+        auto style = state.angleStyle;
+        style.angleType = static_cast<SnowCanvasAngleType>(
+            enumeration("angle_type", static_cast<int>(style.angleType)));
+        style.stroke = color("stroke", style.stroke);
+        style.strokeWidth = number("stroke_width", style.strokeWidth);
+        style.unit =
+            static_cast<SnowCanvasAngleUnit>(enumeration("unit", static_cast<int>(style.unit)));
+        style.decimalPlaces = static_cast<quint32>(number("decimal_places", style.decimalPlaces));
+        const QHash<QString, quint32> properties{
+            {QStringLiteral("stroke"), static_cast<quint32>(SnowCanvasAngleStyleProperty::Stroke)},
+            {QStringLiteral("stroke_width"),
+             static_cast<quint32>(SnowCanvasAngleStyleProperty::StrokeWidth)},
+            {QStringLiteral("unit"), static_cast<quint32>(SnowCanvasAngleStyleProperty::Unit)},
+            {QStringLiteral("angle_type"),
+             static_cast<quint32>(SnowCanvasAngleStyleProperty::Type)},
+            {QStringLiteral("decimal_places"),
+             static_cast<quint32>(SnowCanvasAngleStyleProperty::DecimalPlaces)}};
+        quint32 flags = 0;
+        for (auto it = patch.begin(); it != patch.end(); ++it)
+            flags |= properties.value(it.key());
+        const auto editTarget = state.source == SnowCanvasStyleToolbarSource::SelectedAngle
+                                    ? SnowCanvasStyleEditTarget::Selection
+                                    : SnowCanvasStyleEditTarget::Creation;
+        if constexpr (requires {
+                          canvas.commitStyleEdit(
+                              SnowCanvasAngleStyleEdit{style, flags, editTarget});
+                      })
+            return canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{style, flags, editTarget});
+        else
+            return canvas.setAngleStyleFromToolbar(style, flags);
+    } else if (target == QStringLiteral("distance")) {
         auto style = state.distanceStyle;
         style.stroke = color("stroke", style.stroke);
         style.strokeWidth = number("stroke_width", style.strokeWidth);

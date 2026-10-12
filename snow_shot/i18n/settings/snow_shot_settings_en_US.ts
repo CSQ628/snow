@@ -444,6 +444,10 @@
     <context>
         <name>DrawingToolbarEditorSettingsWidget</name>
         <message>
+            <source>Angle annotation</source>
+            <translation>Angle annotation</translation>
+        </message>
+        <message>
             <source>Annotation toolbar preview</source>
             <translation>Annotation toolbar preview</translation>
         </message>
@@ -486,6 +490,10 @@
         <message>
             <source>Line</source>
             <translation>Line</translation>
+        </message>
+        <message>
+            <source>Magnifier</source>
+            <translation>Magnifier</translation>
         </message>
         <message>
             <source>No hidden tools</source>
@@ -1026,6 +1034,10 @@
     <context>
         <name>SettingsBackend</name>
         <message>
+            <source>Could not restore the Windows context menu preference.</source>
+            <translation>Could not restore the Windows context menu preference.</translation>
+        </message>
+        <message>
             <source>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</source>
             <translation>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</translation>
         </message>
@@ -1153,6 +1165,10 @@
             <translation>Active window</translation>
         </message>
         <message>
+            <source>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</source>
+            <translation>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</translation>
+        </message>
+        <message>
             <source>Adjust MP4 quality and file size</source>
             <translation>Adjust MP4 quality and file size</translation>
         </message>
@@ -1211,6 +1227,10 @@
         <message>
             <source>Always show</source>
             <translation>Always show</translation>
+        </message>
+        <message>
+            <source>Angle annotation</source>
+            <translation>Angle annotation</translation>
         </message>
         <message>
             <source>Animate transitions between smart screenshot selections</source>
@@ -1329,16 +1349,16 @@
             <translation>Auto resize window</translation>
         </message>
         <message>
-            <source>Auto save after copy</source>
-            <translation>Auto save after copy</translation>
-        </message>
-        <message>
             <source>Auto start at boot</source>
             <translation>Auto start at boot</translation>
         </message>
         <message>
             <source>Auto-recognize QR Code</source>
             <translation>Auto-recognize QR Code</translation>
+        </message>
+        <message>
+            <source>Auto-save after execution</source>
+            <translation>Auto-save after execution</translation>
         </message>
         <message>
             <source>Auto-save image filename format</source>
@@ -1689,6 +1709,10 @@
             <translation>Choose whether network requests use the system proxy</translation>
         </message>
         <message>
+            <source>Choose which actions also save an image in the selected image format and save directory</source>
+            <translation>Choose which actions also save an image in the selected image format and save directory</translation>
+        </message>
+        <message>
             <source>Clear</source>
             <translation>Clear</translation>
         </message>
@@ -1833,6 +1857,14 @@
             <translation>Copy color</translation>
         </message>
         <message>
+            <source>Copy current monitor</source>
+            <translation>Copy current monitor</translation>
+        </message>
+        <message>
+            <source>Copy focused window</source>
+            <translation>Copy focused window</translation>
+        </message>
+        <message>
             <source>Copy image file to clipboard</source>
             <translation>Copy image file to clipboard</translation>
         </message>
@@ -1841,12 +1873,20 @@
             <translation>Copy original content</translation>
         </message>
         <message>
+            <source>Copy pinned window</source>
+            <translation>Copy pinned window</translation>
+        </message>
+        <message>
             <source>Copy recording</source>
             <translation>Copy recording</translation>
         </message>
         <message>
             <source>Copy screenshot</source>
             <translation>Copy screenshot</translation>
+        </message>
+        <message>
+            <source>Copy scrolling screenshot</source>
+            <translation>Copy scrolling screenshot</translation>
         </message>
         <message>
             <source>Copy text</source>
@@ -1937,6 +1977,14 @@
             <translation>Customize the pinned window toolbar</translation>
         </message>
         <message>
+            <source>Customize the quick-set buttons for annotation fill colors</source>
+            <translation>Customize the quick-set buttons for annotation fill colors</translation>
+        </message>
+        <message>
+            <source>Customize the quick-set buttons for annotation stroke colors</source>
+            <translation>Customize the quick-set buttons for annotation stroke colors</translation>
+        </message>
+        <message>
             <source>Customize the screen recording action toolbar</source>
             <translation>Customize the screen recording action toolbar</translation>
         </message>
@@ -1963,6 +2011,10 @@
         <message>
             <source>Decrease scale by 10%</source>
             <translation>Decrease scale by 10%</translation>
+        </message>
+        <message>
+            <source>Decrease speed</source>
+            <translation>Decrease speed</translation>
         </message>
         <message>
             <source>Default</source>
@@ -2005,6 +2057,10 @@
             <translation>Delete files</translation>
         </message>
         <message>
+            <source>Delete files on recording close</source>
+            <translation>Delete files on recording close</translation>
+        </message>
+        <message>
             <source>Delete history</source>
             <translation>Delete history</translation>
         </message>
@@ -2019,6 +2075,10 @@
         <message>
             <source>Delete temporary recording files?</source>
             <translation>Delete temporary recording files?</translation>
+        </message>
+        <message>
+            <source>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</source>
+            <translation>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</translation>
         </message>
         <message>
             <source>Desktop access to your capture tools</source>
@@ -2047,6 +2107,10 @@
         <message>
             <source>Disable/Enable global hotkeys</source>
             <translation>Disable/Enable global hotkeys</translation>
+        </message>
+        <message>
+            <source>Disabled</source>
+            <translation>Disabled</translation>
         </message>
         <message>
             <source>Disk limit</source>
@@ -2209,6 +2273,14 @@
             <translation>Fill Style</translation>
         </message>
         <message>
+            <source>Fill color preset %1</source>
+            <translation>Fill color preset %1</translation>
+        </message>
+        <message>
+            <source>Fill color presets</source>
+            <translation>Fill color presets</translation>
+        </message>
+        <message>
             <source>Filter</source>
             <translation>Filter</translation>
         </message>
@@ -2365,12 +2437,20 @@
             <translation>Hidden tools</translation>
         </message>
         <message>
+            <source>Hide or show all windows in the current group</source>
+            <translation>Hide or show all windows in the current group</translation>
+        </message>
+        <message>
             <source>Hide to Top</source>
             <translation>Hide to Top</translation>
         </message>
         <message>
             <source>Hide when outside selection</source>
             <translation>Hide when outside selection</translation>
+        </message>
+        <message>
+            <source>Hide/Show All Windows</source>
+            <translation>Hide/Show All Windows</translation>
         </message>
         <message>
             <source>High</source>
@@ -2399,6 +2479,10 @@
         <message>
             <source>Image export</source>
             <translation>Image export</translation>
+        </message>
+        <message>
+            <source>Image files</source>
+            <translation>Image files</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -2467,6 +2551,10 @@
         <message>
             <source>Increase scale by 10%</source>
             <translation>Increase scale by 10%</translation>
+        </message>
+        <message>
+            <source>Increase speed</source>
+            <translation>Increase speed</translation>
         </message>
         <message>
             <source>Input Monitoring</source>
@@ -2597,6 +2685,10 @@
             <translation>Locked Border Color</translation>
         </message>
         <message>
+            <source>Locked shadow color</source>
+            <translation>Locked shadow color</translation>
+        </message>
+        <message>
             <source>Loop Animated Images</source>
             <translation>Loop Animated Images</translation>
         </message>
@@ -2615,6 +2707,10 @@
         <message>
             <source>MSAA</source>
             <translation>MSAA</translation>
+        </message>
+        <message>
+            <source>Magnifier</source>
+            <translation>Magnifier</translation>
         </message>
         <message>
             <source>Magnifier visibility</source>
@@ -2679,6 +2775,10 @@
         <message>
             <source>Medium V6</source>
             <translation>Medium V6</translation>
+        </message>
+        <message>
+            <source>Memory Optimization Policy</source>
+            <translation>Memory Optimization Policy</translation>
         </message>
         <message>
             <source>Menu options</source>
@@ -2761,8 +2861,16 @@
             <translation>Network proxy</translation>
         </message>
         <message>
+            <source>Next frame</source>
+            <translation>Next frame</translation>
+        </message>
+        <message>
             <source>Next screenshot history</source>
             <translation>Next screenshot history</translation>
+        </message>
+        <message>
+            <source>Next selection type</source>
+            <translation>Next selection type</translation>
         </message>
         <message>
             <source>No action</source>
@@ -2925,6 +3033,10 @@
             <translation>Pin images, image files, formatted text, or HTML from the clipboard to the screen</translation>
         </message>
         <message>
+            <source>Pin screenshot to screen</source>
+            <translation>Pin screenshot to screen</translation>
+        </message>
+        <message>
             <source>Pin selected image files from File Explorer or the desktop to the screen</source>
             <translation>Pin selected image files from File Explorer or the desktop to the screen</translation>
         </message>
@@ -2981,6 +3093,10 @@
             <translation>Pinned window active border</translation>
         </message>
         <message>
+            <source>Pinned window active shadow</source>
+            <translation>Pinned window active shadow</translation>
+        </message>
+        <message>
             <source>Pinned window behavior, appearance and tools</source>
             <translation>Pinned window behavior, appearance and tools</translation>
         </message>
@@ -2993,12 +3109,28 @@
             <translation>Pinned window locked border</translation>
         </message>
         <message>
+            <source>Pinned window locked shadow</source>
+            <translation>Pinned window locked shadow</translation>
+        </message>
+        <message>
+            <source>Pinned window shadow</source>
+            <translation>Pinned window shadow</translation>
+        </message>
+        <message>
             <source>Pinned-window shortcuts</source>
             <translation>Pinned-window shortcuts</translation>
         </message>
         <message>
+            <source>Play / Pause</source>
+            <translation>Play / Pause</translation>
+        </message>
+        <message>
             <source>Play a shutter sound when capturing the focused window or current display.</source>
             <translation>Play a shutter sound when capturing the focused window or current display.</translation>
+        </message>
+        <message>
+            <source>Play a shutter sound when screenshot capture starts.</source>
+            <translation>Play a shutter sound when screenshot capture starts.</translation>
         </message>
         <message>
             <source>Play saved GIF, APNG, and WebP recordings repeatedly.</source>
@@ -3025,8 +3157,16 @@
             <translation>Preview window groups, then release the shortcut keys to switch</translation>
         </message>
         <message>
+            <source>Previous frame</source>
+            <translation>Previous frame</translation>
+        </message>
+        <message>
             <source>Previous screenshot history</source>
             <translation>Previous screenshot history</translation>
+        </message>
+        <message>
+            <source>Previous selection type</source>
+            <translation>Previous selection type</translation>
         </message>
         <message>
             <source>Primary Target Language</source>
@@ -3201,6 +3341,14 @@
             <translation>Reset Zoom</translation>
         </message>
         <message>
+            <source>Reset canvas</source>
+            <translation>Reset canvas</translation>
+        </message>
+        <message>
+            <source>Reset speed</source>
+            <translation>Reset speed</translation>
+        </message>
+        <message>
             <source>Reset transform</source>
             <translation>Reset transform</translation>
         </message>
@@ -3313,6 +3461,14 @@
             <translation>Save speaker and microphone audio as separate MP4 tracks for independent editing. Most players play one track at a time.</translation>
         </message>
         <message>
+            <source>Save the confirmed screenshot selection to a file</source>
+            <translation>Save the confirmed screenshot selection to a file</translation>
+        </message>
+        <message>
+            <source>Save the confirmed screenshot selection to the configured folder</source>
+            <translation>Save the confirmed screenshot selection to the configured folder</translation>
+        </message>
+        <message>
             <source>Saved screenshots</source>
             <translation>Saved screenshots</translation>
         </message>
@@ -3379,6 +3535,10 @@
         <message>
             <source>Screenshot Area Type Hint</source>
             <translation>Screenshot Area Type Hint</translation>
+        </message>
+        <message>
+            <source>Screenshot Sound Notification</source>
+            <translation>Screenshot Sound Notification</translation>
         </message>
         <message>
             <source>Screenshot capture API</source>
@@ -3459,6 +3619,10 @@
         <message>
             <source>Select previously selected area</source>
             <translation>Select previously selected area</translation>
+        </message>
+        <message>
+            <source>Select scenarios</source>
+            <translation>Select scenarios</translation>
         </message>
         <message>
             <source>Select skin image</source>
@@ -3577,6 +3741,18 @@
             <translation>Set the screen recording frame rate</translation>
         </message>
         <message>
+            <source>Set the shadow color of locked pinned screenshots</source>
+            <translation>Set the shadow color of locked pinned screenshots</translation>
+        </message>
+        <message>
+            <source>Set the shadow color of pinned screenshots</source>
+            <translation>Set the shadow color of pinned screenshots</translation>
+        </message>
+        <message>
+            <source>Set the shadow color of pinned screenshots while they have focus</source>
+            <translation>Set the shadow color of pinned screenshots while they have focus</translation>
+        </message>
+        <message>
             <source>Set up to two keys for this pinned window action</source>
             <translation>Set up to two keys for this pinned window action</translation>
         </message>
@@ -3595,6 +3771,14 @@
         <message>
             <source>Settings</source>
             <translation>Settings</translation>
+        </message>
+        <message>
+            <source>Shadow active color</source>
+            <translation>Shadow active color</translation>
+        </message>
+        <message>
+            <source>Shadow color</source>
+            <translation>Shadow color</translation>
         </message>
         <message>
             <source>Shake Window</source>
@@ -3657,6 +3841,10 @@
             <translation>Show border</translation>
         </message>
         <message>
+            <source>Show border by default</source>
+            <translation>Show border by default</translation>
+        </message>
+        <message>
             <source>Show main interface</source>
             <translation>Show main interface</translation>
         </message>
@@ -3671,6 +3859,14 @@
         <message>
             <source>Show screenshot guides when a capture starts</source>
             <translation>Show screenshot guides when a capture starts</translation>
+        </message>
+        <message>
+            <source>Show shadow</source>
+            <translation>Show shadow</translation>
+        </message>
+        <message>
+            <source>Show shadow by default</source>
+            <translation>Show shadow by default</translation>
         </message>
         <message>
             <source>Show text recognition results</source>
@@ -3689,12 +3885,20 @@
             <translation>Show the area type hint at the top of the screenshot window</translation>
         </message>
         <message>
+            <source>Show the border on new pinned windows</source>
+            <translation>Show the border on new pinned windows</translation>
+        </message>
+        <message>
             <source>Show the captured mouse cursor by default in new normal screenshots.</source>
             <translation>Show the captured mouse cursor by default in new normal screenshots.</translation>
         </message>
         <message>
             <source>Show the floating toolbar on the desktop</source>
             <translation>Show the floating toolbar on the desktop</translation>
+        </message>
+        <message>
+            <source>Show the shadow on new pinned windows</source>
+            <translation>Show the shadow on new pinned windows</translation>
         </message>
         <message>
             <source>Show the sub-toolbar for the Edit Selection tool</source>
@@ -3743,6 +3947,18 @@
         <message>
             <source>Small V6</source>
             <translation>Small V6</translation>
+        </message>
+        <message>
+            <source>Smart Control</source>
+            <translation>Smart Control</translation>
+        </message>
+        <message>
+            <source>Smart Control releases unused heap memory while the app is idle. Active captures and pinned images are kept.</source>
+            <translation>Smart Control releases unused heap memory while the app is idle. Active captures and pinned images are kept.</translation>
+        </message>
+        <message>
+            <source>Smart Control trims resident memory while the app is idle. The next use may briefly take longer.</source>
+            <translation>Smart Control trims resident memory while the app is idle. The next use may briefly take longer.</translation>
         </message>
         <message>
             <source>Smart Merge</source>
@@ -3859,6 +4075,14 @@
         <message>
             <source>Storage status</source>
             <translation>Storage status</translation>
+        </message>
+        <message>
+            <source>Stroke color preset %1</source>
+            <translation>Stroke color preset %1</translation>
+        </message>
+        <message>
+            <source>Stroke color presets</source>
+            <translation>Stroke color presets</translation>
         </message>
         <message>
             <source>Switch Window Group</source>
@@ -4213,10 +4437,6 @@
             <translation>WebP</translation>
         </message>
         <message>
-            <source>When copying an image to the clipboard, also save it in the selected image format and save directory</source>
-            <translation>When copying an image to the clipboard, also save it in the selected image format and save directory</translation>
-        </message>
-        <message>
             <source>When pinning duplicate content</source>
             <translation>When pinning duplicate content</translation>
         </message>
@@ -4235,6 +4455,10 @@
         <message>
             <source>Window interface</source>
             <translation>Window interface</translation>
+        </message>
+        <message>
+            <source>Windows context menu</source>
+            <translation>Windows context menu</translation>
         </message>
         <message>
             <source>Write the image to a file and copy that file to the clipboard</source>
@@ -4298,6 +4522,41 @@
         <message>
             <source>selected-text translation</source>
             <translation>selected-text translation</translation>
+        </message>
+    </context>
+    <context>
+        <name>ShellContextMenuRegistration</name>
+        <message>
+            <source>Could not access the Windows context menu registry. Windows error %1.</source>
+            <translation>Could not access the Windows context menu registry. Windows error %1.</translation>
+        </message>
+        <message>
+            <source>Could not read the Windows context menu registration.</source>
+            <translation>Could not read the Windows context menu registration.</translation>
+        </message>
+        <message>
+            <source>Could not restore the Windows context menu registration. %1</source>
+            <translation>Could not restore the Windows context menu registration. %1</translation>
+        </message>
+        <message>
+            <source>Could not save the Windows context menu preference.</source>
+            <translation>Could not save the Windows context menu preference.</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot</source>
+            <translation>Edit with Snow Shot</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot Mini</source>
+            <translation>Edit with Snow Shot Mini</translation>
+        </message>
+        <message>
+            <source>The Windows context menu entry is owned by another application.</source>
+            <translation>The Windows context menu entry is owned by another application.</translation>
+        </message>
+        <message>
+            <source>The Windows context menu is only supported on Windows.</source>
+            <translation>The Windows context menu is only supported on Windows.</translation>
         </message>
     </context>
     <context>
@@ -4365,6 +4624,14 @@ Unavailable: %2</source>
             <translation>Some shortcuts are unavailable
 Available: %1
 Unavailable: %2</translation>
+        </message>
+        <message>
+            <source>Temporarily disabled</source>
+            <translation>Temporarily disabled</translation>
+        </message>
+        <message>
+            <source>This shortcut is temporarily disabled and released for use by other applications. It will be restored when global hotkeys are enabled and the focused window allows them.</source>
+            <translation>This shortcut is temporarily disabled and released for use by other applications. It will be restored when global hotkeys are enabled and the focused window allows them.</translation>
         </message>
         <message>
             <source>already used by another application or action</source>

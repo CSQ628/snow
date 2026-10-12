@@ -216,7 +216,11 @@
         "DefaultSpotlight",
         "SelectedSpotlight",
         "DefaultRectangleEraser",
-        "DefaultBrushEraser"
+        "DefaultBrushEraser",
+        "DefaultAngle",
+        "SelectedAngle",
+        "DefaultMagnifier",
+        "SelectedMagnifier"
       ]
     },
     "canvas_tools": {
@@ -225,6 +229,7 @@
         "Select": "Select",
         "Shape": "Rectangle",
         "Arrow": "Arrow",
+        "Angle": "Angle",
         "Line": "Line",
         "FreeDraw": "Freehand",
         "RectangleHighlight": "RectangleHighlight",
@@ -240,7 +245,8 @@
         "Spotlight": "Spotlight",
         "AutoFilter": "AutoFilter",
         "RectangleEraser": "RectangleEraser",
-        "BrushEraser": "BrushEraser"
+        "BrushEraser": "BrushEraser",
+        "Magnifier": "Magnifier"
       }
     },
     "recording_options": {

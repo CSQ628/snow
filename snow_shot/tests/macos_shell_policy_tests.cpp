@@ -27,6 +27,8 @@ void shortcutFamiliesAreComplete() {
         {GlobalShortcutAction::ScreenshotOcr, FeatureFamily::Screenshot},
         {GlobalShortcutAction::ScreenshotTranslation, FeatureFamily::Screenshot},
         {GlobalShortcutAction::ScreenshotCopy, FeatureFamily::Screenshot},
+        {GlobalShortcutAction::ScreenshotSave, FeatureFamily::Screenshot},
+        {GlobalShortcutAction::ScreenshotQuickSave, FeatureFamily::Screenshot},
         {GlobalShortcutAction::ScreenshotFullScreen, FeatureFamily::Screenshot},
         {GlobalShortcutAction::ScreenshotFocusedWindow, FeatureFamily::Screenshot},
         {GlobalShortcutAction::ScreenRecord, FeatureFamily::ScreenRecording},
@@ -39,6 +41,7 @@ void shortcutFamiliesAreComplete() {
         {GlobalShortcutAction::PinClipboardContent, FeatureFamily::PinToScreen},
         {GlobalShortcutAction::TranslateSelectedText, std::nullopt},
         {GlobalShortcutAction::PinSelectedFiles, FeatureFamily::PinToScreen},
+        {GlobalShortcutAction::HideShowAllWindows, FeatureFamily::PinToScreen},
         {GlobalShortcutAction::ToggleGlobalHotkeys, std::nullopt},
         {GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow, std::nullopt},
     };

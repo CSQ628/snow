@@ -419,7 +419,9 @@ pub(crate) fn rectangle_intersects_axis_aligned_bounds(
     rect: &RectangleData,
     bounds: AxisAlignedBounds,
 ) -> bool {
-    if rect.width <= 0.0 || rect.height <= 0.0 {
+    // Selection proxies can have zero-span axes, as with pen dots and flat strokes.
+    // Their point/segment geometry is still valid for the projection overlap test.
+    if rect.width < 0.0 || rect.height < 0.0 {
         return false;
     }
 
@@ -728,6 +730,89 @@ mod tests {
     }
 
     #[test]
+    fn rectangle_intersection_accepts_zero_span_proxies() {
+        let bounds = AxisAlignedBounds {
+            left: 0.0,
+            top: 0.0,
+            right: 10.0,
+            bottom: 10.0,
+        };
+        for (width, height) in [(0.0, 0.0), (0.001, 0.0), (100.0, 0.0), (0.0, 100.0)] {
+            for rotation in [
+                0.0,
+                std::f64::consts::FRAC_PI_4,
+                std::f64::consts::FRAC_PI_2,
+            ] {
+                let rect = text_rect(SelectionBounds {
+                    center: Point::new(0.0, 0.0),
+                    width,
+                    height,
+                    rotation,
+                });
+                assert!(
+                    rectangle_intersects_axis_aligned_bounds(&rect, bounds),
+                    "proxy {rect:?} must intersect at the marquee boundary"
+                );
+                assert!(!rectangle_intersects_axis_aligned_bounds(
+                    &rect,
+                    AxisAlignedBounds {
+                        left: 100.0,
+                        top: 100.0,
+                        right: 110.0,
+                        bottom: 110.0,
+                    }
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn rectangle_intersection_uses_rotated_zero_span_geometry() {
+        let rect = text_rect(SelectionBounds {
+            center: Point::new(0.0, 0.0),
+            width: 100.0,
+            height: 0.0,
+            rotation: std::f64::consts::FRAC_PI_4,
+        });
+        assert!(rectangle_intersects_axis_aligned_bounds(
+            &rect,
+            AxisAlignedBounds {
+                left: 20.0,
+                top: 20.0,
+                right: 30.0,
+                bottom: 30.0,
+            }
+        ));
+        // Inside the rotated segment's AABB, but away from the segment itself.
+        let bounds = AxisAlignedBounds {
+            left: 20.0,
+            top: -30.0,
+            right: 30.0,
+            bottom: -20.0,
+        };
+        assert!(!rectangle_intersects_axis_aligned_bounds(&rect, bounds));
+    }
+
+    #[test]
+    fn rectangle_intersection_rejects_negative_dimensions() {
+        let bounds = AxisAlignedBounds {
+            left: -10.0,
+            top: -10.0,
+            right: 10.0,
+            bottom: 10.0,
+        };
+        for (width, height) in [(-1.0, 10.0), (10.0, -1.0)] {
+            let rect = text_rect(SelectionBounds {
+                center: Point::new(0.0, 0.0),
+                width,
+                height,
+                rotation: 0.0,
+            });
+            assert!(!rectangle_intersects_axis_aligned_bounds(&rect, bounds));
+        }
+    }
+
+    #[test]
     fn text_selection_ring_hits_move() {
         let bounds = selection_bounds();
         let text_rect = text_rect(bounds);
@@ -819,7 +904,7 @@ mod tests {
     }
 
     #[test]
-    fn spotlight_corner_radius_controls_are_not_hittable() {
+    fn spotlight_corner_radius_controls_are_hittable() {
         let bounds = selection_bounds();
         let spotlight = text_rect(bounds).into_spotlight();
         let handle = rect_local_to_canvas(
@@ -830,19 +915,17 @@ mod tests {
 
         let target = selection_hit_target(&bounds, Some(&spotlight), None, 4.0, 0.0, 1.0, handle);
 
-        assert_ne!(
+        assert_eq!(
             target,
             Some(SelectionHitTarget::CornerRadius(RectCorner::TopLeft))
         );
     }
 
     #[test]
-    fn ellipse_and_diamond_corner_radius_controls_are_not_hittable() {
+    fn ellipse_corner_radius_controls_are_not_hittable() {
         let bounds = selection_bounds();
-        for shape in [
-            snow_draw_engine_document::HighlightShape::Ellipse,
-            snow_draw_engine_document::HighlightShape::Diamond,
-        ] {
+        {
+            let shape = snow_draw_engine_document::HighlightShape::Ellipse;
             let mut selected_rect = text_rect(bounds);
             selected_rect.highlight_shape = shape;
             let handle = rect_local_to_canvas(
