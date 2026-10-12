@@ -2,19 +2,20 @@
 #include "recordingtrimsession.h"
 #include "recordingrenderdialog.h"
 #include "recordingtrimtoolbar.h"
+#include "snow_shot/presentation/screenrecordingfolder.h"
+#include "snow_shot/presentation/screenshotimagefileservice.h"
 #include "snow_shot/presentation/screenrecordingareawindow.h"
 #include "snow_shot/presentation/screenrecordingtoolbarwindow.h"
 #include "snow_shot/platform/applicationqos.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
-#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMimeData>
 #include <QSaveFile>
 #include <QUrl>
-#include <QUuid>
 #include <climits>
 #include <thread>
 
@@ -40,9 +41,10 @@ void copyRecording(const QString& path) {
 }
 QString nextOutput(const QString& original) {
     const QFileInfo file(original);
-    const QString stem = file.completeBaseName() + QStringLiteral("-trim-") +
-                         QUuid::createUuid().toString(QUuid::Id128).left(8);
-    return file.dir().filePath(stem + QStringLiteral(".") + file.suffix());
+    const QString baseName = ScreenshotImageFileService::suggestedBaseName(
+        snow_shot::storage::RecordingSettings().videoFilenameFormat());
+    return snow_shot::presentation::recording::screenRecordingOutputPath({file.absolutePath()},
+                                                                         baseName, file.suffix());
 }
 } // namespace
 

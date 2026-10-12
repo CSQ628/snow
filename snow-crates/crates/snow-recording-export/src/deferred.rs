@@ -19,8 +19,9 @@ use ffmpeg_next as ffmpeg;
 use snow_core::cancellation::CancellationToken;
 use snow_recording_effects::RecordedEffects;
 use snow_recording_model::{
-    BundleAssetKind, FinalizedTimeline, InputStoreReader, PlaybackSpeed, RecordingBundleFooter,
-    RenderMetadata, VideoIndexReader, read_bundle_render_metadata, read_recording_bundle_footer,
+    BundleAssetKind, FinalizedTimeline, FixedFrameTimeline, InputStoreReader, PlaybackSpeed,
+    RecordingBundleFooter, RenderMetadata, VideoIndexReader, read_bundle_render_metadata,
+    read_recording_bundle_footer,
 };
 
 use crate::error::Result;
@@ -379,17 +380,24 @@ pub fn render_bundle_range_with_speed(
         .frame(first)
         .ok_or_else(|| decode("empty trim range"))?
         .timestamp_ms;
-    let output_duration_us = speed
-        .output_duration_us(range.duration_us())
+    let timing =
+        FixedFrameTimeline::new(source.timeline.duration_ms() * 1000, source.timeline.fps())
+            .and_then(|timeline| timeline.retime(range, speed))
+            .map_err(RecordingExportError::InvalidConfig)?;
+    let output_duration_us = timing
+        .duration_us()
         .map_err(RecordingExportError::InvalidConfig)?;
     let timeline =
         FinalizedTimeline::new((output_duration_us / 1000).max(1), source.timeline.fps())
             .map_err(RecordingExportError::InvalidConfig)?;
-    let total = if speed.percent() == 100 {
-        timeline.frame_count()
+    let total = timing
+        .frame_count()
+        .map_err(RecordingExportError::InvalidConfig)?;
+    let audio_samples = if speed.percent() == 100 {
+        range.sample_count(48_000)
     } else {
-        speed
-            .output_frame_count(range.duration_us(), config.fps)
+        timing
+            .sample_count(48_000)
             .map_err(RecordingExportError::InvalidConfig)?
     };
     if config.fps != timeline.fps()
@@ -632,7 +640,7 @@ pub fn render_bundle_range_with_speed(
         let stage_started = Instant::now();
         audio.emit_until(
             (((u128::from(frame.pts + 1) * 48_000) / u128::from(config.fps))
-                .min(u128::from(output_duration_us) * 48_000 / 1_000_000)) as u64,
+                .min(u128::from(audio_samples))) as u64,
             &mut encoder,
             cancellation,
         )?;
@@ -654,21 +662,12 @@ pub fn render_bundle_range_with_speed(
     progress(ExportStage::Finalize, total, total, started);
     #[cfg(feature = "bench-timing")]
     let stage_started = Instant::now();
-    let audio_samples = if speed.percent() == 100 {
-        range.sample_count(48_000)
-    } else {
-        (u128::from(output_duration_us) * 48_000 / 1_000_000) as u64
-    };
     audio.emit_until(audio_samples, &mut encoder, cancellation)?;
-    let report = if speed.percent() == 100 {
-        encoder.finish_at_duration_us_cancelable(output_duration_us, cancellation)?
-    } else {
-        encoder.finish_at_duration_us_with_end_pts_cancelable(
-            output_duration_us,
-            total,
-            cancellation,
-        )?
-    };
+    let report = encoder.finish_at_duration_us_with_end_pts_cancelable(
+        output_duration_us,
+        total,
+        cancellation,
+    )?;
     #[cfg(feature = "bench-timing")]
     {
         let conversions = if output_hdr {

@@ -555,6 +555,125 @@ fn retimed_exact_frame_count_does_not_round_a_third_of_a_second_twice() {
     assert!((duration - 1.0 / 3.0).abs() < 0.002);
 }
 
+#[test]
+fn retimed_fractional_deferred_frame_ranges_keep_exact_slot_counts() {
+    for fps in [60, 144] {
+        for format in [crate::ExportFormat::Mp4, crate::ExportFormat::Avi] {
+            let fixture = fixture_with_source_timing(
+                format,
+                crate::VideoCodec::H264,
+                (32, 24),
+                false,
+                false,
+                (fps, (0, 5)),
+                false,
+            );
+            for (first, end) in [(1u64, 2u64), (2, 4), (1, 6)] {
+                let range = snow_recording_model::TrimRange::new(
+                    first * 1_000_000 / u64::from(fps),
+                    end * 1_000_000 / u64::from(fps),
+                    1_001_000,
+                )
+                .unwrap();
+                for percent in [25, 50, 75, 100, 125, 150, 175, 200, 300] {
+                    let mut config = fixture.config.clone();
+                    config.output_path = fixture.bundle.parent().unwrap().join(format!(
+                        "exact-{first}-{end}-{percent}.{}",
+                        format.file_extension()
+                    ));
+                    render_bundle_range_with_speed(
+                        &fixture.bundle,
+                        config.clone(),
+                        fixture.metadata.clone(),
+                        range,
+                        PlaybackSpeed::from_percent(percent).unwrap(),
+                        &CancellationToken::default(),
+                        |_, _, _, _| {},
+                    )
+                    .unwrap();
+                    let expected = ((end - first) * 100).div_ceil(u64::from(percent));
+                    if format == crate::ExportFormat::Avi {
+                        let avi = inspect_avi(&config.output_path);
+                        assert_eq!(avi.packets.len() as u64, expected);
+                        assert_eq!(u64::from(avi.stream_frames), expected);
+                        assert_eq!(avi.rate, fps);
+                        assert_eq!(avi.scale, 1);
+                    } else {
+                        assert_fixed_video_grid(&config.output_path, fps, expected);
+                        let input = ffmpeg::format::input(&config.output_path).unwrap();
+                        let video = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+                        let duration = video.duration().rescale(video.time_base(), (1, 1_000_000));
+                        let expected_us = ((end - first) * 100 * 1_000_000)
+                            .div_ceil(u64::from(fps) * u64::from(percent));
+                        // B-frame edit lists quantize the published duration on
+                        // the MP4 movie clock. Slot counts and PTS remain exact above.
+                        assert!(
+                            duration.abs_diff(expected_us as i64) <= 2_000,
+                            "{fps} FPS [{first}, {end}) at {percent}%: {duration} vs {expected_us} us"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn retimed_partial_deferred_tail_keeps_its_source_duration() {
+    for fps in [60, 144] {
+        for format in [crate::ExportFormat::Mp4, crate::ExportFormat::Avi] {
+            let fixture = fixture_with_source_timing(
+                format,
+                crate::VideoCodec::H264,
+                (32, 24),
+                false,
+                false,
+                (fps, (0, 5)),
+                false,
+            );
+            let source = crate::clip::ClipSource::open(&fixture.bundle, None).unwrap();
+            let range = source.range(u64::from(fps), u64::from(fps) + 1).unwrap();
+            assert_eq!(range.duration_us(), 1000);
+            for percent in [25, 50, 75, 100, 125, 150, 175, 200, 300] {
+                let speed = PlaybackSpeed::from_percent(percent).unwrap();
+                let timing = source.output_timing(range, speed).unwrap();
+                assert_eq!(timing.frame_count().unwrap(), 1);
+                assert_eq!(
+                    timing.duration_us().unwrap(),
+                    (100_000u64).div_ceil(u64::from(percent))
+                );
+                let mut config = fixture.config.clone();
+                config.output_path = fixture
+                    .bundle
+                    .parent()
+                    .unwrap()
+                    .join(format!("partial-{percent}.{}", format.file_extension()));
+                render_bundle_range_with_speed(
+                    &fixture.bundle,
+                    config.clone(),
+                    fixture.metadata.clone(),
+                    range,
+                    speed,
+                    &CancellationToken::default(),
+                    |_, _, _, _| {},
+                )
+                .unwrap();
+                if format == crate::ExportFormat::Avi {
+                    let avi = inspect_avi(&config.output_path);
+                    assert_eq!(avi.packets.len(), 1);
+                    assert_eq!(avi.stream_frames, 1);
+                } else {
+                    assert_fixed_video_grid(&config.output_path, fps, 1);
+                    let input = ffmpeg::format::input(&config.output_path).unwrap();
+                    let video = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+                    let duration = video.duration().rescale(video.time_base(), (1, 1_000_000));
+                    assert!(duration.abs_diff(timing.duration_us().unwrap() as i64) <= 100);
+                }
+            }
+        }
+    }
+}
+
 fn animation_duration(path: &Path, format: crate::ExportFormat, decoded: f64) -> f64 {
     match format {
         crate::ExportFormat::Apng => std::fs::read(path)

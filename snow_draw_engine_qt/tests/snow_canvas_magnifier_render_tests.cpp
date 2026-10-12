@@ -58,7 +58,7 @@ SnowCanvasSceneItem magnifier(double factor = 2.0,
     item.rect_shape = shape;
     item.stroke = {30, 40, 50, 255};
     item.stroke_width = 2;
-    item.magnifier = {35, 70, 30, 30, factor};
+    item.magnifier = {35, 70, 30, 30, factor, SNOW_MAGNIFIER_CONNECTION_NONE, 0, {}};
     return SnowCanvasSceneItem(item);
 }
 

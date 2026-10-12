@@ -27,7 +27,12 @@ play/pause state; changing speed at the end does not restart playback. Selection
 exports, cancellation, retry, and appearance changes within the same editor session.
 
 Video exports keep the configured presentation FPS and sample the source using checked rational
-time, repeating or skipping pictures. Animated-image boundaries use cumulative retimed delays
+time, repeating or skipping pictures. `FixedFrameTimeline` retains the native source endpoint
+and recovers exact presentation-grid boundaries from the editor's microsecond timecodes.
+Finalized and deferred exports derive output slots, duration, and retimed audio sample counts
+from the same `RetimedFrameTiming`. Rounding occurs only when converting to the consuming clock;
+a partial final source frame keeps its actual duration rather than becoming a complete FPS slot.
+Animated-image boundaries use cumulative retimed delays
 and container precision rather than independently rounded per-frame delays. Deferred cursor,
 click, trail, and keyboard effects use source time; playback badges and progress use output time.
 Separate audio tracks keep their metadata and pitch through bounded FFmpeg
@@ -42,6 +47,10 @@ interval with the recorded settings. Publication uses temporary files and never 
 The editor caches the latest successful range and speed for repeated Copy or Save. Each export
 retains its immutable submitted selection independently of later UI state.
 
+Cropped Copy exports and Save suggestions expand the configured video filename format at export
+time, keeping the original output directory and extension. They share normal recording exports'
+`_1`, `_2`, and subsequent collision suffixes. Repeated Copy reuses the cached clip and its filename.
+
 A single playback worker owns FFmpeg and the native audio sink. Seek commands coalesce, revision
 numbers reject stale frames, and cancellation interrupts forward decoding. Hardware frames stay on
 the GPU until the requested presentation frame needs CPU pixels. The worker keeps current/lookahead
@@ -55,7 +64,7 @@ the GUI thread.
 Build the application and the two recording test executables, then run:
 
 ```powershell
-ctest --preset test-windows-msvc-debug -R "^(snow-shot-recording-trimming-tests|snow-shot-screen-recording-area-window-tests|snow-shot-recording-post-processing-tests|snow-shot-recording-finalization-close-tests)$"
+ctest --preset test-windows-msvc-debug -R "^(snow-shot-recording-(trimming|export-naming|post-processing|finalization-close)-tests|snow-shot-screen-recording-area-window-tests)$"
 ```
 
 Set `SNOW_TRIM_VISUAL_OUTPUT` to a directory to render the actual trim toolbar in light/dark themes

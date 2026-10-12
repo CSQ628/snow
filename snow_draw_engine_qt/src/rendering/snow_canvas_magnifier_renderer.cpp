@@ -822,8 +822,8 @@ void render(QPainter& painter, const SceneDisplayInfo& displayInfo, const SnowCa
                                    canvasToView.map(QPointF(item.center_x, item.center_y)));
         QColor sourceColor = snow_canvas_renderer::toQColor(item.stroke);
         QColor lensColor = sourceColor;
-        sourceColor.setAlphaF(sourceColor.alphaF() * 0.04);
-        lensColor.setAlphaF(lensColor.alphaF() * 0.16);
+        sourceColor.setAlphaF(sourceColor.alphaF() * 0.04F);
+        lensColor.setAlphaF(lensColor.alphaF() * 0.16F);
         connection.setColorAt(0.0, sourceColor);
         connection.setColorAt(1.0, lensColor);
         if (g_benchmarkDisableAntialiasing)
@@ -831,7 +831,7 @@ void render(QPainter& painter, const SceneDisplayInfo& displayInfo, const SnowCa
         QBrush brush(connection);
         if (g_benchmarkSolidFill) {
             QColor solid = snow_canvas_renderer::toQColor(item.stroke);
-            solid.setAlphaF(solid.alphaF() * 0.10);
+            solid.setAlphaF(solid.alphaF() * 0.10F);
             brush = QBrush(solid);
         }
         painter.fillPath(

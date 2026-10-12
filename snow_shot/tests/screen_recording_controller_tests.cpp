@@ -37,6 +37,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
+#include "physical_key_test_support.h"
 #include "snow_capture.h"
 #include "snow_shot/platform/windowcaptureexclusion.h"
 #include "snow_recording.h"
@@ -343,6 +344,54 @@ void stopAndCopyBusyIndicatorsStayOnTheInitiatingControl() {
                         !stopButton->busy() && !copyButton->busy(),
                     "a completed stop must clear every recording busy indicator");
         }
+    }
+}
+
+void renderJobDestructionKeepsStateAvailableToModalObservers() {
+    auto job =
+        std::make_unique<RecordingRenderJob>(new SnowRecordingSource, true, nullptr, nullptr);
+    job->start();
+    auto* modal = job->findChild<adqt::widgets::AdModal*>();
+    require(modal && modal->isOpen(), "render teardown fixture must open its modal");
+    QObject observer;
+    int closedNotifications = 0;
+    auto* retiring = job.get();
+    QObject::connect(modal, &adqt::widgets::AdModal::closed, &observer, [&] {
+        require(retiring->state().contains(QStringLiteral("render_phase")),
+                "modal close observers can inspect the retiring render job");
+        ++closedNotifications;
+    });
+    job.reset();
+    require(closedNotifications == 1, "render job destruction must close its modal once");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void destructionKeepsControllerAvailableToActivityObservers() {
+    for (const bool recording : {false, true}) {
+        auto controller = std::make_unique<ScreenRecordingController>(testEffectsSource);
+        controller->open(QRect(40, 40, 320, 240));
+        if (recording) {
+            controller->startRecording();
+            waitForRecording(*controller);
+        }
+        QObject observer;
+        int inactiveNotifications = 0;
+        auto* retiring = controller.get();
+        QObject::connect(
+            retiring, &ScreenRecordingController::captureActivityChanged, &observer,
+            [&](bool active) {
+                if (!active) {
+                    require(retiring->automationState().contains(QStringLiteral("state")),
+                            "final activity observers must be able to inspect the controller");
+                    static_cast<void>(retiring->isOpen());
+                    static_cast<void>(retiring->blocksMemoryTrimming());
+                    ++inactiveNotifications;
+                }
+            });
+        controller.reset();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        require(inactiveNotifications == 1 && recordingWindowCount() == 0,
+                "controller destruction must release capture activity and retire its windows once");
     }
 }
 
@@ -4241,6 +4290,124 @@ void recordingEraserTools() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+void recordingExportNamingTests(const QString& directory) {
+    const auto wait = [](auto predicate) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < 3000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(predicate(), "export naming operation completes");
+    };
+    const snow_shot::storage::RecordingSettings settings;
+    const QString previousFilenameFormat = settings.videoFilenameFormat();
+    const QByteArray previousSourcePath = renderSourcePath;
+    const auto restoreFilenameFormat = qScopeGuard([&] {
+        require(settings.setVideoFilenameFormat(previousFilenameFormat),
+                "restore video filename format");
+        renderSourcePath = previousSourcePath;
+    });
+    for (const QString& format : {QStringLiteral("mp4"), QStringLiteral("gif"),
+                                  QStringLiteral("webp"), QStringLiteral("apng")}) {
+        for (bool deferred : {false, true}) {
+            const QString mode = deferred ? QStringLiteral("deferred") : QStringLiteral("realtime");
+            require(settings.setVideoFilenameFormat(
+                        QStringLiteral("Video_{'clip.name'}_%1_%2").arg(mode, format)),
+                    "configure a video filename with a deterministic date-time placeholder");
+            const QString basePath =
+                QDir(directory).filePath(QStringLiteral("Video_clip.name_%1_%2").arg(mode, format));
+            const auto path = [&](int suffix) {
+                return basePath + (suffix ? QStringLiteral("_%1").arg(suffix) : QString()) +
+                       QStringLiteral(".") + format;
+            };
+            for (int suffix : {0, 1}) {
+                QFile existing(path(suffix));
+                require(existing.open(QIODevice::WriteOnly) && existing.write("existing") > 0,
+                        "create colliding normal video exports");
+            }
+            if (deferred) {
+                const QString source = basePath + QStringLiteral(".source");
+                require(QDir().mkpath(source), "materialize the retained deferred source bundle");
+                renderSourcePath = source.toUtf8();
+            }
+            ScreenRecordingController controller(testEffectsSource);
+            QString error;
+            require(controller.startAutomation(QRect(80, 80, 320, 240),
+                                               {{QStringLiteral("post_processing"), deferred},
+                                                {QStringLiteral("format"), format}},
+                                               &error),
+                    "start export naming fixture");
+            waitForRecording(controller);
+            recordingToolbarButton("Trim Video")->click();
+            auto* copy = recordingToolbarButton("Copy recording");
+            wait([&] {
+                return controller.automationState().value(QStringLiteral("state")) ==
+                           QStringLiteral("trimming") &&
+                       copy->isEnabled();
+            });
+            require(deferred || clipPath == path(2),
+                    "normal recording uses the configured format and numbered collisions");
+            QFile original(path(2));
+            require(original.open(QIODevice::WriteOnly) && original.write("original") > 0,
+                    "retain the original video next to the cropped exports");
+            original.close();
+            auto* first =
+                palette()->findChild<QSlider*>(QStringLiteral("screenRecordingTrimStart"));
+            require(first != nullptr, "crop timeline exists");
+            first->setValue(1);
+            const int beforeExports = clipExports;
+            copy->click();
+            wait([&] { return copy->isEnabled() && clipExports == beforeExports + 1; });
+            require(QApplication::clipboard()->mimeData()->urls() ==
+                        QList<QUrl>{QUrl::fromLocalFile(path(3))},
+                    "cropped Copy follows normal export naming and preserves the extension");
+            copy->click();
+            require(clipExports == beforeExports + 1 &&
+                        QApplication::clipboard()->mimeData()->urls() ==
+                            QList<QUrl>{QUrl::fromLocalFile(path(3))},
+                    "repeated Copy keeps the cached export and filename");
+            bool saveShown = false;
+            QTimer acceptSave;
+            QObject::connect(&acceptSave, &QTimer::timeout, [&] {
+                for (auto* widget : QApplication::topLevelWidgets()) {
+                    if (auto* dialog = qobject_cast<QFileDialog*>(widget)) {
+                        require(dialog->selectedFiles() == QStringList{path(4)} &&
+                                    dialog->defaultSuffix() == format,
+                                "cropped Save suggests the next normal export filename");
+                        saveShown = true;
+                        QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+                    }
+                }
+            });
+            acceptSave.start(10);
+            recordingToolbarButton("Save to File")->click();
+            acceptSave.stop();
+            wait([&] { return copy->isEnabled(); });
+            QFile saved(path(4));
+            require(saveShown, "cropped Save opens its filename dialog");
+            require(saved.open(QIODevice::ReadOnly),
+                    "Save publishes the crop under the suggested video filename");
+            require(saved.readAll() == "trim fixture", "Save preserves the cached crop bytes");
+            require(clipExports == beforeExports + 1, "Save reuses the cached crop");
+            first->setValue(2);
+            copy->click();
+            wait([&] { return copy->isEnabled() && clipExports == beforeExports + 2; });
+            require(QApplication::clipboard()->mimeData()->urls() ==
+                        QList<QUrl>{QUrl::fromLocalFile(path(5))},
+                    "a new crop skips previously copied and saved video filenames");
+            for (int suffix : {0, 1, 2}) {
+                QFile retained(path(suffix));
+                require(retained.open(QIODevice::ReadOnly) &&
+                            retained.readAll() == (suffix == 2 ? "original" : "existing"),
+                        "cropped exports never replace existing videos or the original");
+            }
+            recordingToolbarButton("Close recording")->click();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+    }
+}
+
 void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
     const QString renders = qEnvironmentVariable("SNOW_TRIM_VISUAL_OUTPUT");
     QFont visualFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
@@ -4598,15 +4765,15 @@ void recordingTrimmingTests(const QString& directory, bool uiOnly = false) {
         const auto closeWithSpeedEscapes = [&] {
             speedSelect->setFocus(Qt::TabFocusReason);
             speedSelect->showPopup();
-            QKeyEvent dismissPress(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            PhysicalKeyEvent dismissPress(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
             QApplication::sendEvent(speedSelect->view(), &dismissPress);
-            QKeyEvent dismissRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+            PhysicalKeyEvent dismissRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
             QApplication::sendEvent(speedSelect->lineEdit(), &dismissRelease);
             require(controller.isOpen() && !speedSelect->popupVisible(),
                     "the first Escape dismisses speed while keeping the editor open");
-            QKeyEvent closePress(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            PhysicalKeyEvent closePress(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
             QApplication::sendEvent(speedSelect->lineEdit(), &closePress);
-            QKeyEvent closeRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+            PhysicalKeyEvent closeRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
             QApplication::sendEvent(speedSelect->lineEdit(), &closeRelease);
             require(!controller.isOpen(),
                     "a second Escape on the closed speed selector closes recording normally");
@@ -5186,6 +5353,12 @@ int main(int argc, char** argv) {
     QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Han,
                                                       {QStringLiteral("Snow Recording Test Han")});
     const bool trimUiOnly = app.arguments().contains(QStringLiteral("--trim-ui-only"));
+    if (app.arguments().contains(QStringLiteral("--export-naming-only"))) {
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+        recordingExportNamingTests(temporary.path());
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (trimUiOnly || app.arguments().contains(QStringLiteral("--trim-only"))) {
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         recordingTrimmingTests(temporary.path(), trimUiOnly);
@@ -5193,6 +5366,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (app.arguments().contains(QStringLiteral("--finalization-close-only"))) {
+        renderJobDestructionKeepsStateAvailableToModalObservers();
+        destructionKeepsControllerAvailableToActivityObservers();
         recordingCanCloseDuringAndAfterFinalization();
         ApplicationStorage::instance().shutdown();
         return 0;
@@ -5861,6 +6036,8 @@ int main(int argc, char** argv) {
             "restore mixed recording audio");
     permissionsAndExactLogicalRegion();
     stopAndCopyBusyIndicatorsStayOnTheInitiatingControl();
+    renderJobDestructionKeepsStateAvailableToModalObservers();
+    destructionKeepsControllerAvailableToActivityObservers();
     recordingCanCloseDuringAndAfterFinalization();
     delayCountdownBlocksTheStartUntilItElapses();
     ApplicationStorage::instance().shutdown();

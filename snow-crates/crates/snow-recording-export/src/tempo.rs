@@ -151,10 +151,10 @@ impl RetimedAudioReader {
         let total_samples = if speed == PlaybackSpeed::default() {
             range.sample_count(48_000)
         } else {
-            let duration = speed
-                .output_duration_us(range.duration_us())
-                .map_err(filter_error)?;
-            ((u128::from(duration) * 48_000 / 1_000_000) as u64)
+            source
+                .output_timing(range, speed)?
+                .sample_count(48_000)
+                .map_err(filter_error)?
                 .max(u64::from(range.sample_count(48_000) != 0))
         };
         Ok(Self {

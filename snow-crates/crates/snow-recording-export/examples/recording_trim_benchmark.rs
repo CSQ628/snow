@@ -83,9 +83,8 @@ fn measured_export(
     }
     result?;
     let exported = ClipSource::open(output, Some(source.config.clone()))?;
-    let expected_us = speed
-        .output_duration_us(range.duration_us())
-        .map_err(anyhow::Error::msg)?;
+    let timing = source.output_timing(range, speed)?;
+    let expected_us = timing.duration_us().map_err(anyhow::Error::msg)?;
     ensure!(
         exported.duration_us.abs_diff(expected_us) <= 2000,
         "retimed output duration disagrees: {} vs {expected_us}",
@@ -110,9 +109,7 @@ fn measured_export(
         .collect::<Option<_>>()
         .ok_or_else(|| anyhow::anyhow!("exported video packet has no presentation timestamp"))?;
     timestamps.sort_unstable();
-    let frames = speed
-        .output_frame_count(range.duration_us(), source.config.fps)
-        .map_err(anyhow::Error::msg)?;
+    let frames = timing.frame_count().map_err(anyhow::Error::msg)?;
     ensure!(
         timestamps.len() as u64 == frames,
         "retiming omitted fixed-rate presentation slots"

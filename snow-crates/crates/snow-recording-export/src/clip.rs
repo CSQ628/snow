@@ -8,7 +8,9 @@ use ffmpeg::Rescale;
 use ffmpeg_next as ffmpeg;
 use snow_core::cancellation::CancellationToken;
 use snow_memory::RasterBuffer;
-use snow_recording_model::{PlaybackSpeed, RenderMetadata, TrimRange};
+use snow_recording_model::{
+    FixedFrameTimeline, PlaybackSpeed, RenderMetadata, RetimedFrameTiming, TrimRange,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -37,8 +39,8 @@ pub struct ClipSource {
     pub hdr: bool,
     /// Only animated containers need an explicit variable-delay frame index.
     boundaries: Arc<[u64]>,
-    /// Fixed-video presentation slots retain native time-base precision on import.
-    presentation_frames: Option<u64>,
+    /// Fixed presentation slots and the unrounded native media endpoint.
+    fixed_timeline: Option<FixedFrameTimeline>,
 }
 
 impl ClipSource {
@@ -65,20 +67,20 @@ impl ClipSource {
         let video_index = stream.index();
         let time_base = stream.time_base();
         let video_duration_us = stream.duration().rescale(time_base, (1, 1_000_000));
-        let presentation_frames = if metadata.is_none()
+        let native_timeline = if metadata.is_none()
             && !config.format.is_animated_image()
             && stream.duration() > 0
             && time_base.numerator() > 0
             && time_base.denominator() > 0
         {
             Some(
-                u64::try_from(
-                    (stream.duration() as u128
-                        * time_base.numerator() as u128
-                        * u128::from(config.fps))
-                    .div_ceil(time_base.denominator() as u128),
+                FixedFrameTimeline::from_time_base(
+                    stream.duration() as u64,
+                    time_base.numerator() as u32,
+                    time_base.denominator() as u32,
+                    config.fps,
                 )
-                .map_err(|_| media_error("recording frame count overflow"))?,
+                .map_err(media_error)?,
             )
         } else {
             None
@@ -150,6 +152,14 @@ impl ClipSource {
             return Err(media_error("recording is empty"));
         }
         config.validate().map_err(Error::InvalidConfig)?;
+        let fixed_timeline = if metadata.is_some() || !config.format.is_animated_image() {
+            Some(match native_timeline {
+                Some(timeline) => timeline,
+                None => FixedFrameTimeline::new(duration_us, config.fps).map_err(media_error)?,
+            })
+        } else {
+            None
+        };
         Ok(Self {
             path: path.into(),
             config,
@@ -157,16 +167,13 @@ impl ClipSource {
             metadata,
             hdr,
             boundaries: boundaries.into(),
-            presentation_frames,
+            fixed_timeline,
         })
     }
 
     pub fn frame_count(&self) -> u64 {
-        if self.boundaries.is_empty() {
-            self.presentation_frames.unwrap_or_else(|| {
-                (u128::from(self.duration_us) * u128::from(self.config.fps)).div_ceil(1_000_000)
-                    as u64
-            })
+        if let Some(timeline) = self.fixed_timeline {
+            timeline.frame_count()
         } else {
             self.boundaries.len().saturating_sub(1) as u64
         }
@@ -176,17 +183,16 @@ impl ClipSource {
         if frame >= self.frame_count() {
             return self.duration_us;
         }
-        if self.boundaries.is_empty() {
-            (u128::from(frame) * 1_000_000 / u128::from(self.config.fps)) as u64
+        if let Some(timeline) = self.fixed_timeline {
+            timeline.boundary_us(frame)
         } else {
             self.boundaries[frame as usize]
         }
     }
 
     pub fn frame_at(&self, at: u64) -> u64 {
-        if self.boundaries.is_empty() {
-            ((((u128::from(at) + 1) * u128::from(self.config.fps) - 1) / 1_000_000) as u64)
-                .min(self.frame_count().saturating_sub(1))
+        if let Some(timeline) = self.fixed_timeline {
+            timeline.frame_at(at)
         } else {
             self.boundaries
                 .partition_point(|value| *value <= at)
@@ -201,6 +207,22 @@ impl ClipSource {
         }
         TrimRange::new(self.boundary(first), self.boundary(end), self.duration_us)
             .map_err(Error::InvalidConfig)
+    }
+
+    pub fn output_timing(
+        &self,
+        range: TrimRange,
+        speed: PlaybackSpeed,
+    ) -> Result<RetimedFrameTiming> {
+        TrimRange::new(range.start_us, range.end_us, self.duration_us)
+            .map_err(Error::InvalidConfig)?;
+        match self.fixed_timeline {
+            Some(timeline) => timeline.retime(range, speed),
+            None => {
+                RetimedFrameTiming::from_duration_us(range.duration_us(), speed, self.config.fps)
+            }
+        }
+        .map_err(Error::InvalidConfig)
     }
 
     pub fn export(
@@ -295,9 +317,8 @@ impl ClipSource {
                 };
             }
         }
-        let mut output_duration_us = speed
-            .output_duration_us(range.duration_us())
-            .map_err(Error::InvalidConfig)?;
+        let timing = self.output_timing(range, speed)?;
+        let mut output_duration_us = timing.duration_us().map_err(Error::InvalidConfig)?;
         if animated && !unity {
             let endpoint = animation_pts(range.duration_us(), speed, config.fps).max(1);
             output_duration_us =
@@ -327,12 +348,10 @@ impl ClipSource {
         let mut prepared_frame = None;
         let mut next_audio = 0;
         let mut previous_source = None;
-        let total = if unity || animated {
+        let total = if animated {
             end - first
         } else {
-            speed
-                .output_frame_count(range.duration_us(), config.fps)
-                .map_err(Error::InvalidConfig)?
+            timing.frame_count().map_err(Error::InvalidConfig)?
         };
         for output_index in 0..total {
             check_cancel(token)?;
@@ -446,7 +465,7 @@ impl ClipSource {
             }
             next_audio += count as u64;
         }
-        if !unity && !animated {
+        if !animated {
             encoder.finish_at_duration_us_with_end_pts_cancelable(
                 output_duration_us,
                 total,
@@ -1092,6 +1111,107 @@ mod tests {
             "microsecond import rounding must not add a presentation slot"
         );
         assert!(exported.range(4, 5).is_err());
+    }
+
+    #[test]
+    fn retimed_fractional_frame_ranges_keep_exact_slot_counts() {
+        for fps in [60, 144] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut config = fixture(directory.path(), ExportFormat::Mp4);
+            config.fps = fps;
+            let mut encoder = StreamingEncoder::create(config.clone()).unwrap();
+            for index in 0..12 {
+                encoder
+                    .push_rgba_frame_at_pts(index, &[220, 20, 40, 255].repeat(32 * 24))
+                    .unwrap();
+            }
+            encoder.finish_at_pts(12).unwrap();
+            let source = ClipSource::open(&config.output_path, Some(config.clone())).unwrap();
+            for (first, end) in [(1, 2), (2, 4), (1, 6), (11, 12), (0, 12)] {
+                for percent in [25, 50, 75, 100, 125, 150, 175, 200, 300] {
+                    let destination = directory
+                        .path()
+                        .join(format!("exact-{first}-{end}-{percent}.mp4"));
+                    source
+                        .export_with_speed(
+                            source.range(first, end).unwrap(),
+                            PlaybackSpeed::from_percent(percent).unwrap(),
+                            &destination,
+                            &CancellationToken::default(),
+                            |_| {},
+                        )
+                        .unwrap();
+                    let mut input = open_input(&destination).unwrap();
+                    let video = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+                    let id = video.index();
+                    let time_base = video.time_base();
+                    let duration = video.duration().rescale(time_base, (1, 1_000_000));
+                    let packets: Vec<_> = input
+                        .packets()
+                        .filter(|(stream, _)| stream.index() == id)
+                        .map(|(_, packet)| {
+                            packet.pts().unwrap().rescale(time_base, (1, fps as i32))
+                        })
+                        .collect();
+                    let expected_frames = ((end - first) * 100).div_ceil(u64::from(percent));
+                    assert_eq!(
+                        packets.len() as u64,
+                        expected_frames,
+                        "{fps} FPS [{first}, {end}) at {percent}% must not gain rounded slots"
+                    );
+                    assert_eq!(packets, (0..expected_frames as i64).collect::<Vec<_>>());
+                    let expected_us = ((end - first) * 100 * 1_000_000)
+                        .div_ceil(u64::from(fps) * u64::from(percent));
+                    assert!(duration.abs_diff(expected_us as i64) <= 100);
+                    let exported = ClipSource::open(&destination, Some(config.clone())).unwrap();
+                    assert_eq!(exported.frame_count(), expected_frames);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retimed_final_native_frame_keeps_its_partial_duration() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = fixture(directory.path(), ExportFormat::Mp4);
+        config.fps = 60;
+        let mut encoder = StreamingEncoder::create(config.clone()).unwrap();
+        for index in 0..7 {
+            encoder
+                .push_rgba_frame_at_pts(index, &[220, 20, 40, 255].repeat(32 * 24))
+                .unwrap();
+        }
+        encoder
+            .finish_at_duration_us_cancelable(101_000, &CancellationToken::default())
+            .unwrap();
+        let source = ClipSource::open(&config.output_path, Some(config.clone())).unwrap();
+        assert_eq!(source.frame_count(), 7);
+        for percent in [25, 50, 75, 100, 125, 150, 175, 200, 300] {
+            let speed = PlaybackSpeed::from_percent(percent).unwrap();
+            let range = source.range(6, 7).unwrap();
+            let timing = source.output_timing(range, speed).unwrap();
+            assert_eq!(timing.frame_count().unwrap(), 1);
+            assert!(
+                timing
+                    .duration_us()
+                    .unwrap()
+                    .abs_diff((100_000u64).div_ceil(u64::from(percent)))
+                    <= 100
+            );
+            let destination = directory.path().join(format!("partial-{percent}.mp4"));
+            source
+                .export_with_speed(
+                    range,
+                    speed,
+                    &destination,
+                    &CancellationToken::default(),
+                    |_| {},
+                )
+                .unwrap();
+            let output = ClipSource::open(&destination, Some(config.clone())).unwrap();
+            assert_eq!(output.frame_count(), 1);
+            assert!(output.duration_us.abs_diff(timing.duration_us().unwrap()) <= 100);
+        }
     }
 
     #[test]
