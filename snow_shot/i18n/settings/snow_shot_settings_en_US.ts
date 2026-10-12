@@ -524,6 +524,10 @@
             <translation>Shape</translation>
         </message>
         <message>
+            <source>Speech Bubble</source>
+            <translation>Speech Bubble</translation>
+        </message>
+        <message>
             <source>Spotlight</source>
             <translation>Spotlight</translation>
         </message>
@@ -4003,6 +4007,10 @@
         <message>
             <source>Source Language</source>
             <translation>Source Language</translation>
+        </message>
+        <message>
+            <source>Speech Bubble</source>
+            <translation>Speech Bubble</translation>
         </message>
         <message>
             <source>Speed First</source>
