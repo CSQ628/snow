@@ -64,7 +64,7 @@ constexpr qint64 kMaximumRichTextPixels = 64LL * 1024LL * 1024LL;
 constexpr qint64 kMaximumClipboardImagePixels = 64LL * 1000LL * 1000LL;
 constexpr qint64 kMaximumClipboardImageBytes = 256LL * 1024LL * 1024LL;
 constexpr qint64 kMaximumEncodedImageBytes = 256LL * 1024LL * 1024LL;
-constexpr int kFormattedTextFontPixelSize = 18;
+constexpr int kFormattedTextFontPixelSize = 16;
 constexpr qreal kFormattedTextPadding = 16.0;
 
 using AllocationCheck = ScreenshotClipboardContentReader::AllocationCheck;
