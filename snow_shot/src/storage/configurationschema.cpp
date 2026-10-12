@@ -298,6 +298,11 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {QStringLiteral("smart_control"), QStringLiteral("disabled")}},
     {QStringLiteral("system/auto_start_at_boot"), true, ConfigurationValueKind::Boolean},
+    {QStringLiteral("system/context_menu_mode"),
+     QStringLiteral("image_files"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("image_files"), QStringLiteral("disabled")}},
     {QStringLiteral("system/launch_as_administrator"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("mcp/enabled"), false, ConfigurationValueKind::Boolean},
 #ifdef Q_OS_MACOS
@@ -2227,6 +2232,24 @@ normalizeToolbarLayout(const QJsonValue& value, const QStringList& itemIds,
             hiddenSet.contains(QStringLiteral("save-as-file"))) {
             hidden.push_back(QStringLiteral("quick-save"));
             hiddenSet.insert(QStringLiteral("quick-save"));
+        }
+    }
+    if (known.contains(QStringLiteral("print")) && !positioned.contains(QStringLiteral("print")) &&
+        !hiddenSet.contains(QStringLiteral("print"))) {
+        for (QStringList& position : positions) {
+            const qsizetype saveIndex = position.indexOf(QStringLiteral("save-as-file"));
+            if (saveIndex >= 0) {
+                const qsizetype quickIndex = position.indexOf(QStringLiteral("quick-save"));
+                position.insert(quickIndex >= 0 ? std::min(quickIndex, saveIndex) : saveIndex,
+                                QStringLiteral("print"));
+                positioned.insert(QStringLiteral("print"));
+                break;
+            }
+        }
+        if (!positioned.contains(QStringLiteral("print")) &&
+            hiddenSet.contains(QStringLiteral("save-as-file"))) {
+            hidden.push_back(QStringLiteral("print"));
+            hiddenSet.insert(QStringLiteral("print"));
         }
     }
     if (migrateScreenshotLayout && !positions.isEmpty() &&

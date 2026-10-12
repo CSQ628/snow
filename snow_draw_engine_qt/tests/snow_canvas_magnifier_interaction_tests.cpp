@@ -10,6 +10,7 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QWheelEvent>
 #include <QtMath>
 
@@ -177,6 +178,45 @@ void selectedWheelEditsRememberDefaultsAndPublishUndoableFactors() {
     require(canvas.resetEditingState() && canvas.setCanvasTool(SnowCanvasTool::Magnifier) &&
                 canvas.canvasMagnifierStyle().factor == 2.1,
             "selected factor wheels remember future magnifier defaults across history");
+}
+
+void wheelCommitsPreserveTheirTargetWhenObserversDeleteTheCanvas() {
+    for (const bool selected : {false, true}) {
+        SnowCanvasRuntime runtime;
+        QPointer<SnowCanvasWidget> canvas = new SnowCanvasWidget(runtime);
+        prepare(*canvas);
+        if (selected) {
+            drag(*canvas, {220, 160}, {300, 220});
+            selectMagnifier(*canvas);
+        }
+        const auto original = canvas->canvasMagnifierStyle();
+        auto expected = original;
+        expected.factor += 0.1;
+        SnowCanvasStyleDefaults remembered;
+        remembered.magnifier = original;
+        QObject context;
+        int commits = 0;
+        QObject::connect(
+            canvas, &SnowCanvasWidget::styleEditCommitted, &context,
+            [&](const SnowCanvasStyleEdit& edit) {
+                const auto* patch = std::get_if<SnowCanvasMagnifierEdit>(&edit);
+                require(patch != nullptr && patch->style == expected &&
+                            patch->properties == SnowCanvasMagnifierStylePropertyFactor &&
+                            patch->target == (selected ? SnowCanvasStyleEditTarget::Selection
+                                                       : SnowCanvasStyleEditTarget::Creation),
+                        "wheel commits retain their explicit target before deletion");
+                snowCanvasMergeStyleEdit(remembered, edit);
+                ++commits;
+                delete canvas.data();
+            });
+        require(!wheel(*canvas, 0, 120) && canvas.isNull() && commits == 1 &&
+                    remembered.magnifier == expected,
+                "wheel commits remember the factor and stop when an observer deletes the canvas");
+        SnowCanvasWidget survivor(runtime);
+        require(survivor.resetEditingState() && survivor.setCanvasTool(SnowCanvasTool::Magnifier) &&
+                    survivor.canvasMagnifierStyle() == expected,
+                "both wheel targets retain future defaults after the edited canvas is deleted");
+    }
 }
 
 void wheelPublishesHomogenizedSelectionAtTheFactorLimit() {
@@ -773,6 +813,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     wheelAccumulationPublishesCompletedCreationEdits();
     selectedWheelEditsRememberDefaultsAndPublishUndoableFactors();
+    wheelCommitsPreserveTheirTargetWhenObserversDeleteTheCanvas();
     wheelPublishesHomogenizedSelectionAtTheFactorLimit();
     wheelRemaindersResetAtInputAndEditingBoundaries();
     wheelDirectionLimitsAndCocoaMouseClassification();
