@@ -165,29 +165,30 @@ void magnifierStylePatchesAndSynchronization() {
     require(editor.canvasStyleToolbarState().magnifierStyle == expected,
             "invalid patches leave magnifier styles intact");
 
-    SnowCanvasStyleDefaults defaults;
     style.factor = 4.0;
-    snowCanvasMergeStyleEdit(
-        defaults, SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor, false});
-    require(defaults.magnifier.factor == 2.0,
-            "selected-element magnifier patches cannot overwrite remembered defaults");
-    snowCanvasMergeStyleEdit(
-        defaults, SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor, true});
-    require(defaults.magnifier.factor == 4.0 &&
-                defaults.magnifier.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
-                defaults.magnifier.sourceOutline,
-            "remembered defaults merge only explicitly edited properties");
-    snowCanvasMergeStyleEdit(
-        defaults,
-        SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyConnectionType, true});
-    require(defaults.magnifier.connectionType == SnowCanvasMagnifierConnectionType::None &&
-                defaults.magnifier.sourceOutline,
-            "remembering a connection preserves the independent source outline");
-    snowCanvasMergeStyleEdit(
-        defaults,
-        SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertySourceOutline, true});
-    require(!defaults.magnifier.sourceOutline && defaults.magnifier.factor == 4.0,
-            "remembering a source outline preserves the independent factor");
+    for (auto target :
+         {SnowCanvasStyleEditTarget::Selection, SnowCanvasStyleEditTarget::Creation}) {
+        SnowCanvasStyleDefaults defaults;
+        auto remembered = defaults.magnifier;
+        snowCanvasMergeStyleEdit(
+            defaults,
+            SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor, target});
+        remembered.factor = style.factor;
+        require(defaults.magnifier == remembered,
+                "magnifier edits remember only the explicitly edited factor for either target");
+        snowCanvasMergeStyleEdit(
+            defaults,
+            SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyConnectionType, target});
+        remembered.connectionType = style.connectionType;
+        require(defaults.magnifier == remembered,
+                "remembering a connection preserves the independent source outline");
+        snowCanvasMergeStyleEdit(
+            defaults,
+            SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertySourceOutline, target});
+        remembered.sourceOutline = style.sourceOutline;
+        require(defaults.magnifier == remembered,
+                "remembering a source outline preserves the independent connection and factor");
+    }
 }
 
 template <typename T> void requireEqualPair(const T& value, const char* message) {
