@@ -26,6 +26,9 @@ mod hit_tests;
 #[path = "speech_bubble_draft_lifecycle_tests.rs"]
 mod draft_lifecycle_tests;
 
+#[path = "speech_bubble_tail_drag_tests.rs"]
+mod tail_drag_tests;
+
 fn pointer(
     engine: &mut Engine,
     viewport: ViewportId,
@@ -576,7 +579,7 @@ fn speech_bubble_symmetric_base_drag_updates_both_contour_controls() {
     pointer(&mut engine, viewport, PointerEventType::Up, to);
     let after = body(&engine, owner);
     assert_eq!(after.tails[0].tip, before.tails[0].tip);
-    assert!((after.tails[0].half_angle - before.tails[0].half_angle).abs() > 1e-4);
+    assert!((after.tails[0].base_width - before.tails[0].base_width).abs() > 1e-4);
     let bases = speech_bubble_tail_base_points(&after, &after.tails[0]);
     let axis = after.tails[0].tip.y.atan2(after.tails[0].tip.x);
     for base in bases {
@@ -1056,7 +1059,7 @@ fn assert_canvas_tips_fixed(original: &SpeechBubbleData, actual: &SpeechBubbleDa
             before.id
         );
         assert_eq!(after.id, before.id);
-        assert_eq!(after.half_angle, before.half_angle);
+        assert_eq!(after.base_width, before.base_width);
     }
 }
 

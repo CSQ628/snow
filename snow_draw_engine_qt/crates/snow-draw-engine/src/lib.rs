@@ -1,5 +1,8 @@
 mod engine;
 mod history;
+mod persistence;
+#[cfg(test)]
+mod persistence_tests;
 mod session;
 
 pub use engine::{

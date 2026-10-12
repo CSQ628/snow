@@ -5,6 +5,7 @@ use snow_draw_engine_editor::PersistedEditorSession;
 use snow_draw_engine_model::DocumentModel;
 
 use crate::engine::EngineConfig as RuntimeEngineConfig;
+use crate::persistence::{DrawingPayloadKind, deserialize_drawing};
 use crate::{Engine, history::HistoryStore};
 
 // Persisted counters became authoritative for badge creation in version 9.
@@ -119,11 +120,7 @@ impl Engine {
         bytes: &[u8],
         config: RuntimeEngineConfig,
     ) -> Result<Self, ErrorCode> {
-        if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_SESSION_BYTES {
-            return Err(ErrorCode::InvalidArgument);
-        }
-        let mut session: DocumentSession =
-            serde_json::from_slice(bytes).map_err(|_| ErrorCode::InvalidArgument)?;
+        let mut session: DocumentSession = deserialize_drawing(bytes, DrawingPayloadKind::Session)?;
         if !(1..=DOCUMENT_SESSION_SCHEMA_VERSION).contains(&session.schema_version) {
             return Err(ErrorCode::Unsupported);
         }
@@ -166,11 +163,7 @@ impl Engine {
         bytes: &[u8],
         config: RuntimeEngineConfig,
     ) -> Result<Self, ErrorCode> {
-        if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_SESSION_BYTES {
-            return Err(ErrorCode::InvalidArgument);
-        }
-        let mut history: DocumentHistory =
-            serde_json::from_slice(bytes).map_err(|_| ErrorCode::InvalidArgument)?;
+        let mut history: DocumentHistory = deserialize_drawing(bytes, DrawingPayloadKind::History)?;
         if !(1..=DOCUMENT_HISTORY_SCHEMA_VERSION).contains(&history.schema_version) {
             return Err(ErrorCode::Unsupported);
         }

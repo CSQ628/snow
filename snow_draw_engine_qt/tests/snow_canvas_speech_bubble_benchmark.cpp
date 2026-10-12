@@ -23,6 +23,7 @@
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kFixtureTailHalfAngle = 0.08;
 void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
@@ -158,7 +159,10 @@ Fixture prepare(int count, int tails, const TextCase& textCase) {
                             {QStringLiteral("tip"),
                              QJsonObject{{QStringLiteral("x"), std::cos(angle) * radius},
                                          {QStringLiteral("y"), std::sin(angle) * radius}}},
-                            {QStringLiteral("half_angle"), 0.08}});
+                            {QStringLiteral("base_width"),
+                             QLineF(contourPoint(bubble, angle - kFixtureTailHalfAngle),
+                                    contourPoint(bubble, angle + kFixtureTailHalfAngle))
+                                 .length()}});
         }
         bubble.insert(QStringLiteral("tails"), values);
         data.insert(QStringLiteral("SpeechBubble"), bubble);
@@ -284,10 +288,8 @@ void run(const Fixture& fixture, int count, int tails, const TextCase& textCase,
         else if (operation == Operation::TipDrag)
             handle = localToView(canvas, original, tip);
         else
-            handle = localToView(
-                canvas, original,
-                contourPoint(original,
-                             axis - originalTail.value(QStringLiteral("half_angle")).toDouble()));
+            handle =
+                localToView(canvas, original, contourPoint(original, axis - kFixtureTailHalfAngle));
         mouse(canvas, QEvent::MouseButtonPress, handle, Qt::LeftButton, Qt::LeftButton);
     }
     std::vector<double> inputs, paints, frames;
@@ -353,8 +355,8 @@ void run(const Fixture& fixture, int count, int tails, const TextCase& textCase,
     } else if (operation == Operation::TipDrag) {
         require(afterTail.value(QStringLiteral("tip")) !=
                         originalTail.value(QStringLiteral("tip")) &&
-                    afterTail.value(QStringLiteral("half_angle")) ==
-                        originalTail.value(QStringLiteral("half_angle")),
+                    afterTail.value(QStringLiteral("base_width")) ==
+                        originalTail.value(QStringLiteral("base_width")),
                 "tip input must move the tip without changing base width");
         require(QLineF(localToView(canvas, after,
                                    point(afterTail.value(QStringLiteral("tip")).toObject())),
@@ -364,8 +366,8 @@ void run(const Fixture& fixture, int count, int tails, const TextCase& textCase,
     } else {
         require(afterTail.value(QStringLiteral("tip")) ==
                         originalTail.value(QStringLiteral("tip")) &&
-                    afterTail.value(QStringLiteral("half_angle")) !=
-                        originalTail.value(QStringLiteral("half_angle")),
+                    afterTail.value(QStringLiteral("base_width")) !=
+                        originalTail.value(QStringLiteral("base_width")),
                 "base input must widen the symmetric attachment instead of moving the bubble");
         require(afterBody == originalBody, "base drags must preserve body geometry");
     }

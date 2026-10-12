@@ -8,25 +8,82 @@ use snow_draw_engine_core::{CornerRadii, DrawRect, ErrorCode, PathCommand, PathG
 
 use crate::{ElementId, HighlightShape, RectangleData, RectangleElementKind};
 
-pub const SPEECH_BUBBLE_MIN_HALF_ANGLE: f64 = 0.001;
+pub const SPEECH_BUBBLE_MIN_BASE_WIDTH: f64 = 0.001;
+const SPEECH_BUBBLE_MIN_HALF_ANGLE: f64 = 0.001;
 pub const SPEECH_BUBBLE_MAX_HALF_ANGLE: f64 = std::f64::consts::FRAC_PI_3;
 
 /// A tail tip is stored in the bubble's unrotated, center-relative coordinates.
 /// Body edits reproject it to keep its canvas position fixed.
-/// Both attachment rays share the same angular spread around the center-to-tip axis.
+/// The requested join width is measured in canvas units, independent of the body center.
+/// Attachment rays remain symmetric around the center-to-tip axis.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpeechBubbleTail {
     pub id: u64,
     pub tip: Point<f64>,
-    pub half_angle: f64,
+    pub base_width: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "SerializedSpeechBubble")]
 pub struct SpeechBubbleData {
     pub body: RectangleData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_element_id: Option<ElementId>,
     pub tails: Vec<SpeechBubbleTail>,
+}
+
+// Older sessions stored an angular spread. Convert it once on import using
+// that session's contour, so subsequent moves and resizes retain a distance.
+#[derive(Deserialize)]
+struct SerializedSpeechBubble {
+    body: RectangleData,
+    text_element_id: Option<ElementId>,
+    tails: Vec<SerializedTail>,
+}
+
+#[derive(Deserialize)]
+struct SerializedTail {
+    id: u64,
+    tip: Point<f64>,
+    base_width: Option<f64>,
+    half_angle: Option<f64>,
+}
+
+impl TryFrom<SerializedSpeechBubble> for SpeechBubbleData {
+    type Error = &'static str;
+
+    fn try_from(saved: SerializedSpeechBubble) -> Result<Self, Self::Error> {
+        let mut value = Self::new(saved.body);
+        value.text_element_id = saved.text_element_id;
+        let mut legacy_body = None;
+        for tail in saved.tails {
+            let base_width = if let Some(width) = tail.base_width {
+                width
+            } else if let Some(angle) = tail.half_angle {
+                if !angle.is_finite()
+                    || !(SPEECH_BUBBLE_MIN_HALF_ANGLE..=SPEECH_BUBBLE_MAX_HALF_ANGLE)
+                        .contains(&angle)
+                {
+                    return Err("invalid speech bubble tail angle");
+                }
+                let body = legacy_body
+                    .get_or_insert_with(|| body_segments(speech_bubble_body_proxy(&value)));
+                let width = base_width_at_angle(body, tail.tip.y.atan2(tail.tip.x), angle);
+                if !width.is_finite() {
+                    return Err("invalid speech bubble tail contour");
+                }
+                width.max(SPEECH_BUBBLE_MIN_BASE_WIDTH)
+            } else {
+                return Err("missing speech bubble tail base_width");
+            };
+            value.tails.push(SpeechBubbleTail {
+                id: tail.id,
+                tip: tail.tip,
+                base_width,
+            });
+        }
+        Ok(value)
+    }
 }
 
 impl SpeechBubbleData {
@@ -107,9 +164,8 @@ pub fn validate_speech_bubble(value: &SpeechBubbleData) -> Result<(), ErrorCode>
             || !ids.insert(tail.id)
             || !tail.tip.x.is_finite()
             || !tail.tip.y.is_finite()
-            || !tail.half_angle.is_finite()
-            || !(SPEECH_BUBBLE_MIN_HALF_ANGLE..=SPEECH_BUBBLE_MAX_HALF_ANGLE)
-                .contains(&tail.half_angle)
+            || !tail.base_width.is_finite()
+            || tail.base_width < SPEECH_BUBBLE_MIN_BASE_WIDTH
             || speech_bubble_body_contains(value, tail.tip)
         {
             return Err(ErrorCode::InvalidArgument);
@@ -173,29 +229,31 @@ pub fn speech_bubble_default_tail(
     tip: Point<f64>,
     zoom: f64,
 ) -> SpeechBubbleTail {
-    let body = body_segments(speech_bubble_body_proxy(value));
-    let axis = tip.y.atan2(tip.x);
-    let radius = ray_radius(&body, axis).max(f64::MIN_POSITIVE);
-    let width = (32.0 / zoom.max(0.0001)).min(value.body.width / 4.0);
     SpeechBubbleTail {
         id: value.next_tail_id(),
         tip,
-        half_angle: (width / 2.0)
-            .atan2(radius)
-            .clamp(SPEECH_BUBBLE_MIN_HALF_ANGLE, SPEECH_BUBBLE_MAX_HALF_ANGLE),
+        base_width: (32.0 / zoom.max(0.0001))
+            .min(value.body.width / 4.0)
+            .max(SPEECH_BUBBLE_MIN_BASE_WIDTH),
     }
 }
 
-pub fn speech_bubble_half_angle_from_point(tail: &SpeechBubbleTail, point: Point<f64>) -> f64 {
+pub fn speech_bubble_base_width_from_point(
+    value: &SpeechBubbleData,
+    tail: &SpeechBubbleTail,
+    point: Point<f64>,
+) -> f64 {
     if point.x == 0.0 && point.y == 0.0 {
-        return tail.half_angle;
+        return tail.base_width;
     }
-    let angle = point.y.atan2(point.x) - tail.tip.y.atan2(tail.tip.x);
-    let angle =
-        (angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
-    angle
+    let axis = tail.tip.y.atan2(tail.tip.x);
+    let angle = point.y.atan2(point.x) - axis;
+    let spread = ((angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+        - std::f64::consts::PI)
         .abs()
-        .clamp(SPEECH_BUBBLE_MIN_HALF_ANGLE, SPEECH_BUBBLE_MAX_HALF_ANGLE)
+        .min(SPEECH_BUBBLE_MAX_HALF_ANGLE);
+    let body = body_segments(speech_bubble_body_proxy(value));
+    base_width_at_angle(&body, axis, spread).max(SPEECH_BUBBLE_MIN_BASE_WIDTH)
 }
 
 /// Shape/radius changes can cover a tip just like automatic growth can.
@@ -378,7 +436,7 @@ impl GeometryKey {
                         tail.id,
                         tail.tip.x.to_bits(),
                         tail.tip.y.to_bits(),
-                        tail.half_angle.to_bits(),
+                        tail.base_width.to_bits(),
                     ]
                 })
                 .collect(),
@@ -860,11 +918,24 @@ fn effective_half_angle(body: &[Segment], tail: &SpeechBubbleTail) -> f64 {
     let visible = |spread: f64| {
         visible_base(body, axis - spread, tail.tip) && visible_base(body, axis + spread, tail.tip)
     };
-    if visible(tail.half_angle) {
-        return tail.half_angle;
-    }
     let mut low = 0.0;
-    let mut high = tail.half_angle;
+    let mut high = SPEECH_BUBBLE_MAX_HALF_ANGLE;
+    // Solve the chord length on the actual contour, rather than scaling an
+    // angle by the center-to-border radius (which also varies along flat faces).
+    for _ in 0..36 {
+        let mid = f64::midpoint(low, high);
+        if base_width_at_angle(body, axis, mid) < tail.base_width {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    let requested = f64::midpoint(low, high);
+    if visible(requested) {
+        return requested;
+    }
+    low = 0.0;
+    high = requested;
     for _ in 0..36 {
         let mid = f64::midpoint(low, high);
         if visible(mid) {
@@ -881,6 +952,15 @@ fn effective_half_angle(body: &[Segment], tail: &SpeechBubbleTail) -> f64 {
 fn tail_bases(body: &[Segment], tail: &SpeechBubbleTail) -> [Point<f64>; 2] {
     let axis = tail.tip.y.atan2(tail.tip.x);
     let spread = effective_half_angle(body, tail);
+    bases_at_angle(body, axis, spread)
+}
+
+fn base_width_at_angle(body: &[Segment], axis: f64, spread: f64) -> f64 {
+    let [left, right] = bases_at_angle(body, axis, spread);
+    (left.x - right.x).hypot(left.y - right.y)
+}
+
+fn bases_at_angle(body: &[Segment], axis: f64, spread: f64) -> [Point<f64>; 2] {
     [-spread, spread].map(|offset| {
         let angle = axis + offset;
         let radius = ray_radius(body, angle);
@@ -1196,6 +1276,34 @@ mod tests {
     }
 
     #[test]
+    fn speech_bubble_join_width_is_constant_across_directions_and_body_sizes() {
+        for shape in [
+            HighlightShape::Rectangle,
+            HighlightShape::Ellipse,
+            HighlightShape::Diamond,
+        ] {
+            let mut value = bubble(shape);
+            value.body.width = 240.0;
+            value.body.height = 120.0;
+            let mut tail = speech_bubble_default_tail(&value, Point::new(0.0, 600.0), 1.0);
+            for (width, height) in [(240.0, 120.0), (320.0, 180.0), (120.0, 240.0)] {
+                value.body.width = width;
+                value.body.height = height;
+                for step in 0..72 {
+                    let angle = step as f64 * std::f64::consts::TAU / 72.0;
+                    tail.tip = Point::new(600.0 * angle.cos(), 600.0 * angle.sin());
+                    let bases = speech_bubble_tail_base_points(&value, &tail);
+                    let actual = distance(bases[0], bases[1]);
+                    assert!(
+                        (actual - 32.0).abs() < 1e-6,
+                        "{shape:?} {width}x{height} at {angle}: join width {actual}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn speech_bubble_symmetric_bases_follow_every_rounded_contour() {
         for shape in [
             HighlightShape::Rectangle,
@@ -1207,7 +1315,7 @@ mod tests {
                 let tail = SpeechBubbleTail {
                     id: 1,
                     tip: Point::new(120.0 * angle.cos(), 120.0 * angle.sin()),
-                    half_angle: 0.25,
+                    base_width: 15.0,
                 };
                 for base in speech_bubble_tail_base_points(&value, &tail) {
                     assert!(!speech_bubble_body_contains(&value, base));
@@ -1216,7 +1324,9 @@ mod tests {
                         Point::new(base.x * 0.999, base.y * 0.999)
                     ));
                     assert!(
-                        (speech_bubble_half_angle_from_point(&tail, base) - tail.half_angle).abs()
+                        (speech_bubble_base_width_from_point(&value, &tail, base)
+                            - tail.base_width)
+                            .abs()
                             < 1e-9
                     );
                 }
@@ -1263,7 +1373,7 @@ mod tests {
         value.tails.push(SpeechBubbleTail {
             id: 2,
             tip: Point::new(0.0, 60.0),
-            half_angle: tail.half_angle,
+            base_width: tail.base_width,
         });
         assert!(!speech_bubble_hit_test(&value, Point::new(0.0, 60.0), 0.0));
         let before = speech_bubble_local_path_geometry(&value).flattened_commands();
@@ -1286,7 +1396,7 @@ mod tests {
                 value.tails.push(SpeechBubbleTail {
                     id: id as u64 + 1,
                     tip: Point::new(angle.cos() * 90.0, angle.sin() * 90.0),
-                    half_angle: 0.3,
+                    base_width: 20.0,
                 });
             }
             let geometry = cached_geometry(&value);
@@ -1350,6 +1460,50 @@ mod tests {
     }
 
     #[test]
+    fn speech_bubble_legacy_angles_import_as_fixed_width_and_resave_without_angles() {
+        for shape in [
+            HighlightShape::Rectangle,
+            HighlightShape::Ellipse,
+            HighlightShape::Diamond,
+        ] {
+            let value = bubble(shape);
+            let contour = body_segments(speech_bubble_body_proxy(&value));
+            let mut saved = serde_json::to_value(&value).unwrap();
+            saved["tails"] = serde_json::json!([{
+                "id": 7,
+                "tip": {"x": 0.0, "y": 300.0},
+                "half_angle": 0.2,
+            }]);
+            let mut restored: SpeechBubbleData = serde_json::from_value(saved.clone()).unwrap();
+            let expected = bases_at_angle(&contour, std::f64::consts::FRAC_PI_2, 0.2);
+            let actual = speech_bubble_tail_base_points(&restored, &restored.tails[0]);
+            for i in 0..2 {
+                assert!(distance(actual[i], expected[i]) < 1e-8);
+            }
+            let width = distance(expected[0], expected[1]);
+            restored.tails[0].tip = Point::new(300.0, 0.0);
+            let actual = speech_bubble_tail_base_points(&restored, &restored.tails[0]);
+            assert!((distance(actual[0], actual[1]) - width).abs() < 1e-8);
+            let resaved = serde_json::to_value(&restored).unwrap();
+            assert!(resaved["tails"][0].get("half_angle").is_none());
+            assert_eq!(resaved["tails"][0]["base_width"], width);
+            assert_eq!(
+                serde_json::from_value::<SpeechBubbleData>(resaved).unwrap(),
+                restored
+            );
+            for invalid in [-0.1, 0.0, 2.0] {
+                saved["tails"][0]["half_angle"] = serde_json::json!(invalid);
+                assert!(serde_json::from_value::<SpeechBubbleData>(saved.clone()).is_err());
+            }
+            saved["tails"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("half_angle");
+            assert!(serde_json::from_value::<SpeechBubbleData>(saved).is_err());
+        }
+    }
+
+    #[test]
     fn speech_bubble_body_transforms_keep_all_canvas_tail_tips_fixed() {
         for shape in [
             HighlightShape::Rectangle,
@@ -1383,7 +1537,7 @@ mod tests {
                         "{shape:?}: {expected:?} moved to {actual:?}"
                     );
                     assert_eq!(before.id, after.id);
-                    assert_eq!(before.half_angle, after.half_angle);
+                    assert_eq!(before.base_width, after.base_width);
                 }
                 assert_eq!(validate_speech_bubble(&next), Ok(()));
             }
@@ -1397,7 +1551,7 @@ mod tests {
         value.tails.push(SpeechBubbleTail {
             id: 7,
             tip: Point::new(80.0, 90.0),
-            half_angle: 0.2,
+            base_width: 12.0,
         });
         let resized = speech_bubble_with_selection_rect(
             &value,
@@ -1411,7 +1565,7 @@ mod tests {
         let expected = speech_bubble_local_to_canvas(&value, value.tails[0].tip);
         let actual = speech_bubble_local_to_canvas(&resized, resized.tails[0].tip);
         assert!((expected.x - actual.x).hypot(expected.y - actual.y) < 1e-8);
-        assert_eq!(resized.tails[0].half_angle, 0.2);
+        assert_eq!(resized.tails[0].base_width, 12.0);
         speech_bubble_path_geometry(&value);
         let builds = speech_bubble_geometry_build_count();
         value.body.center = Point::new(700.0, 400.0);
@@ -1425,6 +1579,10 @@ mod tests {
         value.tails[0].tip.y += 5.0;
         speech_bubble_path_geometry(&value);
         assert_eq!(builds + 1, speech_bubble_geometry_build_count());
+        value.tails[0].base_width += 5.0;
+        let bases = speech_bubble_tail_base_points(&value, &value.tails[0]);
+        assert!((distance(bases[0], bases[1]) - 17.0).abs() < 1e-7);
+        assert_eq!(builds + 2, speech_bubble_geometry_build_count());
     }
 
     #[test]
@@ -1462,7 +1620,7 @@ mod tests {
         value.tails.push(SpeechBubbleTail {
             id: 1,
             tip: Point::new(0.0, 30.0),
-            half_angle: 0.2,
+            base_width: 12.0,
         });
         assert_eq!(validate_speech_bubble(&value), Ok(()));
         value.tails[0].tip.y = 29.0;
@@ -1477,7 +1635,7 @@ mod tests {
             Err(ErrorCode::InvalidArgument)
         );
         value.tails.pop();
-        value.tails[0].half_angle = f64::NAN;
+        value.tails[0].base_width = f64::NAN;
         assert_eq!(
             validate_speech_bubble(&value),
             Err(ErrorCode::InvalidArgument)
@@ -1555,7 +1713,7 @@ mod tests {
                     value.tails.push(SpeechBubbleTail {
                         id,
                         tip: Point::new(radius * angle.cos(), radius * angle.sin()),
-                        half_angle: 0.03 + sample() * 0.9,
+                        base_width: 2.0 + sample() * 60.0,
                     });
                 }
                 let geometry = cached_geometry(&value);
@@ -1617,7 +1775,7 @@ mod tests {
         value.tails.push(SpeechBubbleTail {
             id: 1,
             tip: Point::new(-100.0, -100.0),
-            half_angle: 0.2,
+            base_width: 12.0,
         });
         let corner = speech_bubble_local_to_canvas(&value, Point::new(-50.0, -30.0));
         let tip = speech_bubble_local_to_canvas(&value, value.tails[0].tip);
@@ -1685,7 +1843,7 @@ mod tests {
         value.tails.push(SpeechBubbleTail {
             id: 1,
             tip: Point::new(80.0, 90.0),
-            half_angle: 0.2,
+            base_width: 12.0,
         });
         assert!(speech_bubble_hit_test(&value, Point::new(80.0, 90.0), 0.0));
         value.body.stroke.a = 0;
@@ -1712,12 +1870,16 @@ mod tests {
             let tail = SpeechBubbleTail {
                 id: 1,
                 tip,
-                half_angle: 0.9,
+                base_width: 60.0,
             };
             value.tails.push(tail);
             let effective = speech_bubble_tail_effective_half_angle(&value, &tail);
             assert!(
-                effective > 0.0 && effective < tail.half_angle,
+                effective > 0.0
+                    && distance(
+                        speech_bubble_tail_base_points(&value, &tail)[0],
+                        speech_bubble_tail_base_points(&value, &tail)[1],
+                    ) < tail.base_width,
                 "{shape:?} effective {effective}"
             );
             for base in speech_bubble_tail_base_points(&value, &tail) {
@@ -1729,7 +1891,7 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(value.tails[0].half_angle, 0.9);
+            assert_eq!(value.tails[0].base_width, 60.0);
             let builds = speech_bubble_geometry_build_count();
             for _ in 0..5 {
                 speech_bubble_tail_base_points(&value, &tail);
@@ -1745,7 +1907,7 @@ mod tests {
         value.tails.push(SpeechBubbleTail {
             id: 1,
             tip: Point::new(0.0, 30.0),
-            half_angle: 0.7,
+            base_width: 42.0,
         });
         assert_eq!(validate_speech_bubble(&value), Ok(()));
         assert!(speech_bubble_tail_effective_half_angle(&value, &value.tails[0]) < 1e-12);
@@ -1756,7 +1918,7 @@ mod tests {
             Point::new(200.0, 200.0),
             0.0
         ));
-        assert_eq!(value.tails[0].half_angle, 0.7);
+        assert_eq!(value.tails[0].base_width, 42.0);
         value.tails[0].tip.y = 60.0;
         assert!(speech_bubble_tail_effective_half_angle(&value, &value.tails[0]) > 0.1);
     }

@@ -6,10 +6,11 @@ use crate::*;
 use snow_draw_engine_core::{ErrorCode, Point};
 use snow_draw_engine_document::{
     DocumentDelta, DocumentRevision, ElementData, ElementId, HighlightShape, Operation,
-    RectangleData, SpeechBubbleData, TextData, TextLayoutSize, Transaction,
-    speech_bubble_body_contains, speech_bubble_canvas_to_local, speech_bubble_default_tail,
-    speech_bubble_grow_size, speech_bubble_half_angle_from_point, speech_bubble_local_to_canvas,
-    speech_bubble_tail_base_points, speech_bubble_with_selection_rect,
+    RectangleData, SpeechBubbleData, SpeechBubbleTail, TextData, TextLayoutSize, Transaction,
+    speech_bubble_base_width_from_point, speech_bubble_body_contains,
+    speech_bubble_canvas_to_local, speech_bubble_default_tail, speech_bubble_grow_size,
+    speech_bubble_local_to_canvas, speech_bubble_tail_base_points,
+    speech_bubble_with_selection_rect,
 };
 use snow_draw_engine_model::DocumentModel;
 
@@ -146,10 +147,33 @@ pub(crate) struct SpeechBubbleTailDrag {
     owner_id: ElementId,
     original: SpeechBubbleData,
     preview: SpeechBubbleData,
-    tail_id: u64,
+    initial_tail: SpeechBubbleTail,
     base: bool,
     offset: Point<f64>,
     start_anchor: Point<f64>,
+}
+
+#[derive(Clone, Copy)]
+enum SpeechBubbleControlTarget {
+    AddTail,
+    TailBase(u64),
+    TailTip(u64),
+}
+
+impl SpeechBubbleControlTarget {
+    fn presentation_kind(self) -> u8 {
+        match self {
+            Self::AddTail => 0,
+            Self::TailBase(_) => 1,
+            Self::TailTip(_) => 2,
+        }
+    }
+}
+
+struct SpeechBubbleControl {
+    target: SpeechBubbleControlTarget,
+    center: Point<f64>,
+    anchor: Point<f64>,
 }
 
 fn key(body: &RectangleData, text: &TextData, generation: u64) -> u64 {
@@ -862,26 +886,26 @@ impl Editor {
         self.speech_bubble_draft_geometry = Some((owner, bubble));
         Ok(())
     }
-    fn speech_bubble_resolved_handles(
+    fn selected_speech_bubble_display_snapshot(
         &self,
         document: &DocumentModel,
-    ) -> Vec<(u8, Point<f64>, Point<f64>)> {
-        let Some(&id) = self
+    ) -> Option<(ElementId, SpeechBubbleData)> {
+        let &id = self
             .state
             .selection
             .ids
             .first()
-            .filter(|_| self.state.selection.ids.len() == 1)
-        else {
-            return Vec::new();
-        };
-        let Some(bubble) = self.speech_bubble_display_snapshot(document, id) else {
-            return Vec::new();
-        };
+            .filter(|_| self.state.selection.ids.len() == 1)?;
+        Some((id, self.speech_bubble_display_snapshot(document, id)?))
+    }
+    fn resolve_speech_bubble_controls(
+        &self,
+        bubble: &SpeechBubbleData,
+    ) -> Vec<SpeechBubbleControl> {
         let zoom = self.camera().zoom.max(0.0001);
         let padding = selection_frame_padding_for_members(zoom, 1, 0);
         let add = speech_bubble_local_to_canvas(
-            &bubble,
+            bubble,
             Point::new(
                 0.0,
                 bubble.body.height / 2.0 + padding + selection_rotation_offset(zoom),
@@ -890,7 +914,7 @@ impl Editor {
         let mut reserved = vec![
             add,
             speech_bubble_local_to_canvas(
-                &bubble,
+                bubble,
                 Point::new(
                     0.0,
                     -bubble.body.height / 2.0 - padding - selection_rotation_offset(zoom),
@@ -908,14 +932,14 @@ impl Editor {
             (-1.0, 0.0),
         ] {
             reserved.push(speech_bubble_local_to_canvas(
-                &bubble,
+                bubble,
                 Point::new(
                     x * (bubble.body.width / 2.0 + padding),
                     y * (bubble.body.height / 2.0 + padding),
                 ),
             ));
         }
-        let rect = snow_draw_engine_document::speech_bubble_body_proxy(&bubble);
+        let rect = snow_draw_engine_document::speech_bubble_body_proxy(bubble);
         if rect.supports_corner_radius() {
             for corner in [
                 RectCorner::TopLeft,
@@ -924,17 +948,25 @@ impl Editor {
                 RectCorner::BottomLeft,
             ] {
                 reserved.push(speech_bubble_local_to_canvas(
-                    &bubble,
+                    bubble,
                     corner_radius_handle_local_point(&rect, zoom, corner),
                 ));
             }
         }
-        let mut result = vec![(0, add, add)];
+        let mut result = vec![SpeechBubbleControl {
+            target: SpeechBubbleControlTarget::AddTail,
+            center: add,
+            anchor: add,
+        }];
         let step = 14.0 / zoom;
         for tail in &bubble.tails {
-            let bases = speech_bubble_tail_base_points(&bubble, tail);
-            for (kind, local) in [(1, bases[0]), (1, bases[1]), (2, tail.tip)] {
-                let anchor = speech_bubble_local_to_canvas(&bubble, local);
+            let bases = speech_bubble_tail_base_points(bubble, tail);
+            for (target, local) in [
+                (SpeechBubbleControlTarget::TailBase(tail.id), bases[0]),
+                (SpeechBubbleControlTarget::TailBase(tail.id), bases[1]),
+                (SpeechBubbleControlTarget::TailTip(tail.id), tail.tip),
+            ] {
+                let anchor = speech_bubble_local_to_canvas(bubble, local);
                 let length = local.x.hypot(local.y).max(f64::EPSILON);
                 let direction = Point::new(local.x / length, local.y / length);
                 let (sin, cos) = bubble.body.rotation.sin_cos();
@@ -956,25 +988,36 @@ impl Editor {
                     }
                 }
                 reserved.push(center);
-                result.push((kind, center, anchor));
+                result.push(SpeechBubbleControl {
+                    target,
+                    center,
+                    anchor,
+                });
             }
         }
         result
     }
     pub(crate) fn speech_bubble_handles(&self, document: &DocumentModel) -> Vec<(u8, Point<f64>)> {
-        self.speech_bubble_resolved_handles(document)
+        let Some((_, bubble)) = self.selected_speech_bubble_display_snapshot(document) else {
+            return Vec::new();
+        };
+        self.resolve_speech_bubble_controls(&bubble)
             .into_iter()
-            .map(|(kind, center, _)| (kind, center))
+            .map(|control| (control.target.presentation_kind(), control.center))
             .collect()
     }
     pub(crate) fn speech_bubble_handle_leaders(
         &self,
         document: &DocumentModel,
     ) -> Vec<(Point<f64>, Point<f64>)> {
-        self.speech_bubble_resolved_handles(document)
+        let Some((_, bubble)) = self.selected_speech_bubble_display_snapshot(document) else {
+            return Vec::new();
+        };
+        self.resolve_speech_bubble_controls(&bubble)
             .into_iter()
-            .filter_map(|(_, center, anchor)| {
-                (point_distance(center, anchor) > 1e-9).then_some((anchor, center))
+            .filter_map(|control| {
+                (point_distance(control.center, control.anchor) > 1e-9)
+                    .then_some((control.anchor, control.center))
             })
             .collect()
     }
@@ -1003,19 +1046,25 @@ impl Editor {
                         &drag.preview,
                         Point::new(point.x + drag.offset.x, point.y + drag.offset.y),
                     );
-                    if let Some(index) =
-                        drag.preview.tails.iter().position(|t| t.id == drag.tail_id)
+                    if let Some(index) = drag
+                        .preview
+                        .tails
+                        .iter()
+                        .position(|t| t.id == drag.initial_tail.id)
                     {
-                        if drag.base
-                            && point_distance(
-                                Point::new(point.x + drag.offset.x, point.y + drag.offset.y),
-                                drag.start_anchor,
-                            ) <= 1e-9
+                        if point_distance(
+                            Point::new(point.x + drag.offset.x, point.y + drag.offset.y),
+                            drag.start_anchor,
+                        ) <= 1e-9
                         {
-                            // Offset handles and capped attachment rays must not mutate on a click.
+                            // Returning to the captured anchor restores the exact
+                            // initial values, including rotated tip coordinates
+                            // and capped attachment rays.
+                            drag.preview.tails[index] = drag.initial_tail;
                         } else if drag.base {
-                            drag.preview.tails[index].half_angle =
-                                speech_bubble_half_angle_from_point(
+                            drag.preview.tails[index].base_width =
+                                speech_bubble_base_width_from_point(
+                                    &drag.preview,
                                     &drag.preview.tails[index],
                                     local,
                                 );
@@ -1075,28 +1124,18 @@ impl Editor {
         if !matches!(self.state.interaction, InteractionState::Idle) || (!down && !hover) {
             return Ok(None);
         }
-        let Some(&id) = self
-            .state
-            .selection
-            .ids
-            .first()
-            .filter(|_| self.state.selection.ids.len() == 1)
-        else {
-            return Ok(None);
-        };
-        let Ok(bubble) = document.speech_bubble(id) else {
+        let Some((id, bubble)) = self.selected_speech_bubble_display_snapshot(document) else {
             return Ok(None);
         };
         if document.element(id)?.meta.locked {
             return Ok(None);
         }
         let point = view_to_canvas(event.position, &self.camera(), self.surface_size());
-        let handles = self.speech_bubble_resolved_handles(document);
+        let controls = self.resolve_speech_bubble_controls(&bubble);
         let tolerance = selection_handle_hit_size(self.camera().zoom) / 2.0;
-        let Some((index, (_, center, anchor))) = handles
+        let Some(control) = controls
             .iter()
-            .enumerate()
-            .find(|(_, (_, p, _))| point_distance(point, *p) <= tolerance)
+            .find(|control| point_distance(point, control.center) <= tolerance)
         else {
             return Ok(None);
         };
@@ -1108,24 +1147,34 @@ impl Editor {
             }));
         }
         let mut preview = bubble.clone();
-        let (tail_id, base) = if index == 0 {
-            let local = speech_bubble_canvas_to_local(&preview, *center);
-            let tail = speech_bubble_default_tail(&preview, local, self.camera().zoom);
-            let id = tail.id;
-            preview.tails.push(tail);
-            (id, false)
-        } else {
-            (preview.tails[(index - 1) / 3].id, (index - 1) % 3 != 2)
+        let (tail_id, base) = match control.target {
+            SpeechBubbleControlTarget::AddTail => {
+                let local = speech_bubble_canvas_to_local(&preview, control.anchor);
+                let tail = speech_bubble_default_tail(&preview, local, self.camera().zoom);
+                let id = tail.id;
+                preview.tails.push(tail);
+                (id, false)
+            }
+            SpeechBubbleControlTarget::TailBase(id) => (id, true),
+            SpeechBubbleControlTarget::TailTip(id) => (id, false),
         };
+        let initial_tail = preview
+            .tails
+            .iter()
+            .find(|tail| tail.id == tail_id)
+            .copied()
+            .ok_or(ErrorCode::InvalidState)?;
         self.speech_bubble_tail_drag = Some(SpeechBubbleTailDrag {
             pointer_id: event.pointer_id,
             owner_id: id,
-            original: bubble.clone(),
+            // Compare the gesture with its displayed start, so passive layout
+            // alone never commits a click or cancelled add-tail gesture.
+            original: bubble,
             preview,
-            tail_id,
+            initial_tail,
             base,
-            offset: Point::new(anchor.x - point.x, anchor.y - point.y),
-            start_anchor: *anchor,
+            offset: Point::new(control.anchor.x - point.x, control.anchor.y - point.y),
+            start_anchor: control.anchor,
         });
         self.bump_scene_state_revision();
         self.bump_overlay_state_revision();
