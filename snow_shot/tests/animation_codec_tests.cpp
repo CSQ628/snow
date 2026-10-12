@@ -43,6 +43,11 @@ void roundTrip(const pinned_animation_fixtures::Fixture& fixture) {
                 source->firstDisplayFrame ==
                     source->firstFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied),
             "initial display pixels are prepared with the playback profile policy");
+#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
+    require(source->firstFrame.constBits() == source->firstDisplayFrame.constBits() &&
+                source->firstFrame.cacheKey() == source->firstDisplayFrame.cacheKey(),
+            "compatible initial source and display pixels share one immutable raster");
+#endif
     auto decoder = openAnimationDecoder(source, &error);
     require(bool(decoder) && error.isEmpty() && decoder->frameIndex() == -1,
             "worker decoder before first frame");
@@ -70,7 +75,7 @@ void roundTrip(const pinned_animation_fixtures::Fixture& fixture) {
     const auto rejectedDisplay = decodeAnimationSource(
         fixture.bytes, &error, {}, [&](qint64) { return ++initialAdmissions == 1; });
     require(!rejectedDisplay && !error.isEmpty() && initialAdmissions == 2,
-            "display normalization must obtain admission before allocating its raster");
+            "initial display preparation retains its conservative admission fence");
     bool cancelledDisplay = false;
     initialAdmissions = 0;
     const auto cancelledSource = decodeAnimationSource(
@@ -149,9 +154,12 @@ void initialDisplayPreservesOriginalProfile() {
     const QColorSpace srgb(QColorSpace::SRgb);
     for (const auto& profile : {srgb, QColorSpace(QColorSpace::DisplayP3)}) {
         auto source = decodeAnimationSource(profiledApng(profile));
-        require(source && source->firstFrame.colorSpace() == profile &&
-                    source->firstFrame.format() == QImage::Format_RGBA8888_Premultiplied,
-                "initial raw frame retains native profile and original export pixels");
+        require(
+            source && source->firstFrame.colorSpace() == profile &&
+                (source->firstFrame.format() == QImage::Format_ARGB32_Premultiplied ||
+                 source->firstFrame.format() == QImage::Format_RGBA8888_Premultiplied) &&
+                source->firstFrame.pixelColor(0, 0) == QColor(Qt::red),
+            "initial source frame retains original profile and colors in native representation");
         const QImage expected =
             profile == srgb
                 ? source->firstFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied)
@@ -161,9 +169,28 @@ void initialDisplayPreservesOriginalProfile() {
                     source->firstDisplayFrame.colorSpace() == srgb &&
                     source->firstFrame.colorSpace() == profile,
                 "display normalization matches Qt without modifying the original profile");
+        if (profile != srgb)
+            require(source->firstDisplayFrame.constBits() != source->firstFrame.constBits(),
+                    "non-sRGB source pixels remain distinct from their converted display raster");
+#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
+        else
+            require(source->firstDisplayFrame.constBits() == source->firstFrame.constBits() &&
+                        source->firstDisplayFrame.cacheKey() == source->firstFrame.cacheKey(),
+                    "sRGB source and display pixels share their immutable raster");
+#endif
+        auto decoder = openAnimationDecoder(source);
+        require(decoder && decoder->advance(), "open profiled animation worker");
+        const QImage original = decoder->snapshot();
+        require(original == source->firstFrame && decoder->advance() &&
+                    decoder->snapshot().colorSpace() == profile && decoder->reset() &&
+                    decoder->advance() && decoder->snapshot().colorSpace() == profile,
+                "reopened snapshots reuse source color metadata across advance and reset");
         const QImage retained = source->firstDisplayFrame;
+        decoder.reset();
         source.reset();
-        require(retained == expected, "prepared display owner survives source destruction");
+        require(retained == expected && original.colorSpace() == profile &&
+                    original.pixelColor(0, 0) == QColor(Qt::red),
+                "display and original color metadata survive decoder and source destruction");
     }
 }
 void specialPngs() {

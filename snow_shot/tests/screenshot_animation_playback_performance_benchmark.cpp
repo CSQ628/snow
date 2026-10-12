@@ -1,6 +1,7 @@
 #include "snow_shot/presentation/screenshotanimationplayback.h"
 #include "../src/image/snowimageqtcodec.h"
 #include "pinned_animation_fixtures.h"
+#include "pinned_animation_optimization_fixtures.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 
 #include <QGuiApplication>
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -39,6 +41,17 @@ quint64 residentBytes() {
     if (task_info(mach_task_self(), TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info),
                   &count) == KERN_SUCCESS)
         return static_cast<quint64>(info.resident_size);
+#endif
+    return 0;
+}
+
+quint64 privateBytes() {
+#ifdef Q_OS_WIN
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(),
+                                reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                                sizeof(counters)))
+        return static_cast<quint64>(counters.PrivateUsage);
 #endif
     return 0;
 }
@@ -469,11 +482,241 @@ QJsonObject reverseCacheMiss() {
     result.insert(QStringLiteral("reserved_working_bytes"), after.reservedWorkingBytes);
     return result;
 }
+
+void optimizationRequire(bool condition, const char* message) {
+    if (!condition)
+        throw std::runtime_error(message);
+}
+
+QJsonObject optimizationSourceStorage(const ScreenshotAnimationSource& source) {
+    const bool shared = source.firstFrame.constBits() == source.firstDisplayFrame.constBits();
+    return {
+        {QStringLiteral("encoded_bytes"), source.encoded.size()},
+        {QStringLiteral("logical_initial_raster_bytes"),
+         source.firstFrame.sizeInBytes() + source.firstDisplayFrame.sizeInBytes()},
+        {QStringLiteral("distinct_initial_raster_bytes"),
+         source.firstFrame.sizeInBytes() + (shared ? 0 : source.firstDisplayFrame.sizeInBytes())},
+        {QStringLiteral("initial_rasters_share_storage"), shared}};
+}
+
+void validateOptimizationSource(const ScreenshotAnimationSource& source, QSize size,
+                                bool profiled = false) {
+    optimizationRequire(source.isAnimated() && source.canvasSize == size &&
+                            !source.firstFrame.isNull() && !source.firstDisplayFrame.isNull(),
+                        "Optimization source admission or initial rasters failed.");
+    const QColorSpace srgb(QColorSpace::SRgb);
+    const QImage expected =
+        source.firstFrame.colorSpace().isValid() && source.firstFrame.colorSpace() != srgb
+            ? source.firstFrame.convertedToColorSpace(srgb, QImage::Format_ARGB32_Premultiplied)
+            : source.firstFrame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    optimizationRequire(source.firstDisplayFrame == expected,
+                        "Optimization initial display changed normalized pixels.");
+    if (profiled)
+        optimizationRequire(source.firstFrame.colorSpace() == QColorSpace(QColorSpace::DisplayP3) &&
+                                source.firstDisplayFrame.colorSpace() == srgb,
+                            "Optimization source did not preserve and normalize Display P3.");
+}
+
+QJsonObject optimizationColdImport(const char* name, const QByteArray& encoded, QSize size) {
+    QJsonArray samples;
+    QJsonObject storage;
+    for (int repetition = 0; repetition < 3; ++repetition) {
+        quint64 imports = 0;
+        std::shared_ptr<const ScreenshotAnimationSource> retained;
+        const double cpu = processCpuMilliseconds();
+        QElapsedTimer timer;
+        timer.start();
+        do {
+            retained = decodedSource(encoded);
+            optimizationRequire(retained->canvasSize == size &&
+                                    retained->firstFrame.pixel(0, 0) == qRgb(255, 0, 0),
+                                "Cold-import fixture composition changed.");
+            ++imports;
+        } while (timer.elapsed() < 1200);
+        const double wallMs = static_cast<double>(timer.nsecsElapsed()) / 1'000'000;
+        const double cpuMs = processCpuMilliseconds() - cpu;
+        validateOptimizationSource(*retained, size);
+        storage = optimizationSourceStorage(*retained);
+        samples.append(
+            QJsonObject{{QStringLiteral("imports"), static_cast<qint64>(imports)},
+                        {QStringLiteral("wall_ms"), wallMs},
+                        {QStringLiteral("process_cpu_ms"), cpuMs},
+                        {QStringLiteral("mean_import_ms"), wallMs / static_cast<double>(imports)},
+                        {QStringLiteral("resident_bytes"), static_cast<qint64>(residentBytes())},
+                        {QStringLiteral("private_bytes"), static_cast<qint64>(privateBytes())}});
+    }
+    return {{QStringLiteral("scenario"), QString::fromLatin1(name)},
+            {QStringLiteral("source_storage"), storage},
+            {QStringLiteral("samples"), samples}};
+}
+
+QJsonObject optimizationSnapshots(const char* name, const QByteArray& encoded, QSize size,
+                                  int retainedCount, qsizetype metadataBytes = 0,
+                                  bool profiled = false) {
+    const auto source = decodedSource(encoded);
+    validateOptimizationSource(*source, size, profiled);
+    QJsonArray samples;
+    for (int repetition = 0; repetition < 3; ++repetition) {
+        QString error;
+        auto decoder = snow_shot::image_codec::openAnimationDecoder(source, &error);
+        optimizationRequire(decoder && decoder->advance(&error) && error.isEmpty(),
+                            "Optimization snapshot decoder failed to open/advance.");
+        const QImage expected = source->firstFrame;
+        quint64 snapshots = 0;
+        const double cpu = processCpuMilliseconds();
+        QElapsedTimer timer;
+        timer.start();
+        do {
+            const QImage original = decoder->snapshot(&error);
+            const QImage image =
+                snowCanvasConvertImage(original, QImage::Format_ARGB32_Premultiplied);
+            optimizationRequire(!original.isNull() && !image.isNull() && error.isEmpty() &&
+                                    image.size() == size &&
+                                    image.pixel(0, 0) == expected.pixel(0, 0) &&
+                                    image.pixel(size.width() - 1, size.height() - 1) ==
+                                        expected.pixel(size.width() - 1, size.height() - 1),
+                                "Optimization decoder snapshot changed composed pixels.");
+            ++snapshots;
+        } while (timer.elapsed() < 1200);
+        const double wallMs = static_cast<double>(timer.nsecsElapsed()) / 1'000'000;
+        const double cpuMs = processCpuMilliseconds() - cpu;
+        const quint64 residentBefore = residentBytes();
+        const quint64 privateBefore = privateBytes();
+        std::vector<QImage> retained;
+        retained.reserve(static_cast<std::size_t>(retainedCount));
+        for (int index = 0; index < retainedCount; ++index) {
+            auto image = decoder->snapshot(&error);
+            optimizationRequire(!image.isNull() && error.isEmpty(),
+                                "Retained optimization snapshot failed.");
+            retained.push_back(std::move(image));
+        }
+        const quint64 residentRetained = residentBytes();
+        const quint64 privateRetained = privateBytes();
+        optimizationRequire(decoder->advance(&error) && error.isEmpty(),
+                            "Optimization decoder failed to advance with retained snapshots.");
+        decoder.reset();
+        for (const QImage& image : retained)
+            optimizationRequire(image == expected && image.colorSpace() == expected.colorSpace(),
+                                "Retained snapshot changed after advance/decoder destruction.");
+        const qint64 retainedRasterBytes =
+            retained.empty() ? 0 : retained.front().sizeInBytes() * retainedCount;
+        retained.clear();
+        samples.append(QJsonObject{
+            {QStringLiteral("snapshots"), static_cast<qint64>(snapshots)},
+            {QStringLiteral("wall_ms"), wallMs},
+            {QStringLiteral("process_cpu_ms"), cpuMs},
+            {QStringLiteral("mean_snapshot_preparation_ms"),
+             wallMs / static_cast<double>(snapshots)},
+            {QStringLiteral("prepared_raster_mib_per_second"),
+             static_cast<double>(expected.sizeInBytes()) * static_cast<double>(snapshots) * 1000.0 /
+                 (wallMs * 1024.0 * 1024.0)},
+            {QStringLiteral("retained_snapshots"), retainedCount},
+            {QStringLiteral("retained_raster_bytes"), retainedRasterBytes},
+            {QStringLiteral("resident_before_retention_bytes"),
+             static_cast<qint64>(residentBefore)},
+            {QStringLiteral("resident_with_retention_bytes"),
+             static_cast<qint64>(residentRetained)},
+            {QStringLiteral("resident_retention_delta_bytes"),
+             static_cast<qint64>(residentRetained) - static_cast<qint64>(residentBefore)},
+            {QStringLiteral("private_before_retention_bytes"), static_cast<qint64>(privateBefore)},
+            {QStringLiteral("private_with_retention_bytes"), static_cast<qint64>(privateRetained)},
+            {QStringLiteral("private_retention_delta_bytes"),
+             static_cast<qint64>(privateRetained) - static_cast<qint64>(privateBefore)},
+            {QStringLiteral("resident_after_release_bytes"), static_cast<qint64>(residentBytes())},
+            {QStringLiteral("private_after_release_bytes"), static_cast<qint64>(privateBytes())}});
+    }
+    return {{QStringLiteral("scenario"), QString::fromLatin1(name)},
+            {QStringLiteral("metadata_payload_bytes"), metadataBytes},
+            {QStringLiteral("source_storage"), optimizationSourceStorage(*source)},
+            {QStringLiteral("samples"), samples}};
+}
+
+QJsonObject optimizationSharedCacheRetirement() {
+    const auto source = decodedSource(generatedGif(960, 540, 4));
+    QJsonArray samples;
+    for (int repetition = 0; repetition < 3; ++repetition) {
+        auto retiring = std::make_unique<Pin>(source, QTransform{}, 100, false);
+        Pin remaining(source, {}, 100, false);
+        for (int index = 1; index < 4; ++index) {
+            retiring->playback->nextFrame();
+            waitForStep(*retiring, index);
+            remaining.playback->nextFrame();
+            waitForStep(remaining, index);
+        }
+        retiring.reset();
+        pump(25); // Dispatch retirement before observing the surviving controller.
+        const auto before = remaining.playback->diagnostics();
+        QElapsedTimer timer;
+        timer.start();
+        for (int index = 0; index < 20; ++index) {
+            const int expected = (remaining.playback->frameIndex() + 3) % 4;
+            remaining.playback->previousFrame();
+            waitForStep(remaining, expected);
+        }
+        const auto after = remaining.playback->diagnostics();
+        samples.append(QJsonObject{
+            {QStringLiteral("steps"), 20},
+            {QStringLiteral("wall_ms"), static_cast<double>(timer.nsecsElapsed()) / 1'000'000},
+            {QStringLiteral("cache_bytes_after_sibling_retirement"), before.cachedBytes},
+            {QStringLiteral("cache_hits"), static_cast<qint64>(after.cacheHits - before.cacheHits)},
+            {QStringLiteral("cache_misses"),
+             static_cast<qint64>(after.cacheMisses - before.cacheMisses)},
+            {QStringLiteral("decoder_resets"),
+             static_cast<qint64>(after.decoderResets - before.decoderResets)}});
+    }
+    return {{QStringLiteral("scenario"), QStringLiteral("shared-cache-sibling-retirement")},
+            {QStringLiteral("samples"), samples}};
+}
+
+QJsonObject optimizationReport() {
+    constexpr qsizetype metadataBytes = 2 * 1024 * 1024;
+    const auto gif1080 = generatedGif(1920, 1080, 2);
+    const auto gif4k = generatedGif(3840, 2160, 2);
+    using namespace pinned_animation_optimization_fixtures;
+    QJsonArray scenarios;
+    scenarios.append(optimizationColdImport("cold-import-gif-1080p", gif1080, {1920, 1080}));
+    scenarios.append(optimizationColdImport("cold-import-gif-4k", gif4k, {3840, 2160}));
+    scenarios.append(optimizationSnapshots("snapshot-gif-1080p", gif1080, {1920, 1080}, 2));
+    scenarios.append(optimizationSnapshots("snapshot-gif-4k", gif4k, {3840, 2160}, 2));
+    scenarios.append(
+        optimizationSnapshots("snapshot-profiled-webp-control", webp(0), {2, 2}, 64, 0, true));
+    scenarios.append(optimizationSnapshots("snapshot-profiled-webp-metadata", webp(metadataBytes),
+                                           {2, 2}, 64, metadataBytes, true));
+    scenarios.append(
+        optimizationSnapshots("snapshot-profiled-apng-control", apng(0), {2, 2}, 64, 0, true));
+    scenarios.append(optimizationSnapshots("snapshot-profiled-apng-metadata", apng(metadataBytes),
+                                           {2, 2}, 64, metadataBytes, true));
+    scenarios.append(optimizationSharedCacheRetirement());
+    return {{QStringLiteral("benchmark"), QStringLiteral("animation-optimization")},
+            {QStringLiteral("fixture"),
+             QStringLiteral("Three repetitions per scenario. Cold imports and real decoder "
+                            "snapshot plus ARGB32 premultiplied preparation each run for at least "
+                            "1200 ms; fixture generation "
+                            "is excluded. Retained Display P3 WebP/APNG snapshots compare a 2 MiB "
+                            "valid XMP payload against profile-only controls. Resident/private "
+                            "memory is sampled before retention, with 64 snapshots, and after "
+                            "release. Initial raster storage is counted by distinct constBits "
+                            "addresses. Shared-cache retirement steps a surviving sibling twenty "
+                            "times after the other controller retires. These are synchronous "
+                            "codec/storage measurements, excluding native window presentation.")},
+            {QStringLiteral("private_memory_available"), privateBytes() > 0},
+            {QStringLiteral("scenarios"), scenarios}};
+}
 } // namespace
 
 int main(int argc, char** argv) {
     QGuiApplication application(argc, argv);
     QJsonArray scenarios;
+    if (QGuiApplication::arguments().contains(QStringLiteral("--optimization-only"))) {
+        try {
+            std::cout
+                << QJsonDocument(optimizationReport()).toJson(QJsonDocument::Indented).constData();
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << '\n';
+            return 1;
+        }
+    }
     if (QGuiApplication::arguments().contains(QStringLiteral("--reverse-only"))) {
         const QJsonObject report{
             {QStringLiteral("benchmark"), QStringLiteral("animation-playback-scheduling")},

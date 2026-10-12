@@ -6,6 +6,7 @@
 #include <QColorSpace>
 #include <QCoreApplication>
 #include <QTransform>
+#include <QtEndian>
 
 #include <array>
 #include <cstring>
@@ -149,6 +150,7 @@ class AnimationDecoder::Impl final {
     std::shared_ptr<const ScreenshotAnimationSource> source;
     SnowShotAnimationDecoder* decoder = nullptr;
     SnowShotAnimationInfo info{};
+    QColorSpace frameColorSpace;
     AnimationAllocationCheck allocationCheck;
     uint64_t requiredBytes = 0;
     bool admitted() {
@@ -196,10 +198,19 @@ QImage AnimationDecoder::snapshot(QString* error) {
         reportError(error, detail.data());
         return {};
     }
-    const auto space = colorSpace(frame->color);
+    QImage::Format format = QImage::Format_Invalid;
+    if (frame->pixel_format == SNOW_SHOT_ANIMATION_PIXEL_FORMAT_RGBA8_PREMULTIPLIED)
+        format = QImage::Format_RGBA8888_Premultiplied;
+#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
+    else if (frame->pixel_format == SNOW_SHOT_ANIMATION_PIXEL_FORMAT_BGRA8_PREMULTIPLIED)
+        format = QImage::Format_ARGB32_Premultiplied;
+#endif
+    if (format == QImage::Format_Invalid) {
+        reportError(error, "Frame pixel format is unsupported.");
+        return {};
+    }
     QImage image(frame->data, static_cast<int>(frame->width), static_cast<int>(frame->height),
-                 static_cast<qsizetype>(frame->row_stride), QImage::Format_RGBA8888_Premultiplied,
-                 &releaseFrame, frame.get());
+                 static_cast<qsizetype>(frame->row_stride), format, &releaseFrame, frame.get());
     if (image.isNull()) {
         reportError(error, "Frame allocation failed.");
         return {};
@@ -207,7 +218,7 @@ QImage AnimationDecoder::snapshot(QString* error) {
     // The QImage cleanup callback now owns this frame, even after the decoder
     // has been destroyed or the image has crossed to another thread.
     [[maybe_unused]] const auto* imageOwner = frame.release();
-    image.setColorSpace(space);
+    image.setColorSpace(impl_->frameColorSpace);
     if (impl_->info.orientation > 1 && impl_->info.orientation <= 8)
         image = snowCanvasTransformImage(image, orientationTransform(impl_->info.orientation));
     reportError(error, image.isNull() ? "Frame transformation failed." : "");
@@ -237,6 +248,7 @@ decodeAnimationSource(const QByteArray& encoded, QString* error,
         reportError(error, detail.data());
         return {};
     }
+    impl->frameColorSpace = colorSpace(impl->info.color);
     auto source = std::make_shared<ScreenshotAnimationSource>();
     source->encoded = encoded;
     source->format = impl->info.format == SNOW_SHOT_IMAGE_CODEC_FORMAT_GIF ? QStringLiteral("gif")
@@ -258,9 +270,9 @@ decodeAnimationSource(const QByteArray& encoded, QString* error,
     if (source->firstFrame.isNull())
         return {};
     source->canvasSize = source->firstFrame.size();
-    // Release composition scratch before preparing the display copy. The
-    // encoded source, two rasters, and metadata fit below the native decoder's
-    // conservative encoded + 16 bytes/pixel + 8 MiB admission.
+    // Release composition scratch before preparing the display raster. The
+    // conservative admission allows two rasters even when compatible source
+    // pixels can be shared directly with the display.
     const qint64 displayBytes =
         source->encoded.size() + 2 * source->firstFrame.sizeInBytes() + 8LL * 1024LL * 1024LL;
     if (cancelledCallback(&cancelled) != 0 ||
@@ -279,7 +291,8 @@ decodeAnimationSource(const QByteArray& encoded, QString* error,
         reportError(error, "Animation display preparation failed.");
         return {};
     }
-    source->firstDisplayFrame.setDevicePixelRatio(1.0);
+    if (source->firstDisplayFrame.devicePixelRatio() != 1.0)
+        source->firstDisplayFrame.setDevicePixelRatio(1.0);
     return source;
 }
 
@@ -297,6 +310,9 @@ openAnimationDecoder(std::shared_ptr<const ScreenshotAnimationSource> source, QS
     }
     auto impl = std::make_unique<AnimationDecoder::Impl>();
     impl->source = std::move(source);
+    // The immutable initial snapshot already owns the parsed source profile.
+    // Reopened playback sessions and later frames reuse that shared metadata.
+    impl->frameColorSpace = impl->source->firstFrame.colorSpace();
     impl->allocationCheck = std::move(allocationCheck);
     std::array<char, kErrorCapacity> detail{};
     impl->decoder = snow_shot_animation_open(

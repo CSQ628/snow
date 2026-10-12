@@ -134,6 +134,9 @@ void animationReplacementPreparationIsAtomicAndWorkerSafe() {
         require(content && content->animationSource, "decode preparation fixture");
         const auto rawOwner = content->image.constBits();
         const auto rawProfile = content->image.colorSpace();
+        const auto& display = content->animationSource->firstDisplayFrame;
+        const qint64 retainedBytes = fixture.bytes.size() + content->image.sizeInBytes() +
+                                     (display.constBits() == rawOwner ? 0 : display.sizeInBytes());
         qint64 admitted = 0;
         require(ScreenshotClipboardContentReader::prepareAnimationDisplay(*content, {}, {},
                                                                           [&](qint64 bytes) {
@@ -142,9 +145,9 @@ void animationReplacementPreparationIsAtomicAndWorkerSafe() {
                                                                           }) &&
                     content->preparedDisplayImage.constBits() ==
                         content->animationSource->firstDisplayFrame.constBits() &&
-                    admitted >= fixture.bytes.size() + content->image.sizeInBytes() +
-                                    content->preparedDisplayImage.sizeInBytes(),
-                "identity preparation shares its display owner and admits both retained rasters");
+                    admitted == retainedBytes,
+                "identity preparation shares its display owner and admits each distinct raster "
+                "once");
         QTransform requested;
         requested.translate(123, -77);
         requested.rotate(90);

@@ -1248,6 +1248,43 @@ void tinyRasterCachesAccountForMetadataAndReleaseRetiredStorage() {
             "retirement releases all optional cache node storage and mandatory reservations");
 }
 
+void sharedSourceCacheSurvivesSiblingRetirement() {
+    const auto animation = snow_shot::image_codec::decodeAnimationSource(
+        pinned_animation_fixtures::images().back().bytes);
+    require(animation && animation->isAnimated(), "shared cache uses a real animation source");
+    Harness first(false);
+    Harness second(false);
+    first.playback->setSource(animation, false);
+    first.playback->setSuspended(false);
+    waitUntil([&] { return first.publications == 1 && !first.playback->busy(); });
+    first.playback->nextFrame();
+    waitUntil([&] { return first.publications == 2 && !first.playback->busy(); });
+    second.playback->setSource(animation, false);
+    second.playback->setSuspended(false);
+    waitUntil([&] { return second.publications == 1 && !second.playback->busy(); });
+    second.playback->nextFrame();
+    waitUntil([&] { return second.publications == 2 && !second.playback->busy(); });
+    require(second.playback->diagnostics().cacheHits != 0,
+            "two controllers reuse a shared source's immutable frame");
+    first.playback->clear();
+    waitUntil([&] { return second.playback->diagnostics().reservedWorkingBytes == 0; });
+    require(second.playback->diagnostics().cachedBytes > 0,
+            "retiring one controller preserves frames owned by another source worker");
+    second.playback->previousFrame();
+    waitUntil([&] { return second.publications == 3 && !second.playback->busy(); });
+    const auto before = second.playback->diagnostics();
+    second.playback->nextFrame();
+    waitUntil([&] { return second.publications == 4 && !second.playback->busy(); });
+    const auto after = second.playback->diagnostics();
+    require(after.cacheHits == before.cacheHits + 1 && after.cacheMisses == before.cacheMisses,
+            "a surviving controller reuses the retained frame without decoding it again");
+    second.playback->clear();
+    waitUntil([&] {
+        const auto state = second.playback->diagnostics();
+        return state.cachedBytes == 0 && state.reservedWorkingBytes == 0;
+    });
+}
+
 void scaledNativeFramesRespectTransformedRasterAdmission() {
     const auto animation = snow_shot::image_codec::decodeAnimationSource(
         pinned_animation_native_fixtures::images().back().bytes);
@@ -1342,6 +1379,7 @@ int main(int argc, char** argv) {
     queuedPreparationsDoNotDeadlockRecipientOrApplicationTeardown();
     colorProfilesPreserveOriginalPixelsAndSharing();
     tinyRasterCachesAccountForMetadataAndReleaseRetiredStorage();
+    sharedSourceCacheSurvivesSiblingRetirement();
     scaledNativeFramesRespectTransformedRasterAdmission();
     preparedInitialIdentitySharesNormalizedStorage();
     std::cout << "Animation playback tests passed\n";

@@ -4,6 +4,7 @@
 #include <snow/image/service.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -113,6 +114,11 @@ snow_shot_animation_open(const uint8_t* encoded, uint64_t size, SnowShotAnimatio
                     info->format = bridgeFormat(document.format);
                     info->orientation = static_cast<uint32_t>(document.metadata.orientation);
                     info->total_play_count = animation.total_play_count;
+                    info->color.icc_profile = const_cast<uint8_t*>(
+                        reinterpret_cast<const uint8_t*>(document.color.icc_profile.data()));
+                    info->color.icc_profile_size = document.color.icc_profile.size();
+                    info->color.primaries = static_cast<uint32_t>(document.color.primaries);
+                    info->color.transfer = static_cast<uint32_t>(document.color.transfer);
                 }
                 const auto required =
                     size + uint64_t{document.canvas_width} * document.canvas_height * 16U +
@@ -191,22 +197,25 @@ int SNOW_SHOT_IMAGE_CODEC_CALL snow_shot_animation_snapshot(const SnowShotAnimat
     if (!decoder || !output || output->owner)
         return 0;
     try {
-        auto result = decoder->session.snapshot();
+        constexpr bool bgra = std::endian::native == std::endian::little;
+        constexpr snow::image::PixelFormat format{snow::image::SampleType::unsigned_integer,
+                                                  bgra ? snow::image::ChannelLayout::bgra
+                                                       : snow::image::ChannelLayout::rgba,
+                                                  snow::image::AlphaMode::premultiplied, 8, true};
+        auto result = decoder->session.snapshot_pixels(format);
         if (!result) {
             setError(error, error_capacity, result.error().message);
             return 0;
         }
-        auto owner = std::make_unique<snow::image::Frame>(std::move(result).value());
-        const auto& image = owner->image;
+        auto owner = std::make_unique<snow::image::Image>(std::move(result).value());
+        const auto& image = *owner;
         output->data = reinterpret_cast<const uint8_t*>(image.pixels().data());
         output->size = image.pixels().size();
         output->row_stride = image.row_stride();
         output->width = image.width();
         output->height = image.height();
-        output->color.icc_profile = reinterpret_cast<uint8_t*>(owner->color.icc_profile.data());
-        output->color.icc_profile_size = owner->color.icc_profile.size();
-        output->color.primaries = static_cast<uint32_t>(owner->color.primaries);
-        output->color.transfer = static_cast<uint32_t>(owner->color.transfer);
+        output->pixel_format = bgra ? SNOW_SHOT_ANIMATION_PIXEL_FORMAT_BGRA8_PREMULTIPLIED
+                                    : SNOW_SHOT_ANIMATION_PIXEL_FORMAT_RGBA8_PREMULTIPLIED;
         output->owner = owner.release();
         return 1;
     } catch (...) {
@@ -217,7 +226,7 @@ int SNOW_SHOT_IMAGE_CODEC_CALL snow_shot_animation_snapshot(const SnowShotAnimat
 
 void SNOW_SHOT_IMAGE_CODEC_CALL snow_shot_animation_frame_release(SnowShotAnimationFrame* frame) {
     if (frame) {
-        delete static_cast<snow::image::Frame*>(frame->owner);
+        delete static_cast<snow::image::Image*>(frame->owner);
         *frame = {};
     }
 }

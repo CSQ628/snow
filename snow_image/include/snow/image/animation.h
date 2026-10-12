@@ -38,6 +38,11 @@ class SNOW_IMAGE_API AnimationDecodeSession final {
     [[nodiscard]] Result<bool> advance(std::stop_token stop = {},
                                        const AnimationCancellationCheck& cancelled = {});
     [[nodiscard]] Result<Frame> snapshot(std::stop_token stop = {}) const;
+    // Publishes independent immutable pixels without copying document metadata.
+    // Only premultiplied RGBA8 and BGRA8 are supported; color and orientation
+    // declarations remain available through info().
+    [[nodiscard]] Result<Image> snapshot_pixels(PixelFormat format,
+                                                std::stop_token stop = {}) const;
     [[nodiscard]] Result<void> reset(std::stop_token stop = {});
 
   private:

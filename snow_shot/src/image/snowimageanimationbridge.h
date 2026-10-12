@@ -2,7 +2,7 @@
 
 #include "snowimagecodecbridge.h"
 
-#define SNOW_SHOT_ANIMATION_CODEC_ABI_VERSION 1U
+#define SNOW_SHOT_ANIMATION_CODEC_ABI_VERSION 2U
 
 #ifdef __cplusplus
 extern "C" {
@@ -12,6 +12,11 @@ typedef struct SnowShotAnimationDecoder SnowShotAnimationDecoder;
 typedef int(SNOW_SHOT_IMAGE_CODEC_CALL* SnowShotAnimationCancel)(void* context);
 typedef int(SNOW_SHOT_IMAGE_CODEC_CALL* SnowShotAnimationAdmit)(void* context, uint64_t bytes);
 
+enum SnowShotAnimationPixelFormat {
+    SNOW_SHOT_ANIMATION_PIXEL_FORMAT_RGBA8_PREMULTIPLIED = 1,
+    SNOW_SHOT_ANIMATION_PIXEL_FORMAT_BGRA8_PREMULTIPLIED = 2,
+};
+
 typedef struct SnowShotAnimationInfo {
     uint32_t width;
     uint32_t height;
@@ -19,6 +24,8 @@ typedef struct SnowShotAnimationInfo {
     uint32_t format;
     uint32_t orientation;
     uint64_t total_play_count;
+    // Read-only color data borrowed from the decoder until destroy.
+    SnowShotImageCodecColorEncoding color;
 } SnowShotAnimationInfo;
 
 typedef struct SnowShotAnimationFrame {
@@ -27,7 +34,7 @@ typedef struct SnowShotAnimationFrame {
     uint64_t row_stride;
     uint32_t width;
     uint32_t height;
-    SnowShotImageCodecColorEncoding color;
+    uint32_t pixel_format;
     void* owner;
 } SnowShotAnimationFrame;
 

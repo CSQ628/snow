@@ -30,6 +30,31 @@ an actual cache miss and decoder reset. To repeat only the reverse replay case:
     --reverse-only | Set-Content -Encoding utf8 -LiteralPath build/pinned-animation-reverse.json
 ```
 
+To compare codec and storage optimizations independently of GUI scheduling, run the same Release
+benchmark sources against both production revisions:
+
+```powershell
+./build/windows-msvc-performance/snow_shot/test-bin/Release/snow-shot-animation-playback-benchmark.exe `
+    --optimization-only | Set-Content -Encoding utf8 -LiteralPath build/pinned-animation-optimization.json
+```
+
+This mode preserves the ordinary full benchmark and uses existing codec APIs. Each cold import and
+snapshot preparation scenario has three repetitions lasting at least 1200 ms. Fixture generation
+is outside the measured interval. Cold imports include source indexing, first-frame composition
+and display preparation, and report the logical sum of initial raster sizes alongside the sum of
+distinct storage addresses. Snapshot throughput uses real 1080p and 4K GIF decoders and includes
+the ARGB32 premultiplied conversion used for display.
+
+Display P3 WebP and APNG fixtures compare a valid 2 MiB XMP payload against profile-only controls.
+Each repetition retains 64 tiny original decoder snapshots and samples process resident and
+Windows private memory before retention, during retention, and after release. Pixel/profile
+checks after advancing and destroying the decoder validate retained ownership. The sampled
+process figures include allocator behavior and other process storage; they are not exact metadata
+allocation counts. Private memory is reported as unavailable on platforms without this probe.
+A final case warms two controllers sharing one source, retires one, then measures twenty backward
+steps on the survivor and reports cache hits, misses and decoder resets. No machine-dependent time
+or memory threshold is asserted; correctness failures still make the benchmark fail.
+
 ## Fixtures and metrics
 
 Ordinary scenarios warm up for 100 ms, apply the requested paused/suspended state, settle for
@@ -230,3 +255,51 @@ and observed resident memory was 95.379 MiB.
 The scheduling counters and idle CPU measurements provide evidence of dormant animation work,
 not native compositor or battery-energy measurements. Native window visibility and Hide to Top
 are validated by the separate Windows integration fixture described above.
+
+## Optimization comparison — 2026-10-12
+
+Pixel-only decoder snapshots now fuse channel conversion into the owning pixel copy. The Qt
+bridge reuses the parsed source color space and retains pixel storage without copying complete
+frame metadata into each publication. Compatible source/display rasters share storage; Display P3
+originals remain separate from their sRGB display conversion. GIF palette expansion writes into
+the composition canvas directly, and shared-source caches survive until their last worker retires.
+The existing library `Frame` snapshot API still preserves independently owned metadata.
+
+The same `--optimization-only` benchmark sources were built against baseline and optimized
+production code using `windows-msvc-performance`, Release, Qt 6.12.0 and the offscreen plugin.
+No build or analysis process was active at the start or completion of these paired runs. The
+following values are medians of three repetitions, each lasting at least 1200 ms:
+
+| Workload | Before ms | After ms |
+| --- | ---: | ---: |
+| Fresh GIF decoder import, 1920 × 1080 | 19.217 | 12.088 |
+| Fresh GIF decoder import, 3840 × 2160 | 86.476 | 57.591 |
+| Snapshot plus ARGB32 premultiplied preparation, 1920 × 1080 | 4.947 | 1.873 |
+| Snapshot plus ARGB32 premultiplied preparation, 3840 × 2160 | 19.365 | 8.066 |
+
+Distinct initial source/display raster storage fell exactly 50%: from 16,588,800 to 8,294,400
+bytes at 1080p, and from 66,355,200 to 33,177,600 bytes at 4K. These counts describe the admitted
+initial rasters, rather than total process memory or decoder working reservations.
+
+Retaining 64 tiny Display P3 snapshots with a 2 MiB XMP payload produced median private-memory
+growth of 134,782,976 bytes for WebP and 134,754,304 bytes for APNG before optimization; both
+optimized medians were sampled as zero. Approximately 128.5 MiB of excess sampled growth was
+eliminated. Pixel snapshots still allocate storage, and allocator reuse/granularity affects this
+process-level probe; zero sampled growth does not imply zero allocations or retained memory.
+The sibling-retirement case improved from 16 hits/four misses to 19 hits/one miss over twenty
+steps, with the survivor's cache preserved. Its remaining miss prepares frame zero, which the
+initial publication did not place in the optional cache.
+
+All eight focused checks passed: native animation decoding, dynamic and static Qt
+animation codecs, playback, repository animation selection, file-pin batch, clipboard MIME and
+pinned animation integration. Scoped clang-tidy passed for ten changed translation units.
+The full eighteen-scenario offscreen playback benchmark passed three optimized runs, including
+all six settled idle checks. Only animation-related checks were run.
+
+Raw paired data and derived medians are retained in
+`build/animation-optimization/{baseline,optimized}/optimization.json` and
+`build/animation-optimization/comparison.json`; the three playback runs are in
+`build/animation-optimization/optimized/playback-{1,2,3}.json`. Earlier `optimization-loaded.json`
+diagnostic runs are excluded from these results. Fresh imports use resident encoded bytes and
+measure new decoder/source admission rather than disk I/O. Profiled metadata microbenchmarks
+exclude profile-to-sRGB conversion; offscreen measurements exclude native compositor latency.

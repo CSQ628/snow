@@ -209,8 +209,16 @@ class AnimationFrameCache final {
             m_entries.clear();
         }
     }
-    void remove(const ScreenshotAnimationSource* source) {
+    void retainSource(const ScreenshotAnimationSource* source) {
         const QMutexLocker lock(&m_mutex);
+        ++m_activeSources[source];
+    }
+    void releaseSource(const ScreenshotAnimationSource* source) {
+        const QMutexLocker lock(&m_mutex);
+        const auto found = m_activeSources.find(source);
+        if (found == m_activeSources.end() || --found->second != 0)
+            return;
+        m_activeSources.erase(found);
         std::erase_if(m_entries, [source](const Entry& entry) {
             const auto owner = entry.source.lock();
             return !owner || owner.get() == source;
@@ -244,6 +252,9 @@ class AnimationFrameCache final {
     }
     QMutex m_mutex;
     std::list<Entry> m_entries;
+    // Optional frames live until the last worker for a source retires. Closing
+    // one pin must not evict immutable frames still useful to another pin.
+    std::unordered_map<const ScreenshotAnimationSource*, std::size_t> m_activeSources;
     quint64 m_age = 0;
 };
 
@@ -492,7 +503,7 @@ struct AnimationDecodeWorker final {
     ~AnimationDecodeWorker() {
         decoder.reset();
         if (source)
-            frameCache().remove(source.get());
+            frameCache().releaseSource(source.get());
         memoryBudget().release(this);
     }
 
@@ -515,7 +526,10 @@ struct AnimationDecodeWorker final {
             activeCancellation = request.cancelled;
             if (!cancelled()) {
                 if (source != request.source) {
+                    frameCache().retainSource(request.source.get());
                     decoder.reset();
+                    if (source)
+                        frameCache().releaseSource(source.get());
                     source = request.source;
                     resetRequired = false;
                 }

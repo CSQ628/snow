@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -49,6 +50,29 @@ bool cancellationRequested(std::stop_token stop = {}) noexcept {
 
 constexpr PixelFormat kPremultipliedRgba8{SampleType::unsigned_integer, ChannelLayout::rgba,
                                           AlphaMode::premultiplied, 8, true};
+constexpr PixelFormat kPremultipliedBgra8{SampleType::unsigned_integer, ChannelLayout::bgra,
+                                          AlphaMode::premultiplied, 8, true};
+
+void copyBgraRow(const std::byte* source, std::byte* destination, std::uint32_t width) {
+    // Packed loads/stores avoid alignment and aliasing assumptions while allowing
+    // the compiler to vectorize the copy and channel swap together.
+    for (std::uint32_t x = 0; x < width; ++x) {
+        std::uint32_t pixel;
+        std::memcpy(&pixel, source + static_cast<std::size_t>(x) * 4U, sizeof(pixel));
+        if constexpr (std::endian::native == std::endian::little) {
+            const auto redBlue = pixel & 0x00ff00ffU;
+            pixel = (pixel & 0xff00ff00U) | (redBlue << 16U) | (redBlue >> 16U);
+        } else if constexpr (std::endian::native == std::endian::big) {
+            const auto redBlue = pixel & 0xff00ff00U;
+            pixel = (pixel & 0x00ff00ffU) | (redBlue << 16U) | (redBlue >> 16U);
+        } else {
+            auto channels = std::bit_cast<std::array<std::byte, 4>>(pixel);
+            std::swap(channels[0], channels[2]);
+            pixel = std::bit_cast<std::uint32_t>(channels);
+        }
+        std::memcpy(destination + static_cast<std::size_t>(x) * 4U, &pixel, sizeof(pixel));
+    }
+}
 
 Status invalid(const char* message) {
     return Status::error(ErrorCode::corrupt_data, message, "animation");
@@ -761,7 +785,6 @@ class AnimationDecodeSession::Impl final {
 #ifdef SNOW_IMAGE_HAS_GIF
         if (document.format == Format::gif) {
             gifRow.reserve(document.canvas_width);
-            rgbaRow.reserve(static_cast<std::size_t>(document.canvas_width) * 4U);
         }
 #endif
 #ifdef SNOW_IMAGE_HAS_WEBP
@@ -931,10 +954,17 @@ class AnimationDecodeSession::Impl final {
             gif->Image.Top != static_cast<int>(frame.y))
             return invalid("GIF frame changed after metadata indexing.");
         const auto* palette = gif->Image.ColorMap ? gif->Image.ColorMap : gif->SColorMap;
-        if (!palette || !palette->Colors)
+        if (!palette || !palette->Colors || palette->ColorCount <= 0 || palette->ColorCount > 256)
             return invalid("GIF palette is unavailable.");
+        std::array<std::uint32_t, 256> packedPalette{};
+        for (int color = 0; color < palette->ColorCount; ++color) {
+            const auto value = palette->Colors[color];
+            packedPalette[static_cast<std::size_t>(color)] =
+                std::bit_cast<std::uint32_t>(std::array<std::byte, 4>{
+                    static_cast<std::byte>(value.Red), static_cast<std::byte>(value.Green),
+                    static_cast<std::byte>(value.Blue), std::byte{255}});
+        }
         gifRow.resize(frame.width);
-        rgbaRow.resize(static_cast<std::size_t>(frame.width) * 4U);
         constexpr std::array starts{0, 4, 2, 1};
         constexpr std::array steps{8, 8, 4, 2};
         int pass = 0;
@@ -944,17 +974,22 @@ class AnimationDecodeSession::Impl final {
                 return internal::cancelled_status();
             if (DGifGetLine(gif, gifRow.data(), static_cast<int>(frame.width)) == GIF_ERROR)
                 return invalid("GIF compressed image data is invalid.");
+            auto* destination = canvas.data() + (static_cast<std::size_t>(frame.y + row) *
+                                                     index.info.document.canvas_width +
+                                                 frame.x) *
+                                                    4U;
             for (std::uint32_t x = 0; x < frame.width; ++x) {
                 const auto color = static_cast<int>(gifRow[x]);
                 if (color >= palette->ColorCount)
                     return invalid("GIF palette index is out of range.");
-                const auto value = palette->Colors[color];
-                rgbaRow[x * 4U] = static_cast<std::byte>(value.Red);
-                rgbaRow[x * 4U + 1U] = static_cast<std::byte>(value.Green);
-                rgbaRow[x * 4U + 2U] = static_cast<std::byte>(value.Blue);
-                rgbaRow[x * 4U + 3U] = static_cast<std::byte>(color == transparent ? 0 : 255);
+                if (color != transparent) {
+                    std::memcpy(destination + static_cast<std::size_t>(x) * 4U,
+                                &packedPalette[static_cast<std::size_t>(color)],
+                                sizeof(std::uint32_t));
+                } else if (frame.blend == FrameBlend::source) {
+                    std::fill_n(destination + static_cast<std::size_t>(x) * 4U, 4, std::byte{});
+                }
             }
-            composeRow(canvas, index.info.document.canvas_width, frame, row, rgbaRow);
             if (!gif->Image.Interlace) {
                 ++row;
             } else {
@@ -1016,10 +1051,13 @@ class AnimationDecodeSession::Impl final {
         return true;
     }
 
-    Result<Frame> snapshot(std::stop_token stop) const {
+    Result<Image> snapshotPixels(PixelFormat format, std::stop_token stop) const {
         if (position < 0 || failed)
             return Status::error(ErrorCode::invalid_argument,
                                  "Animation decoder has no complete current frame.");
+        if (format != kPremultipliedRgba8 && format != kPremultipliedBgra8)
+            return Status::error(ErrorCode::unsupported_feature,
+                                 "Animation snapshots require premultiplied RGBA8 or BGRA8.");
         if (cancellationRequested(stop))
             return internal::cancelled_status();
         const std::byte* pixels = canvas.data();
@@ -1028,17 +1066,33 @@ class AnimationDecodeSession::Impl final {
             pixels = reinterpret_cast<const std::byte*>(webpPixels);
 #endif
         const auto& document = index.info.document;
-        auto copy = MutableImage::copy({document.canvas_width,
-                                        document.canvas_height,
-                                        kPremultipliedRgba8,
-                                        static_cast<std::size_t>(document.canvas_width) * 4U,
-                                        {pixels, static_cast<std::size_t>(canvasBytes)}});
+        auto copy = MutableImage::allocate(document.canvas_width, document.canvas_height, format);
         if (!copy)
             return copy.error();
+        const auto rowBytes = static_cast<std::size_t>(document.canvas_width) * 4U;
+        for (std::uint32_t row = 0; row < document.canvas_height; ++row) {
+            if (cancellationRequested(stop))
+                return internal::cancelled_status();
+            const auto* source = pixels + static_cast<std::size_t>(row) * rowBytes;
+            auto* destination = copy.value().pixels().data() +
+                                static_cast<std::size_t>(row) * copy.value().row_stride();
+            if (format == kPremultipliedRgba8)
+                std::memcpy(destination, source, rowBytes);
+            else
+                copyBgraRow(source, destination, document.canvas_width);
+        }
         if (cancellationRequested(stop))
             return internal::cancelled_status();
+        return std::move(copy).value().freeze();
+    }
+
+    Result<Frame> snapshot(std::stop_token stop) const {
+        auto pixels = snapshotPixels(kPremultipliedRgba8, stop);
+        if (!pixels)
+            return pixels.error();
+        const auto& document = index.info.document;
         Frame frame;
-        frame.image = std::move(copy).value().freeze();
+        frame.image = std::move(pixels).value();
         frame.duration = document.frames[static_cast<std::size_t>(position)].duration;
         frame.color = document.color;
         frame.metadata = document.metadata;
@@ -1059,7 +1113,6 @@ class AnimationDecodeSession::Impl final {
     std::size_t gifPosition = 0;
     std::stop_token gifStop;
     snow::memory::PixelArray<GifByteType> gifRow;
-    snow::memory::PixelArray<std::byte> rgbaRow;
 #endif
 #ifdef SNOW_IMAGE_HAS_WEBP
     WebPAnimDecoder* webp = nullptr;
@@ -1193,6 +1246,17 @@ Result<Frame> AnimationDecodeSession::snapshot(std::stop_token stop) const {
         return Status::error(ErrorCode::invalid_argument, "Animation decoder is empty.");
     try {
         return impl_->snapshot(stop);
+    } catch (const std::bad_alloc&) {
+        return Status::error(ErrorCode::out_of_memory, "Animation snapshot ran out of memory.");
+    }
+}
+
+Result<Image> AnimationDecodeSession::snapshot_pixels(PixelFormat format,
+                                                      std::stop_token stop) const {
+    if (!impl_)
+        return Status::error(ErrorCode::invalid_argument, "Animation decoder is empty.");
+    try {
+        return impl_->snapshotPixels(format, stop);
     } catch (const std::bad_alloc&) {
         return Status::error(ErrorCode::out_of_memory, "Animation snapshot ran out of memory.");
     }

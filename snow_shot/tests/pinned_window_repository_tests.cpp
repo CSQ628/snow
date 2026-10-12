@@ -212,31 +212,42 @@ void animatedSourcesRoundTripWithoutRewritingFrames() {
 }
 
 void animationAdmissionIncludesPreparedDisplayStorage() {
-    QTemporaryDir directory;
-    const auto fixture = pinned_animation_fixtures::images().first();
-    auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
-    require(source && !source->firstDisplayFrame.isNull() &&
-                source->firstDisplayFrame.constBits() != source->firstFrame.constBits(),
-            "animation fixture retains distinct original and prepared display rasters");
-    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    auto record = recordWithId(id, source->firstFrame);
-    record.animationSource = source;
-    const qint64 residentBytes = source->encoded.size() + source->firstFrame.sizeInBytes() +
-                                 source->firstDisplayFrame.sizeInBytes();
-    const std::weak_ptr<const ScreenshotAnimationSource> owner = source;
-    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
-    require(repository.upsert(std::move(record)).success, "queue prepared animation source");
-    qint64 admittedBytes = 0;
-    auto loaded = repository.loadRecord(id, [&](qint64 bytes) {
-        admittedBytes = std::max(admittedBytes, bytes);
-        return true;
-    });
-    require(loaded && loaded->animationSource == source && admittedBytes >= 2 * residentBytes,
-            "resident read admission includes distinct prepared display storage");
-    loaded.reset();
-    source.reset();
-    require(repository.flush().success && owner.expired(),
-            "committed source demotion releases prepared display and immutable source owners");
+    for (bool separateDisplay : {false, true}) {
+        QTemporaryDir directory;
+        const auto fixture = pinned_animation_fixtures::images().first();
+        auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+        require(source && !source->firstDisplayFrame.isNull(),
+                "animation fixture prepares its initial display raster");
+        if (separateDisplay) {
+            auto distinct = std::make_shared<ScreenshotAnimationSource>(*source);
+            distinct->firstDisplayFrame = source->firstDisplayFrame.copy();
+            source = std::move(distinct);
+            require(source->firstDisplayFrame.constBits() != source->firstFrame.constBits(),
+                    "admission fixture retains a separate display raster");
+        }
+        const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto record = recordWithId(id, source->firstFrame);
+        record.animationSource = source;
+        const bool sharedDisplay =
+            source->firstDisplayFrame.constBits() == source->firstFrame.constBits();
+        const qint64 residentBytes = source->encoded.size() + source->firstFrame.sizeInBytes() +
+                                     (sharedDisplay ? 0 : source->firstDisplayFrame.sizeInBytes());
+        const std::weak_ptr<const ScreenshotAnimationSource> owner = source;
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(std::move(record)).success, "queue prepared animation source");
+        qint64 admittedBytes = 0;
+        auto loaded = repository.loadRecord(id, [&](qint64 bytes) {
+            admittedBytes = std::max(admittedBytes, bytes);
+            return true;
+        });
+        require(loaded && loaded->animationSource == source && admittedBytes == 2 * residentBytes,
+                "resident read admission deduplicates shared display pixels and counts separate "
+                "rasters");
+        loaded.reset();
+        source.reset();
+        require(repository.flush().success && owner.expired(),
+                "committed source demotion releases display and immutable source owners");
+    }
 }
 
 void legacyAnimatedFileSourcesAndPlaybackDefaultsRecover() {
@@ -2562,6 +2573,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
     if (application.arguments().contains(QStringLiteral("--animation-only"))) {
         animatedSourcesRoundTripWithoutRewritingFrames();
+        animationAdmissionIncludesPreparedDisplayStorage();
         legacyAnimatedFileSourcesAndPlaybackDefaultsRecover();
         animationSourceIdentityIncludesEncodedBytes();
         animationStateUpdatesDoNotInspectOrRetainImmutableSources();

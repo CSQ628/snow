@@ -12,6 +12,10 @@
 namespace {
 using namespace snow::image;
 using Bytes = std::vector<std::byte>;
+constexpr PixelFormat kPremultipliedRgba8{SampleType::unsigned_integer, ChannelLayout::rgba,
+                                          AlphaMode::premultiplied, 8, true};
+constexpr PixelFormat kPremultipliedBgra8{SampleType::unsigned_integer, ChannelLayout::bgra,
+                                          AlphaMode::premultiplied, 8, true};
 bool hasCodec(Format format) {
     const Service service;
     return std::any_of(
@@ -145,8 +149,9 @@ struct Patch final {
     unsigned disposal = 0;
     unsigned blend = 0;
 };
-Bytes apng(const std::vector<Patch>& patches, bool hiddenPoster = false, bool interlaced = false) {
-    const auto poster = png(2, 2, {0, 0, 255, 255}, interlaced);
+Bytes apng(const std::vector<Patch>& patches, bool hiddenPoster = false, bool interlaced = false,
+           std::uint32_t width = 2, std::uint32_t height = 2) {
+    const auto poster = png(width, height, {0, 0, 255, 255}, interlaced);
     Bytes result(poster.begin(), poster.begin() + 33);
     Bytes control;
     append32(control, static_cast<std::uint32_t>(patches.size()));
@@ -180,20 +185,83 @@ Bytes apng(const std::vector<Patch>& patches, bool hiddenPoster = false, bool in
     chunk(result, "IEND", {});
     return result;
 }
-std::array<unsigned, 4> pixel(const Frame& frame, unsigned x, unsigned y) {
-    const auto offset = y * frame.image.row_stride() + x * 4U;
-    const auto pixels = frame.image.pixels();
+std::array<unsigned, 4> pixel(const Image& image, unsigned x, unsigned y) {
+    const auto offset = y * image.row_stride() + x * 4U;
+    const auto pixels = image.pixels();
     return {std::to_integer<unsigned>(pixels[offset]),
             std::to_integer<unsigned>(pixels[offset + 1]),
             std::to_integer<unsigned>(pixels[offset + 2]),
             std::to_integer<unsigned>(pixels[offset + 3])};
+}
+std::array<unsigned, 4> pixel(const Frame& frame, unsigned x, unsigned y) {
+    return pixel(frame.image, x, y);
+}
+void verifyPixelSnapshots(AnimationDecodeSession& session, const Image& native) {
+    auto rgba = session.snapshot_pixels(kPremultipliedRgba8);
+    auto bgra = session.snapshot_pixels(kPremultipliedBgra8);
+    require(bool(rgba) && bool(bgra), "publish pixel-only snapshots in both formats");
+    require(rgba.value().format() == kPremultipliedRgba8 &&
+                bgra.value().format() == kPremultipliedBgra8 &&
+                rgba.value().width() == native.width() &&
+                rgba.value().height() == native.height() &&
+                bgra.value().width() == native.width() && bgra.value().height() == native.height(),
+            "pixel-only snapshot shape and format");
+    require(rgba.value().pixels().data() != native.pixels().data() &&
+                bgra.value().pixels().data() != native.pixels().data(),
+            "pixel snapshots own independently immutable storage");
+    for (std::uint32_t y = 0; y < native.height(); ++y) {
+        for (std::uint32_t x = 0; x < native.width(); ++x) {
+            const auto expected = pixel(native, x, y);
+            const auto swapped = pixel(bgra.value(), x, y);
+            require(pixel(rgba.value(), x, y) == expected &&
+                        swapped == std::array<unsigned, 4>{expected[2], expected[1], expected[0],
+                                                           expected[3]},
+                    "pixel-only output preserves premultiplied channels and alpha");
+        }
+    }
 }
 Frame advance(AnimationDecodeSession& session) {
     auto next = session.advance();
     require(bool(next) && next.value(), "advance animation");
     auto frame = session.snapshot();
     require(bool(frame), "snapshot animation");
+    verifyPixelSnapshots(session, frame.value().image);
     return std::move(frame).value();
+}
+void pixelSnapshotLifetime(const Bytes& encoded) {
+    AnimationDecodeSession empty;
+    const auto missing = empty.snapshot_pixels(kPremultipliedBgra8);
+    require(!missing && missing.error().code == ErrorCode::invalid_argument,
+            "empty decoder cannot publish pixels");
+    auto opened = Service{}.open_animation_decoder(memory_input(encoded));
+    require(bool(opened), "open pixel-only snapshot fixture");
+    auto session = std::move(opened).value();
+    const auto initial = session.snapshot_pixels(kPremultipliedRgba8);
+    require(!initial && initial.error().code == ErrorCode::invalid_argument,
+            "pixel-only publication requires a complete current frame");
+    const auto first = advance(session);
+    auto retained = session.snapshot_pixels(kPremultipliedBgra8);
+    require(bool(retained), "retain independent BGRA snapshot");
+    const auto retainedPixel = pixel(retained.value(), 0, 0);
+    const auto wrongAlpha = session.snapshot_pixels(kRgba8);
+    const auto wrongDepth = session.snapshot_pixels(kRgba16);
+    require(!wrongAlpha && wrongAlpha.error().code == ErrorCode::unsupported_feature &&
+                !wrongDepth && wrongDepth.error().code == ErrorCode::unsupported_feature,
+            "pixel-only snapshots reject straight alpha and unsupported depth");
+    std::stop_source stop;
+    stop.request_stop();
+    const auto cancelled = session.snapshot_pixels(kPremultipliedBgra8, stop.get_token());
+    require(!cancelled && cancelled.error().code == ErrorCode::cancelled &&
+                session.frame_index() == 0,
+            "cancelled pixel publication preserves the complete decoder frame");
+    verifyPixelSnapshots(session, first.image);
+    static_cast<void>(advance(session));
+    require(pixel(retained.value(), 0, 0) == retainedPixel,
+            "pixel-only snapshots survive mutable canvas advancement");
+    require(bool(session.reset()), "reset pixel-only snapshot fixture");
+    session = AnimationDecodeSession{};
+    require(pixel(retained.value(), 0, 0) == retainedPixel,
+            "pixel-only snapshots outlive reset and decoder destruction");
 }
 void basic(const Bytes& encoded, Format format) {
     auto opened = Service{}.open_animation_decoder(memory_input(encoded));
@@ -232,6 +300,8 @@ void basic(const Bytes& encoded, Format format) {
     require(!interrupted && interrupted.error().code == ErrorCode::cancelled,
             "in-progress row/decode cancellation");
     require(!session.snapshot(), "interrupted canvas cannot be published");
+    require(!session.snapshot_pixels(kPremultipliedBgra8),
+            "interrupted canvas cannot publish pixel-only snapshots");
     require(bool(session.reset()) && bool(session.advance()), "cancelled session replay recovery");
 }
 void pngComposition() {
@@ -453,6 +523,39 @@ void webpComposition() {
     require(bool(session.reset()), "WebP reset");
     require(pixel(advance(session), 0, 0) == pixel(first, 0, 0), "WebP reset replay");
 }
+void metadataSnapshots() {
+    Document document;
+    document.canvas_width = 17;
+    document.canvas_height = 3;
+    document.loop_count = 0;
+    document.color.icc_profile = Bytes(4096, std::byte{7});
+    document.metadata.exif = {std::byte{'I'}, std::byte{'I'}, std::byte{42}, std::byte{},
+                              std::byte{8},   std::byte{},    std::byte{},   std::byte{},
+                              std::byte{},    std::byte{},    std::byte{},   std::byte{},
+                              std::byte{},    std::byte{}};
+    document.metadata.xmp = Bytes(256 * 1024, std::byte{'x'});
+    document.frames.push_back(solid(17, 3, {231, 47, 93, 129}));
+    document.frames.push_back(solid(17, 3, {27, 183, 211, 255}));
+    const auto encoded = encode(document, Format::webp);
+    auto opened = Service{}.open_animation_decoder(memory_input(encoded));
+    require(bool(opened), "open metadata-rich pixel snapshot fixture");
+    auto session = std::move(opened).value();
+    require(session.info().document.color.icc_profile == document.color.icc_profile &&
+                session.info().document.metadata.exif == document.metadata.exif &&
+                session.info().document.metadata.xmp == document.metadata.xmp,
+            "session retains immutable source color and metadata once");
+    const auto first = advance(session);
+    const auto value = pixel(first, 0, 0);
+    require(value[3] == 129 && value[0] <= value[3] && value[1] <= value[3] && value[2] <= value[3],
+            "pixel snapshots retain partial-alpha premultiplication");
+    static_cast<void>(advance(session));
+    session = AnimationDecodeSession{};
+    require(first.color.icc_profile == document.color.icc_profile &&
+                first.metadata.exif == document.metadata.exif &&
+                first.metadata.xmp == document.metadata.xmp,
+            "existing Frame snapshot still preserves independently owned source metadata");
+    pixelSnapshotLifetime(encoded);
+}
 void boundsAndTruncation() {
     std::vector<Bytes> fixtures;
     if (hasCodec(Format::gif))
@@ -497,15 +600,22 @@ void boundsAndTruncation() {
 int main() {
     if (hasCodec(Format::gif)) {
         basic(gifFixture(), Format::gif);
+        pixelSnapshotLifetime(gifFixture());
         gifMetadata();
         gifComposition();
     }
     if (hasCodec(Format::webp)) {
         basic(webpFixture(), Format::webp);
+        pixelSnapshotLifetime(webpFixture());
         webpComposition();
+        metadataSnapshots();
     }
-    if (hasCodec(Format::png))
+    if (hasCodec(Format::png)) {
         pngComposition();
+        pixelSnapshotLifetime(
+            apng({{png(17, 3, {231, 47, 93, 129})}, {png(17, 3, {27, 183, 211, 255})}}, false,
+                 false, 17, 3));
+    }
     boundsAndTruncation();
     std::cout << "Animation decoder tests passed\n";
 }
