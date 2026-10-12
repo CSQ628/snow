@@ -246,8 +246,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("api_configuration/custom_models"), QJsonArray(),
      ConfigurationValueKind::Structured},
 #endif
-    {QStringLiteral("storage/schema_version"), 3, ConfigurationValueKind::Integer,
-     ConfigurationIntegerRange{3, 3, 1}},
+    {QStringLiteral("storage/schema_version"), 4, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{4, 4, 1}},
     {QStringLiteral("interface/theme_mode"),
      QStringLiteral("system"),
      ConfigurationValueKind::String,
@@ -1109,6 +1109,42 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("pin_to_screen_shortcuts/toggle_playback"),
+     QJsonArray{QStringLiteral("Space")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/next_frame"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/previous_frame"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/decrease_playback_speed"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/increase_playback_speed"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/reset_playback_speed"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("pin_to_screen_shortcuts/resize_window"),
      QJsonArray{QStringLiteral("M")},
      ConfigurationValueKind::StringList,
@@ -1530,7 +1566,13 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("follow_mouse_movement"), QStringLiteral("follow_mouse_position")}},
-    {QStringLiteral("screenshot/auto_save_after_copy"), false, ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot/auto_save_after_execution_actions"),
+     QJsonArray{},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {QStringLiteral("copy_screenshot"), QStringLiteral("copy_scrolling_screenshot"),
+      QStringLiteral("copy_pinned_image"), QStringLiteral("capture_focused_window"),
+      QStringLiteral("capture_current_monitor"), QStringLiteral("pin_to_screen")}},
     {QStringLiteral("screenshot/copy_image_file_to_clipboard"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot/image_save_directory"),
@@ -2688,6 +2730,23 @@ bool ConfigurationSchema::parseIntegerVersion(const QJsonValue& value, int* vers
         *version = value.toInt();
     }
     return true;
+}
+
+QMap<QString, QJsonValue>
+ConfigurationSchema::migrateLegacyValues(QMap<QString, QJsonValue> values) {
+    const QJsonValue legacy = values.take(QStringLiteral("screenshot/auto_save_after_copy"));
+    const QString actionsKey = QStringLiteral("screenshot/auto_save_after_execution_actions");
+    if (!values.contains(actionsKey) && legacy.isBool()) {
+        QJsonArray actions;
+        if (legacy.toBool()) {
+            actions = {
+                QStringLiteral("copy_screenshot"), QStringLiteral("copy_scrolling_screenshot"),
+                QStringLiteral("copy_pinned_image"), QStringLiteral("capture_focused_window"),
+                QStringLiteral("capture_current_monitor")};
+        }
+        values.insert(actionsKey, actions);
+    }
+    return values;
 }
 
 int ConfigurationSchema::currentVersion() {

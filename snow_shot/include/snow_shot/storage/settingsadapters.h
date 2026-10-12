@@ -253,8 +253,9 @@ class ScreenshotSettings final {
     bool setQuickSelectionModification(bool enabled) const;
     [[nodiscard]] QString selectionResizeMode() const;
     bool setSelectionResizeMode(const QString& mode) const;
-    [[nodiscard]] bool autoSaveAfterCopy() const;
-    bool setAutoSaveAfterCopy(bool enabled) const;
+    [[nodiscard]] QStringList autoSaveAfterExecutionActions() const;
+    bool setAutoSaveAfterExecutionActions(const QStringList& actions) const;
+    [[nodiscard]] bool autoSaveAfterExecution(const QString& action) const;
     [[nodiscard]] bool copyImageFileToClipboard() const;
     bool setCopyImageFileToClipboard(bool enabled) const;
     [[nodiscard]] QString imageSaveDirectory() const;
@@ -356,6 +357,7 @@ class DrawingShortcutSettings final {
 
 class PinToScreenShortcutSettings final {
   public:
+    [[nodiscard]] static bool actionsMayConflict(const QString& first, const QString& second);
     [[nodiscard]] shortcuts::ShortcutBindingList shortcuts(const QString& actionId) const;
     bool setShortcuts(const QString& actionId,
                       const shortcuts::ShortcutBindingList& bindings) const;

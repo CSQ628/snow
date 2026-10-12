@@ -1341,16 +1341,16 @@
             <translation>Auto resize window</translation>
         </message>
         <message>
-            <source>Auto save after copy</source>
-            <translation>Auto save after copy</translation>
-        </message>
-        <message>
             <source>Auto start at boot</source>
             <translation>Auto start at boot</translation>
         </message>
         <message>
             <source>Auto-recognize QR Code</source>
             <translation>Auto-recognize QR Code</translation>
+        </message>
+        <message>
+            <source>Auto-save after execution</source>
+            <translation>Auto-save after execution</translation>
         </message>
         <message>
             <source>Auto-save image filename format</source>
@@ -1701,6 +1701,10 @@
             <translation>Choose whether network requests use the system proxy</translation>
         </message>
         <message>
+            <source>Choose which actions also save an image in the selected image format and save directory</source>
+            <translation>Choose which actions also save an image in the selected image format and save directory</translation>
+        </message>
+        <message>
             <source>Clear</source>
             <translation>Clear</translation>
         </message>
@@ -1845,6 +1849,14 @@
             <translation>Copy color</translation>
         </message>
         <message>
+            <source>Copy current monitor</source>
+            <translation>Copy current monitor</translation>
+        </message>
+        <message>
+            <source>Copy focused window</source>
+            <translation>Copy focused window</translation>
+        </message>
+        <message>
             <source>Copy image file to clipboard</source>
             <translation>Copy image file to clipboard</translation>
         </message>
@@ -1853,12 +1865,20 @@
             <translation>Copy original content</translation>
         </message>
         <message>
+            <source>Copy pinned window</source>
+            <translation>Copy pinned window</translation>
+        </message>
+        <message>
             <source>Copy recording</source>
             <translation>Copy recording</translation>
         </message>
         <message>
             <source>Copy screenshot</source>
             <translation>Copy screenshot</translation>
+        </message>
+        <message>
+            <source>Copy scrolling screenshot</source>
+            <translation>Copy scrolling screenshot</translation>
         </message>
         <message>
             <source>Copy text</source>
@@ -1983,6 +2003,10 @@
         <message>
             <source>Decrease scale by 10%</source>
             <translation>Decrease scale by 10%</translation>
+        </message>
+        <message>
+            <source>Decrease speed</source>
+            <translation>Decrease speed</translation>
         </message>
         <message>
             <source>Default</source>
@@ -2517,6 +2541,10 @@
             <translation>Increase scale by 10%</translation>
         </message>
         <message>
+            <source>Increase speed</source>
+            <translation>Increase speed</translation>
+        </message>
+        <message>
             <source>Input Monitoring</source>
             <translation>Input Monitoring</translation>
         </message>
@@ -2821,6 +2849,10 @@
             <translation>Network proxy</translation>
         </message>
         <message>
+            <source>Next frame</source>
+            <translation>Next frame</translation>
+        </message>
+        <message>
             <source>Next screenshot history</source>
             <translation>Next screenshot history</translation>
         </message>
@@ -2989,6 +3021,10 @@
             <translation>Pin images, image files, formatted text, or HTML from the clipboard to the screen</translation>
         </message>
         <message>
+            <source>Pin screenshot to screen</source>
+            <translation>Pin screenshot to screen</translation>
+        </message>
+        <message>
             <source>Pin selected image files from File Explorer or the desktop to the screen</source>
             <translation>Pin selected image files from File Explorer or the desktop to the screen</translation>
         </message>
@@ -3073,6 +3109,10 @@
             <translation>Pinned-window shortcuts</translation>
         </message>
         <message>
+            <source>Play / Pause</source>
+            <translation>Play / Pause</translation>
+        </message>
+        <message>
             <source>Play a shutter sound when capturing the focused window or current display.</source>
             <translation>Play a shutter sound when capturing the focused window or current display.</translation>
         </message>
@@ -3103,6 +3143,10 @@
         <message>
             <source>Preview window groups, then release the shortcut keys to switch</source>
             <translation>Preview window groups, then release the shortcut keys to switch</translation>
+        </message>
+        <message>
+            <source>Previous frame</source>
+            <translation>Previous frame</translation>
         </message>
         <message>
             <source>Previous screenshot history</source>
@@ -3287,6 +3331,10 @@
         <message>
             <source>Reset canvas</source>
             <translation>Reset canvas</translation>
+        </message>
+        <message>
+            <source>Reset speed</source>
+            <translation>Reset speed</translation>
         </message>
         <message>
             <source>Reset transform</source>
@@ -3559,6 +3607,10 @@
         <message>
             <source>Select previously selected area</source>
             <translation>Select previously selected area</translation>
+        </message>
+        <message>
+            <source>Select scenarios</source>
+            <translation>Select scenarios</translation>
         </message>
         <message>
             <source>Select skin image</source>
@@ -4371,10 +4423,6 @@
         <message>
             <source>WebP</source>
             <translation>WebP</translation>
-        </message>
-        <message>
-            <source>When copying an image to the clipboard, also save it in the selected image format and save directory</source>
-            <translation>When copying an image to the clipboard, also save it in the selected image format and save directory</translation>
         </message>
         <message>
             <source>When pinning duplicate content</source>

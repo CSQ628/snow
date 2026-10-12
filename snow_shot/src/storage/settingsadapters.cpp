@@ -125,6 +125,12 @@ const QStringList& pinToScreenShortcutActionIds() {
         QStringLiteral("show_text_recognition_results"),
         QStringLiteral("drawing_mode"),
         QStringLiteral("resize_window"),
+        QStringLiteral("toggle_playback"),
+        QStringLiteral("next_frame"),
+        QStringLiteral("previous_frame"),
+        QStringLiteral("decrease_playback_speed"),
+        QStringLiteral("increase_playback_speed"),
+        QStringLiteral("reset_playback_speed"),
         QStringLiteral("thumbnail_mode"),
         QStringLiteral("hide_to_top"),
         QStringLiteral("toggle_click_through"),
@@ -996,12 +1002,18 @@ bool ScreenshotSettings::setSelectionResizeMode(const QString& mode) const {
     return cache().setValue(QStringLiteral("screenshot/selection_resize_mode"), mode);
 }
 
-bool ScreenshotSettings::autoSaveAfterCopy() const {
-    return cache().value(QStringLiteral("screenshot/auto_save_after_copy")).toBool();
+QStringList ScreenshotSettings::autoSaveAfterExecutionActions() const {
+    return stringList(
+        cache().value(QStringLiteral("screenshot/auto_save_after_execution_actions")));
 }
 
-bool ScreenshotSettings::setAutoSaveAfterCopy(bool enabled) const {
-    return cache().setValue(QStringLiteral("screenshot/auto_save_after_copy"), enabled);
+bool ScreenshotSettings::setAutoSaveAfterExecutionActions(const QStringList& actions) const {
+    return cache().setValue(QStringLiteral("screenshot/auto_save_after_execution_actions"),
+                            stringArray(actions));
+}
+
+bool ScreenshotSettings::autoSaveAfterExecution(const QString& action) const {
+    return autoSaveAfterExecutionActions().contains(action);
 }
 
 bool ScreenshotSettings::copyImageFileToClipboard() const {
@@ -1321,7 +1333,7 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
             if (!affectedGroups.contains(group.prefix)) {
                 continue;
             }
-            shortcuts::ShortcutBindingList seen;
+            QList<std::pair<QString, shortcuts::ShortcutBinding>> seen;
             for (const QString& id : group.ids) {
                 const QString key = group.prefix + id;
                 const auto value = normalizedValues.contains(key) ? normalizedValues.value(key)
@@ -1340,12 +1352,18 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
                         !ScreenshotShortcutSettings::isReservedShortcutAllowed(id, binding)) {
                         return false;
                     }
-                    if (std::any_of(seen.cbegin(), seen.cend(), [&binding](const auto& existing) {
-                            return shortcuts::bindingsConflict(existing, binding);
-                        })) {
+                    if (std::any_of(seen.cbegin(), seen.cend(),
+                                    [&binding, &id, &group](const auto& existing) {
+                                        return (group.prefix !=
+                                                    QStringLiteral("pin_to_screen_shortcuts/") ||
+                                                PinToScreenShortcutSettings::actionsMayConflict(
+                                                    existing.first, id)) &&
+                                               shortcuts::bindingsConflict(existing.second,
+                                                                           binding);
+                                    })) {
                         return false;
                     }
-                    seen.push_back(binding);
+                    seen.push_back({id, binding});
                 }
             }
         }
@@ -1453,6 +1471,20 @@ shortcuts::ShortcutBindingList
 PinToScreenShortcutSettings::shortcuts(const QString& actionId) const {
     const QString key = pinToScreenShortcutKey(actionId);
     return key.isEmpty() ? shortcuts::ShortcutBindingList{} : shortcutValue(key);
+}
+
+bool PinToScreenShortcutSettings::actionsMayConflict(const QString& first, const QString& second) {
+    const auto animation = [](const QString& id) {
+        return id == QStringLiteral("toggle_playback") || id == QStringLiteral("next_frame") ||
+               id == QStringLiteral("previous_frame") ||
+               id.endsWith(QStringLiteral("playback_speed"));
+    };
+    const auto staticContent = [](const QString& id) {
+        return id == QStringLiteral("drawing_mode") || id == QStringLiteral("resize_window") ||
+               id == QStringLiteral("show_text_recognition_results");
+    };
+    return !((animation(first) && staticContent(second)) ||
+             (animation(second) && staticContent(first)));
 }
 
 bool PinToScreenShortcutSettings::setShortcuts(

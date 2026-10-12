@@ -1290,15 +1290,34 @@ SettingsItemDefinition screenshotSaveAsFileDialogItem() {
           settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Snow Shot"))}});
 }
 
-SettingsItemDefinition screenshotAutoSaveAfterCopyItem() {
-    return switchItem(
-        QStringLiteral("screenshot.auto-save-after-copy"),
-        QT_TRANSLATE_NOOP("SettingsCatalog", "Auto save after copy"),
-        QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "When copying an image to the clipboard, also save it in the "
-                          "selected image format and save directory"),
-        QStringLiteral("screenshot/auto_save_after_copy"),
-        SettingsSwitchBinding::ScreenshotAutoSaveAfterCopy);
+SettingsItemDefinition screenshotAutoSaveAfterExecutionItem() {
+    SettingsMultiSelectDefinition payload;
+    payload.binding = SettingsMultiSelectBinding::ScreenshotAutoSaveAfterExecution;
+    payload.placeholder = settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Select scenarios"));
+    payload.options = {
+        {QStringLiteral("copy_screenshot"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Copy screenshot"))},
+        {QStringLiteral("copy_scrolling_screenshot"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Copy scrolling screenshot"))},
+        {QStringLiteral("copy_pinned_image"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Copy pinned window"))},
+        {QStringLiteral("capture_current_monitor"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Copy current monitor"))},
+        {QStringLiteral("capture_focused_window"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Copy focused window"))},
+        {QStringLiteral("pin_to_screen"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Pin screenshot to screen"))},
+    };
+    return {
+        QStringLiteral("screenshot.auto-save-after-execution"),
+        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Auto-save after execution")),
+        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
+                                       "Choose which actions also save an image in the "
+                                       "selected image format and save directory")),
+        {},
+        QStringLiteral("screenshot/auto_save_after_execution_actions"),
+        std::move(payload),
+    };
 }
 
 SettingsItemDefinition screenshotCopyFileItem() {
@@ -1313,7 +1332,7 @@ SettingsItemDefinition screenshotCopyFileItem() {
 
 QVector<SettingsItemDefinition> screenshotOutputItems() {
     return {
-        screenshotAutoSaveAfterCopyItem(),
+        screenshotAutoSaveAfterExecutionItem(),
         screenshotCopyFileItem(),
         screenshotSaveAsFileDialogItem(),
         directoryPathItem(
@@ -2416,6 +2435,28 @@ QVector<SettingsItemDefinition> pinToScreenShortcutItems() {
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen, QStringLiteral("drawing_mode"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Annotation mode"),
                           []() { return outlined_icons::Edit(); }),
+        localShortcutItem(SettingsLocalShortcutScope::PinToScreen,
+                          QStringLiteral("toggle_playback"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Play / Pause"),
+                          []() { return outlined_icons::CaretRight(); }),
+        localShortcutItem(SettingsLocalShortcutScope::PinToScreen, QStringLiteral("next_frame"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Next frame"),
+                          []() { return outlined_icons::Right(); }),
+        localShortcutItem(SettingsLocalShortcutScope::PinToScreen, QStringLiteral("previous_frame"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Previous frame"),
+                          []() { return outlined_icons::Left(); }),
+        localShortcutItem(SettingsLocalShortcutScope::PinToScreen,
+                          QStringLiteral("decrease_playback_speed"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Decrease speed"),
+                          []() { return outlined_icons::Minus(); }),
+        localShortcutItem(SettingsLocalShortcutScope::PinToScreen,
+                          QStringLiteral("increase_playback_speed"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Increase speed"),
+                          []() { return outlined_icons::Plus(); }),
+        localShortcutItem(SettingsLocalShortcutScope::PinToScreen,
+                          QStringLiteral("reset_playback_speed"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Reset speed"),
+                          []() { return outlined_icons::Reload(); }),
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen, QStringLiteral("resize_window"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Resize window"),
                           []() { return custom_outlined_icons::ToolMove(); }),
@@ -4756,9 +4797,6 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSwitchBinding::TrayEnabled:
                         expectedKey = QStringLiteral("tray/enabled");
                         break;
-                    case SettingsSwitchBinding::ScreenshotAutoSaveAfterCopy:
-                        expectedKey = QStringLiteral("screenshot/auto_save_after_copy");
-                        break;
                     case SettingsSwitchBinding::ScreenshotQuickSelectionModification:
                         expectedKey = QStringLiteral("screenshot/quick_selection_modification");
                         break;
@@ -4883,11 +4921,19 @@ QStringList SettingsCatalog::validationErrors() const {
                 }
                 if (const auto* multi =
                         std::get_if<SettingsMultiSelectDefinition>(&itemDefinition.payload)) {
-                    const QString expectedKey =
-                        multi->binding ==
-                                SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools
-                            ? QStringLiteral("drawing/quick_selection_disabled_tools")
-                            : QString();
+                    QString expectedKey;
+                    switch (multi->binding) {
+                    case SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools:
+                        expectedKey = QStringLiteral("drawing/quick_selection_disabled_tools");
+                        break;
+                    case SettingsMultiSelectBinding::TrayMenuOptions:
+                        expectedKey = QStringLiteral("tray/menu_options");
+                        break;
+                    case SettingsMultiSelectBinding::ScreenshotAutoSaveAfterExecution:
+                        expectedKey =
+                            QStringLiteral("screenshot/auto_save_after_execution_actions");
+                        break;
+                    }
                     QSet<QString> configuredValues;
                     for (const SettingsOptionDefinition& option : multi->options) {
                         configuredValues.insert(option.value.toString());

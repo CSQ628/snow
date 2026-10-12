@@ -737,6 +737,7 @@ void ScreenshotPinnedEditController::updatePlacement() {
     const QPointer<ScreenshotPinnedEditController> guard(this);
     const QPointer<ScreenshotFloatingToolPaletteWindow> toolbar(m_toolbarWindow);
     m_updatingPlacement = true;
+    // The callback may delete this controller, so cleanup must not retain a member reference.
     const auto updatingPlacement = qScopeGuard([guard] {
         if (guard != nullptr) {
             guard->m_updatingPlacement = false;

@@ -473,6 +473,7 @@ if(NOT TARGET snow_image::snow_image)
     set(SNOW_IMAGE_BUILD_STATIC ON CACHE BOOL "Build the static snow_image library." FORCE)
     set(SNOW_IMAGE_CODEC_PNG ON CACHE BOOL "Enable the libpng codec." FORCE)
     set(SNOW_IMAGE_CODEC_JPEG ON CACHE BOOL "Enable the libjpeg-turbo codec." FORCE)
+    set(SNOW_IMAGE_CODEC_GIF ON CACHE BOOL "Enable the giflib codec." FORCE)
     set(SNOW_IMAGE_CODEC_HEIF ON CACHE BOOL "Enable HEIF and AVIF codecs." FORCE)
     set(SNOW_IMAGE_CODEC_JXL ON CACHE BOOL "Enable JPEG XL codecs." FORCE)
     set(SNOW_IMAGE_CODEC_WEBP ON CACHE BOOL "Enable WebP codecs." FORCE)
@@ -489,6 +490,7 @@ endif()
 set(SNOW_SHOT_IMAGE_CODEC_BACKEND_SOURCES
     src/image/snowimagecodecbridge.h
     src/image/snowimagecodecbackend.cpp
+    src/image/snowimageanimationbackend.cpp
 )
 if(SNOW_SHOT_RELEASE_STATIC AND SNOW_SHOT_QT_STATIC)
     set(SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC ON CACHE INTERNAL
@@ -543,6 +545,7 @@ set_target_properties(snow_shot_image_codec_backend PROPERTIES
 set(SNOW_SHOT_IMAGE_CODEC_SOURCES
     src/image/snowimageqtcodec.h
     src/image/snowimageqtcodec.cpp
+    src/image/snowimageanimationqt.cpp
     src/image/snowimageqtsrgbrowreader.h
     src/image/screenshotimageencoding.cpp
 )
@@ -560,6 +563,14 @@ target_link_libraries(snow_shot_image_codec PUBLIC
     Qt6::Gui
 )
 target_compile_features(snow_shot_image_codec PUBLIC cxx_std_20)
+add_library(snow_shot_animation_playback STATIC
+    include/snow_shot/presentation/screenshotanimationplayback.h
+    src/presentation/services/screenshotanimationplayback.cpp
+    src/presentation/services/screenshotpresentationframescheduler.cpp)
+target_include_directories(snow_shot_animation_playback PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(snow_shot_animation_playback PUBLIC
+    Qt6::Widgets snow_shot_image_codec snow_canvas_image)
+target_compile_features(snow_shot_animation_playback PUBLIC cxx_std_20)
 if(APPLE)
     target_link_libraries(snow_shot_macos_clipboard PRIVATE snow_shot_image_codec)
 endif()
@@ -1602,6 +1613,7 @@ if(WIN32)
     )
 endif()
 target_link_libraries(snow_shot PRIVATE
+    snow_shot_animation_playback
     snow_shot_memory_optimization
     snow_shot_crash_bridge
     snow_shot_image_codec
@@ -1939,6 +1951,11 @@ if(SNOW_SHOT_BUILD_TESTS)
             -DTEST_COMMAND=$<TARGET_FILE:snow-shot-application-storage-tests>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_flaky_test_with_retry.cmake
     )
+    add_test(NAME snow-shot-auto-save-execution-storage-tests
+        COMMAND snow-shot-application-storage-tests --auto-save-after-execution-only)
+    set_tests_properties(snow-shot-auto-save-execution-storage-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-storage-quit-lifetime-tests
         COMMAND snow-shot-application-storage-tests --quit-lifetime-only)
     add_test(NAME snow-shot-draw-template-storage-tests
@@ -2739,6 +2756,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-configuration-archive-tests
              COMMAND snow-shot-configuration-archive-tests)
+    add_test(NAME snow-shot-auto-save-execution-archive-tests
+        COMMAND snow-shot-configuration-archive-tests --auto-save-after-execution-only)
+    set_tests_properties(snow-shot-auto-save-execution-archive-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-selection-aspect-ratio-archive-tests
         COMMAND snow-shot-configuration-archive-tests --selection-aspect-ratio-only)
     set_tests_properties(snow-shot-selection-aspect-ratio-archive-tests PROPERTIES LABELS "unit"
@@ -4091,6 +4113,14 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-overlay-boundary-input-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-boundary-input -platform offscreen)
     set_tests_properties(snow-shot-overlay-boundary-input-tests PROPERTIES LABELS "unit")
+    add_test(NAME snow-shot-overlay-backing-store-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-backing-store-only -platform offscreen)
+    add_test(NAME snow-shot-overlay-backing-store-dpr2-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-backing-store-only -platform offscreen)
+    set_tests_properties(snow-shot-overlay-backing-store-tests
+        snow-shot-overlay-backing-store-dpr2-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    set_tests_properties(snow-shot-overlay-backing-store-dpr2-tests PROPERTIES
+        ENVIRONMENT "QT_SCALE_FACTOR=2")
     if(APPLE)
         target_sources(snow-shot-screenshot-canvas-renderer-tests PRIVATE
             ../cmake/test-support/macos_native_input.mm)
@@ -4354,6 +4384,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         SNOW_SHOT_TEST_PINNED_TRANSLATION=1
     )
     target_link_libraries(snow-shot-pinned-window-tests PRIVATE
+        snow_shot_animation_playback
         snow_shot_translation
         adqt_icon_core
         ant_design_icons_qt
@@ -5177,6 +5208,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_link_libraries(snow-shot-export-artifact-tests PRIVATE user32)
     endif()
     add_test(NAME snow-shot-export-artifact-tests COMMAND snow-shot-export-artifact-tests)
+    add_test(NAME snow-shot-configured-save-directory-tests
+        COMMAND snow-shot-export-artifact-tests --configured-directory-only)
+    set_tests_properties(snow-shot-configured-save-directory-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-pinned-export-lifetime-tests
         COMMAND snow-shot-export-artifact-tests --pinned-lifetime-only)
     set_tests_properties(snow-shot-pinned-export-lifetime-tests PROPERTIES
@@ -5261,6 +5297,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-pinned-recognition-save-tests PROPERTIES LABELS "unit" TIMEOUT 90)
     add_test(NAME snow-shot-pinned-shared-image-export-tests
         COMMAND snow-shot-pinned-window-tests --shared-image-export-only -platform offscreen)
+    add_test(NAME snow-shot-pin-execution-autosave-tests
+        COMMAND snow-shot-pinned-window-tests --pin-execution-autosave-only -platform offscreen)
+    set_tests_properties(snow-shot-pin-execution-autosave-tests PROPERTIES
+        LABELS "unit" TIMEOUT 90
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-pinned-shared-image-export-tests PROPERTIES
         LABELS "unit" TIMEOUT 90
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -6170,6 +6211,12 @@ if(SNOW_SHOT_BUILD_TESTS)
             LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 60)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-color-picker-lifecycle-tests)
+    add_test(NAME snow-shot-overlay-reveal-tests
+        COMMAND snow-shot-color-picker-lifecycle-tests --overlay-reveal-only -platform offscreen)
+    set_tests_properties(snow-shot-overlay-reveal-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-color-picker-lifecycle-tests
         COMMAND snow-shot-color-picker-lifecycle-tests)
     add_test(NAME snow-shot-toolbar-picker-hover-tests
@@ -6247,7 +6294,63 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-presentation-frame-scheduler-tests PROPERTIES
         LABELS "unit" TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_executable(snow-shot-animation-codec-tests tests/animation_codec_tests.cpp)
+    target_include_directories(snow-shot-animation-codec-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(snow-shot-animation-codec-tests PRIVATE snow_shot_image_codec)
+    snow_shot_import_offscreen_platform(snow-shot-animation-codec-tests)
+    add_test(NAME snow-shot-animation-codec-tests
+        COMMAND snow-shot-animation-codec-tests -platform offscreen)
+    set_tests_properties(snow-shot-animation-codec-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+
+    # Exercise the in-executable codec ABI with static Qt, including Qt builds
+    # that provide bundled libpng. APNG must use only the ordinary PNG API.
+    add_library(snow_shot_animation_static_backend STATIC ${SNOW_SHOT_IMAGE_CODEC_BACKEND_SOURCES})
+    target_include_directories(snow_shot_animation_static_backend PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
+    target_compile_definitions(snow_shot_animation_static_backend PUBLIC
+        SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC=1)
+    target_link_libraries(snow_shot_animation_static_backend PRIVATE
+        snow_pixel_buffer snow_image::snow_image_static)
+    target_compile_features(snow_shot_animation_static_backend PUBLIC cxx_std_20)
+    set_target_properties(snow_shot_animation_static_backend PROPERTIES
+        AUTOMOC OFF AUTORCC OFF AUTOUIC OFF)
+    add_library(snow_shot_animation_static_qt_codec STATIC ${SNOW_SHOT_IMAGE_CODEC_SOURCES})
+    target_include_directories(snow_shot_animation_static_qt_codec PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src/image"
+        "${SNOW_SHOT_SNOW_IMAGE_DIR}/include")
+    target_link_libraries(snow_shot_animation_static_qt_codec PUBLIC
+        snow_shot_animation_static_backend snow_canvas_image Qt6::Core Qt6::Gui)
+    target_compile_features(snow_shot_animation_static_qt_codec PUBLIC cxx_std_20)
+    add_executable(snow-shot-animation-static-codec-tests tests/animation_codec_tests.cpp)
+    target_include_directories(snow-shot-animation-static-codec-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(snow-shot-animation-static-codec-tests PRIVATE
+        snow_shot_animation_static_qt_codec)
+    snow_shot_import_offscreen_platform(snow-shot-animation-static-codec-tests)
+    add_test(NAME snow-shot-animation-static-codec-tests
+        COMMAND snow-shot-animation-static-codec-tests -platform offscreen)
+    set_tests_properties(snow-shot-animation-static-codec-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    if(WIN32 AND NOT SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC)
+        add_custom_command(TARGET snow-shot-animation-static-codec-tests POST_BUILD
+            COMMAND "${CMAKE_COMMAND}"
+                "-DSNOW_RUNTIME_ROOT_LIBRARY=$<TARGET_FILE:snow-shot-animation-static-codec-tests>"
+                "-DSNOW_RUNTIME_DESTINATION=$<TARGET_FILE_DIR:snow-shot-animation-static-codec-tests>"
+                "-DSNOW_RUNTIME_SEARCH_DIRECTORY=${_SNOW_SHOT_IMAGE_RUNTIME_SEARCH_DIRECTORY}"
+                -P "${_SNOW_SHOT_IMAGE_RUNTIME_STAGING_SCRIPT}"
+            COMMENT "Staging static animation codec test runtime dependencies" VERBATIM)
+    endif()
+
+    add_executable(snow-shot-animation-playback-tests tests/screenshot_animation_playback_tests.cpp)
+    target_link_libraries(snow-shot-animation-playback-tests PRIVATE snow_shot_animation_playback)
+    snow_shot_import_offscreen_platform(snow-shot-animation-playback-tests)
+    add_test(NAME snow-shot-animation-playback-tests
+        COMMAND snow-shot-animation-playback-tests -platform offscreen)
+    set_tests_properties(snow-shot-animation-playback-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     if(SNOW_SHOT_BUILD_BENCHMARKS)
+        add_executable(snow-shot-animation-playback-benchmark
+            tests/screenshot_animation_playback_performance_benchmark.cpp)
+        target_link_libraries(snow-shot-animation-playback-benchmark PRIVATE snow_shot_animation_playback)
+        snow_shot_import_offscreen_platform(snow-shot-animation-playback-benchmark)
         add_executable(snow-shot-presentation-frame-scheduler-benchmark
             tests/screenshot_presentation_frame_scheduler_performance_benchmark.cpp
             src/presentation/services/screenshotpresentationframescheduler.cpp)
@@ -6305,6 +6408,15 @@ if(SNOW_SHOT_BUILD_TESTS)
         SNOW_TEST_CROSS_PLATFORM TRUE ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(SNOW_SHOT_BUILD_BENCHMARKS)
+        if(APPLE)
+            # Opt-in native startup timing; intentionally not registered with CTest.
+            add_executable(snow-shot-backing-store-startup-benchmark
+                tests/screenshot_backing_store_startup_performance_benchmark.cpp)
+            target_include_directories(snow-shot-backing-store-startup-benchmark PRIVATE
+                "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+            target_link_libraries(snow-shot-backing-store-startup-benchmark PRIVATE
+                snow-shot-selection-presentation-runtime snow_capture_c)
+        endif()
         add_executable(snow-shot-selection-presentation-benchmark
             tests/screenshot_selection_presentation_performance_benchmark.cpp)
         target_link_libraries(snow-shot-selection-presentation-benchmark PRIVATE
@@ -8605,6 +8717,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         "${CMAKE_CURRENT_SOURCE_DIR}/../snow_draw_engine_qt/crates/snow-draw-engine-c/include"
     )
     target_link_libraries(snow-shot-file-pin-batch-performance-benchmark PRIVATE
+        snow_shot_animation_playback
         ${SNOW_SELECTED_FILES_LIBRARIES}
         snow_shot_translation
         adqt_icon_core
@@ -10206,6 +10319,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         set_tests_properties(snow-shot-mcp-media-clipboard-tests PROPERTIES TIMEOUT 120
             LABELS "unit" RUN_SERIAL TRUE ENVIRONMENT "${_snow_clipboard_qpa_environment}"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        add_test(NAME snow-shot-mcp-animation-tests
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/mcp_application_fixture_tests.py"
+                "$<TARGET_FILE:snow_shot_mcp>" "$<TARGET_FILE:snow_shot>" --animation-only)
+        set_tests_properties(snow-shot-mcp-animation-tests PROPERTIES TIMEOUT 120
+            LABELS "unit" RUN_SERIAL TRUE ENVIRONMENT "${_snow_clipboard_qpa_environment}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
 
     if(APPLE)
@@ -10536,8 +10655,8 @@ add_library(snow_shot_original_image_preview STATIC
     src/presentation/ocr/screenshotoriginalimagepreviewwindow.cpp
     src/presentation/overlay/screenshotimagerendering.cpp)
 target_include_directories(snow_shot_original_image_preview PUBLIC include)
-target_link_libraries(snow_shot_original_image_preview PUBLIC Qt6::Widgets
-    PRIVATE snow_canvas_image adqt::dpi_window)
+target_link_libraries(snow_shot_original_image_preview PUBLIC Qt6::Widgets snow_canvas_image
+    PRIVATE adqt::dpi_window)
 snow_shot_link_macos_window_platform(snow_shot_original_image_preview)
 if(WIN32)
     target_link_libraries(snow_shot_original_image_preview PRIVATE user32 gdi32)
@@ -10561,6 +10680,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-original-image-preview-tests -platform offscreen)
     set_tests_properties(snow-shot-original-image-preview-tests PROPERTIES LABELS "unit"
         TIMEOUT 60 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-original-image-preview-mixed-dpi-tests
+        COMMAND snow-shot-original-image-preview-tests --mixed-dpi-only
+            -platform offscreen:configfile=original_image_preview_mixed_dpi_screens.json)
+    set_tests_properties(snow-shot-original-image-preview-mixed-dpi-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(APPLE)
         set_source_files_properties(tests/screenshot_original_image_preview_tests.cpp
             PROPERTIES LANGUAGE OBJCXX)
@@ -11043,6 +11168,9 @@ if(TARGET snow-shot-configuration-archive-tests)
     set_tests_properties(snow-shot-recognition-model-settings-tests PROPERTIES LABELS "unit" TIMEOUT 60)
 endif()
 if(TARGET snow-shot-pinned-window-tests)
+    add_test(NAME snow-shot-pinned-animation-tests
+        COMMAND snow-shot-pinned-window-tests --animation-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-animation-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-pinned-recognition-models-tests
         COMMAND snow-shot-pinned-window-tests --recognition-models-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-recognition-models-tests PROPERTIES LABELS "unit" TIMEOUT 60)
