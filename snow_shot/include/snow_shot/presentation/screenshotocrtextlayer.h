@@ -15,7 +15,7 @@
 #include <memory>
 #include <vector>
 
-class QGraphicsScene;
+class ScreenshotOcrGraphicsScene;
 class ScreenshotOcrGraphicsTextItem;
 class ScreenshotOcrGlyphRasterCache;
 class ScreenshotOcrSelectionPreviewItem;
@@ -31,6 +31,7 @@ class ScreenshotOcrTextLayer final : public QGraphicsView {
     void setPresentation(std::shared_ptr<ScreenshotOcrPresentation> presentation,
                          RenderingMode mode = RenderingMode::Normal);
     void clearPresentation();
+    void setTextHighlighting(bool enabled, const QColor& maskColor);
     [[nodiscard]] QColor textColor() const {
         return m_textColor;
     }
@@ -91,12 +92,16 @@ class ScreenshotOcrTextLayer final : public QGraphicsView {
     void flushSelectionPreviewDamage();
     void invalidateSelectionRegion(const QRegion& damage);
     void refreshTextAppearance();
+    void updateTextHighlighting();
 
-    QGraphicsScene* m_scene = nullptr;
+    ScreenshotOcrGraphicsScene* m_scene = nullptr;
     std::unique_ptr<ScreenshotOcrGlyphRasterCache> m_glyphRasterCache;
     std::shared_ptr<ScreenshotOcrPresentation> m_presentation;
     QColor m_textColor;
     QFont m_layoutFont;
+    QColor m_textHighlightColor = QColor(Qt::transparent);
+    QPainterPath m_textHighlightMask;
+    bool m_textHighlightGeometryDirty = true;
     RenderingMode m_renderingMode = RenderingMode::Normal;
     std::vector<TextItem> m_textItems;
     QTransform m_canvasToViewTransform;
