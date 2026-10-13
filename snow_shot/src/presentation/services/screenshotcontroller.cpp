@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/screenshotmanualsave.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/diagnostics/diagnostics.h"
@@ -1541,7 +1542,12 @@ bool ScreenshotController::Impl::ensureExportFeature() {
 #endif
             return providers;
         },
-        m_groupManager);
+        m_groupManager,
+        [controller = QPointer<ScreenshotController>(&owner)](
+            const QVector<ScreenshotPinnedImageSnapshot>& snapshots) {
+            if (controller)
+                emit controller->imageStitchingRequested(snapshots);
+        });
     m_exportService = std::move(exportService);
     exportUiServices->setRestoreFailureHandler([this]() {
         m_messages->error(QStringLiteral("restore-pinned"),
@@ -4437,7 +4443,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer ? QStringLiteral("service_destroyed")
+                                           : !printer         ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -4494,18 +4500,11 @@ void ScreenshotController::Impl::saveSelectionToFile() {
 
     const snow_shot::storage::ScreenshotSettings outputSettings;
     const ScreenshotPdfOptions pdf{screenshot_pdf::pageSizeForKey(outputSettings.pdfPageSize())};
-    const QString directory = ScreenshotImageFileService::saveDialogDirectory(
-        outputSettings.lastManualSaveDirectory(), outputSettings.imageSaveDirectory());
-    static_cast<void>(QDir().mkpath(directory));
-    const auto initialFormat =
-        ScreenshotImageFileService::formatForKey(outputSettings.lastManualSaveFormat());
-    const QString initialPath = QDir(directory).filePath(
-        ScreenshotImageFileService::suggestedBaseName(outputSettings.manualSaveFilenameFormat()) +
-        QStringLiteral(".") + ScreenshotImageFileService::extension(initialFormat));
-    QString selectedFilter = ScreenshotImageFileService::dialogFilter(initialFormat);
+    const auto defaults = screenshotManualSaveDefaults();
+    QString selectedFilter = defaults.selectedFilter;
     const QString selectedPath = QFileDialog::getSaveFileName(
         dialogOwner.data(), QCoreApplication::translate("ScreenshotController", "Save screenshot"),
-        initialPath, ScreenshotImageFileService::saveDialogFilter(), &selectedFilter);
+        defaults.initialPath, ScreenshotImageFileService::saveDialogFilter(), &selectedFilter);
     if (selectedPath.isEmpty()) {
         return;
     }
