@@ -1175,23 +1175,26 @@ void livePinnedImportsPreserveOrderAndFailures() {
     const QImage blue = image({420, 300}, Qt::blue);
     ScreenshotPinnedImageSnapshot last{ScreenshotExportSource::fromImage(blue), blue.size(),
                                        QStringLiteral("last")};
+    ScreenshotPinnedImageSnapshot rejected{
+        {}, {3, 2}, QStringLiteral("admission"), QStringLiteral("Capture admission rejected")};
     QStringList failures;
     QObject::connect(&window, &CollageWindow::importFinished, &window,
                      [&](const auto& errors) { failures = errors; });
     window.presentPinnedWindows(
-        {first, {{}, {}, QStringLiteral("missing")}, failed, oversized, last});
+        {first, {{}, {}, QStringLiteral("missing")}, failed, oversized, rejected, last});
     require(window.loading() && statusMessage(window) &&
-                statusMessage(window)->content() == QStringLiteral("Loading images: 1 of 5"),
+                statusMessage(window)->content() == QStringLiteral("Loading images: 1 of 6"),
             "live pinned images use existing import progress");
     waitUntil([&] { return !window.loading(); }, "live pinned image batch completes");
     const auto& items = window.document()->items();
     require(items.size() == 2 && items[0].image == frozen && items[1].image == blue &&
                 items[0].label.contains(QStringLiteral("first")) &&
-                items[1].label.contains(QStringLiteral("last")) && failures.size() == 3 &&
+                items[1].label.contains(QStringLiteral("last")) && failures.size() == 4 &&
                 failures[0].contains(QStringLiteral("missing")) &&
                 failures[1].contains(QStringLiteral("failed")) &&
-                failures[2].contains(QStringLiteral("oversized")) && oversizeRenders->load() == 0 &&
-                items[0].preview.size() == QSize(256, 128) &&
+                failures[2].contains(QStringLiteral("oversized")) &&
+                failures[3].contains(QStringLiteral("Capture admission rejected")) &&
+                oversizeRenders->load() == 0 && items[0].preview.size() == QSize(256, 128) &&
                 button(window, "collageCopy")->isEnabled(),
             "live imports retain owned pixels, selection order and previews while reporting "
             "failures and rejecting oversized renders");
@@ -1250,6 +1253,65 @@ void livePinnedImportsCancelAndRespectMemoryBudget() {
     require(failures.size() == 1 && window.document()->items().isEmpty() && renders->load() == 0,
             "live import reserves temporary memory before rendering");
     window.shutdown();
+}
+
+void livePinnedQueueReleasesCompletedSnapshotsAndAccountsForCancellation() {
+    const qint64 baseline = collageResourceUsage().reservedBytes;
+    const auto started = std::make_shared<std::atomic_bool>(false);
+    const auto release = std::make_shared<std::atomic_bool>(false);
+    const auto unblock = qScopeGuard([&] { release->store(true, std::memory_order_release); });
+    {
+        CollageWindow window;
+        auto owner = std::make_shared<int>(1);
+        const std::weak_ptr<int> completedLifetime = owner;
+        ScreenshotPinnedImageSnapshot first{
+            ScreenshotExportSource::fromProducer([owner](const auto&) {
+                Q_UNUSED(owner);
+                return image({3, 2});
+            }),
+            {3, 2},
+            QStringLiteral("completed")};
+        owner.reset();
+        ScreenshotPinnedImageSnapshot slow{
+            ScreenshotExportSource::fromProducer(
+                [started, release,
+                 pixels = captureCollageImage({8, 4}, [] { return image({8, 4}); })](const auto&) {
+                    started->store(true, std::memory_order_release);
+                    // Ignore cancellation until released: admission must remain attached to
+                    // pixels held by a worker after its window closes.
+                    while (!release->load(std::memory_order_acquire))
+                        QThread::msleep(1);
+                    return pixels;
+                }),
+            {8, 4},
+            QStringLiteral("worker")};
+        ScreenshotPinnedImageSnapshot queued{ScreenshotExportSource::fromImage(captureCollageImage(
+                                                 {96, 64}, [] { return image({96, 64}); })),
+                                             {96, 64},
+                                             QStringLiteral("queued")};
+        require(collageResourceUsage().reservedBytes == baseline + (8 * 4 + 96 * 64) * 4,
+                "queued captured rasters are admitted before the import worker starts");
+        window.presentPinnedWindows({first, slow, queued});
+        first = {};
+        slow = {};
+        queued = {};
+        waitUntil([&] { return started->load(std::memory_order_acquire); },
+                  "the second snapshot waits at the worker barrier");
+        waitUntil([&] { return completedLifetime.expired(); },
+                  "completed sources retire before the remaining import batch finishes");
+        require(window.document()->items().size() == 1 && window.loading(),
+                "retiring completed sources preserves their imported document image");
+        window.shutdown();
+        require(collageResourceUsage().reservedBytes >= baseline + 8 * 4 * 4 &&
+                    collageResourceUsage().reservedBytes < baseline + 96 * 64 * 4,
+                "closure releases queued captures while accounting for the still-running worker");
+        release->store(true, std::memory_order_release);
+        waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
+                  "the cancelled snapshot worker retires");
+        flushEvents();
+    }
+    waitUntil([&] { return collageResourceUsage().reservedBytes == baseline; },
+              "closing the window and retiring the worker releases every captured raster");
 }
 
 void fileImportDuplicatesAndReplacement() {
@@ -1958,6 +2020,8 @@ int main(int argc, char* argv[]) {
     if (arguments.contains(QStringLiteral("--live-pinned-import-only"))) {
         timed("Owned live pin imports", livePinnedImportsPreserveOrderAndFailures);
         timed("Live pin cancellation and memory", livePinnedImportsCancelAndRespectMemoryBudget);
+        timed("Live pin queued raster ownership",
+              livePinnedQueueReleasesCompletedSnapshotsAndAccountsForCancellation);
         waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
                   "live pin import tests drain export jobs");
         ScreenshotExportCoordinator::shared().shutdown();
@@ -2034,6 +2098,8 @@ int main(int argc, char* argv[]) {
     timed("File imports and replacement", fileImportDuplicatesAndReplacement);
     timed("Owned live pin imports", livePinnedImportsPreserveOrderAndFailures);
     timed("Live pin cancellation and memory", livePinnedImportsCancelAndRespectMemoryBudget);
+    timed("Live pin queued raster ownership",
+          livePinnedQueueReleasesCompletedSnapshotsAndAccountsForCancellation);
     timed("Pinned record imports",
           [&] { pinnedRecordsImportSavedPixelsAndText(directory.path()); });
     timed("Remembered settings", [&] {

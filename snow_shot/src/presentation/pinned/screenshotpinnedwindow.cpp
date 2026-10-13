@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotmanualsave.h"
+#include "snow_shot/presentation/collagedocument.h"
 #include "snow_shot/presentation/screenshotmessageservice.h"
 #include "snow_shot/presentation/components/confirmationskipbutton.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
@@ -6345,8 +6346,13 @@ ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::stitchingSnapshot() {
         return snapshot;
 
     const qreal renderScale = m_transformedImage.width() / backgroundRect.width();
-    auto appearance = pinnedExportAppearance(m_resultStyle, m_opacityPercent, renderScale);
-    QSize contentSize = m_transformedImage.size();
+    const auto appearance = pinnedExportAppearance(m_resultStyle, m_opacityPercent, renderScale);
+    const QSize contentSize = m_transformedImage.size();
+    snapshot.outputSize =
+        ScreenshotResultCompositor::layoutForContent(contentSize, appearance.resultStyle)
+            .outputRect.size();
+    if (snow_shot::presentation::collageImageImportBytes(snapshot.outputSize, &snapshot.error) == 0)
+        return snapshot;
     if (m_ocrMode && m_recognitionContent && m_recognitionContent->isVisible() &&
         m_screenshotRenderer) {
         auto recognized = m_recognitionContent->imageSnapshot(
@@ -6358,14 +6364,17 @@ ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::stitchingSnapshot() {
         } else {
             // Formatted text and tables have their own content viewport. This snapshot excludes
             // selection/caret decorations and retains their current edits and scroll position.
-            QImage content = m_recognitionContent->printViewportSnapshot(
-                m_transformedImage, backgroundRect, m_screenshotRenderer->ocrFilteredImage(),
-                m_screenshotRenderer->ocrFilteredCanvasRect(), 1.0, contentSize);
+            QImage content = snow_shot::presentation::captureCollageImage(
+                contentSize,
+                [this, backgroundRect, contentSize] {
+                    return m_recognitionContent->printViewportSnapshot(
+                        m_transformedImage, backgroundRect,
+                        m_screenshotRenderer->ocrFilteredImage(),
+                        m_screenshotRenderer->ocrFilteredCanvasRect(), 1.0, contentSize);
+                },
+                &snapshot.error);
             if (content.isNull())
                 return snapshot;
-            contentSize = content.size();
-            appearance = pinnedExportAppearance(m_resultStyle, m_opacityPercent,
-                                                contentSize.width() / backgroundRect.width());
             snapshot.source =
                 ScreenshotExportSource::fromPinnedViewport({{},
                                                             std::move(content),
@@ -6388,9 +6397,6 @@ ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::stitchingSnapshot() {
             appearance.outputOpacity};
         snapshot.source = ScreenshotExportSource::fromPinnedViewport(std::move(source));
     }
-    snapshot.outputSize =
-        ScreenshotResultCompositor::layoutForContent(contentSize, appearance.resultStyle)
-            .outputRect.size();
     return snapshot;
 }
 

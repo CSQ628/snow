@@ -11415,6 +11415,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-selection-geometry-tests)
     set_tests_properties(snow-shot-pinned-selection-geometry-tests PROPERTIES LABELS "unit")
     if(TARGET snow-shot-pinned-window-tests)
+        add_test(NAME snow-shot-pinned-stitching-snapshot-tests
+            COMMAND snow-shot-pinned-window-tests --stitching-snapshot-only -platform offscreen)
+        set_tests_properties(snow-shot-pinned-stitching-snapshot-tests PROPERTIES
+            LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60)
         add_test(NAME snow-shot-pinned-multi-selection-tests
             COMMAND snow-shot-pinned-window-tests --multi-selection-only -platform offscreen)
         set_tests_properties(snow-shot-pinned-multi-selection-tests PROPERTIES
@@ -11474,7 +11478,8 @@ get_directory_property(_snow_pinned_hosts BUILDSYSTEM_TARGETS)
 foreach(_snow_pinned_host IN LISTS _snow_pinned_hosts)
     get_target_property(_snow_pinned_sources ${_snow_pinned_host} SOURCES)
     if(_snow_pinned_sources MATCHES "screenshotpinnedwindow\\.cpp")
-        target_link_libraries(${_snow_pinned_host} PRIVATE snow_shot_pinned_decoration)
+        target_link_libraries(${_snow_pinned_host} PRIVATE
+            snow_shot_pinned_decoration snow_shot_collage_core)
     endif()
 endforeach()
 

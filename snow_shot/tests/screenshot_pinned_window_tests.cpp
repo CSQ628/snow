@@ -26,6 +26,7 @@
 #include "snow_shot/presentation/screenshottoolbarlayoutmodel.h"
 #include "close_release_native_test_support.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
+#include "snow_shot/presentation/collagedocument.h"
 #include "snow_shot/presentation/screenshotanimationplayback.h"
 #include "../src/image/snowimageqtcodec.h"
 #include "pinned_animation_fixtures.h"
@@ -20760,7 +20761,18 @@ void pinnedImageStitchingTextAndDeferredContent() {
     require(ready && Access::recognition(text), "formatted pin initializes its text session");
     Access::recognition(text)->activate(ScreenshotRecognitionSessionController::Mode::Text);
     waitForUi(20);
+    auto occupied = snow_shot::presentation::reserveCollageImport(qint64{512} * 1024 * 1024);
+    require(occupied != nullptr, "occupy the shared rasterization budget before OCR capture");
+    const auto rejected = text.stitchingSnapshot();
+    require(!rejected.source.isValid() && !rejected.error.isEmpty(),
+            "OCR stitching must reject memory admission before allocating its viewport raster");
+    occupied.reset();
+    const qint64 captureBaseline = snow_shot::presentation::collageResourceUsage().reservedBytes;
     const auto frozen = text.stitchingSnapshot();
+    require(frozen.source.isValid() && frozen.error.isEmpty() &&
+                snow_shot::presentation::collageResourceUsage().reservedBytes ==
+                    captureBaseline + decoded->image.sizeInBytes(),
+            "an OCR stitching source accounts for its raster before joining the import queue");
     const QImage before = pinnedStitchingPixels(frozen, fixture.selection);
     decoded->formattedDocument->setPlainText(QStringLiteral("Edited text"));
     waitForUi(20);
@@ -23981,6 +23993,11 @@ int main(int argc, char* argv[]) {
         if (app.arguments().contains(
                 QStringLiteral("--multi-selection-deferred-persistence-only"))) {
             pinnedMultiSelectionDeferredPersistence();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--stitching-snapshot-only"))) {
+            pinnedImageStitchingSnapshots();
+            pinnedImageStitchingTextAndDeferredContent();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--multi-selection-only"))) {

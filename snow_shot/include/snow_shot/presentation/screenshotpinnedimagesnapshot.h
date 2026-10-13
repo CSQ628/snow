@@ -9,6 +9,7 @@ struct ScreenshotPinnedImageSnapshot final {
     ScreenshotExportSource source;
     QSize outputSize;
     QString label;
+    QString error = {};
 };
 
 #endif

@@ -304,6 +304,68 @@ void snapshotsAndResources() {
             "clipboard dimension and stride bounds reject invalid sizes without allocating");
 }
 
+void capturedImagesAdmitMemoryBeforePaintingAndOwnTheirReservation() {
+    const qint64 baseline = collageResourceUsage().reservedBytes;
+    int captures = 0;
+    const auto capture = [&] {
+        ++captures;
+        return fixture({3, 2});
+    };
+    QString error;
+    require(captureCollageImage({8001, 8000}, capture, &error).isNull() && captures == 0 &&
+                !error.isEmpty(),
+            "oversized captures fail before calling the rasterizer");
+    auto occupied = reserveCollageImport(qint64{512} * 1024 * 1024);
+    require(occupied != nullptr, "occupy the shared painting budget without allocating pixels");
+    require(captureCollageImage({3, 2}, capture, &error).isNull() && captures == 0 &&
+                !error.isEmpty(),
+            "memory-limited captures fail before calling the rasterizer");
+    occupied.reset();
+    require(collageResourceUsage().reservedBytes == baseline,
+            "rejected captures leave no reservations behind");
+
+    const uchar* capturedPixels = nullptr;
+    QImage captured = captureCollageImage(
+        {3, 2},
+        [&] {
+            QImage pixels = fixture({3, 2}, QColor(50, 100, 150, 96));
+            pixels.setDevicePixelRatio(2);
+            pixels.setDotsPerMeterX(1234);
+            pixels.setDotsPerMeterY(5678);
+            pixels.setOffset({7, 9});
+            pixels.setText(QStringLiteral("description"), QStringLiteral("captured image"));
+            capturedPixels = pixels.constBits();
+            return pixels;
+        },
+        &error);
+    require(!captured.isNull() && error.isEmpty() && captured.constBits() == capturedPixels &&
+                captured.colorSpace() == QColorSpace(QColorSpace::SRgb) &&
+                captured.devicePixelRatio() == 2 && captured.dotsPerMeterX() == 1234 &&
+                captured.dotsPerMeterY() == 5678 && captured.offset() == QPoint(7, 9) &&
+                captured.text(QStringLiteral("description")) == QStringLiteral("captured image") &&
+                captured.pixelColor(1, 1) == QColor(50, 100, 150, 96) &&
+                collageResourceUsage().reservedBytes == baseline + captured.sizeInBytes(),
+            "captured pixels own their admission without copying or losing image metadata");
+    QImage queuedCopy = captured;
+    captured = {};
+    require(collageResourceUsage().reservedBytes == baseline + queuedCopy.sizeInBytes(),
+            "a queued image copy keeps its raster accounted for");
+    occupied = reserveCollageImport(qint64{512} * 1024 * 1024);
+    require(occupied != nullptr, "retained captures do not occupy the temporary painting budget");
+    occupied.reset();
+    queuedCopy = {};
+    require(collageResourceUsage().reservedBytes == baseline,
+            "the last image reader releases the captured raster reservation");
+    require(captureCollageImage(
+                {3, 2}, [] { return QImage{}; }, &error)
+                    .isNull() &&
+                !error.isEmpty() && collageResourceUsage().reservedBytes == baseline,
+            "failed rasterization releases both retained and working reservations");
+    require(collageImageImportBytes({8000, 8000}, &error) == 512'000'000 && error.isEmpty() &&
+                collageImageImportBytes({}, &error) == 0 && !error.isEmpty(),
+            "capture and import share inclusive pixel limits and reject invalid dimensions");
+}
+
 void scalingAndLargeAxes() {
     CollageDocument document;
     document.append(fixture({2, 2}, Qt::blue), QStringLiteral("reference"));
@@ -364,6 +426,7 @@ int main(int argc, char** argv) {
         transformations();
         alphaAndRowReads();
         snapshotsAndResources();
+        capturedImagesAdmitMemoryBeforePaintingAndOwnTheirReservation();
         scalingAndLargeAxes();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

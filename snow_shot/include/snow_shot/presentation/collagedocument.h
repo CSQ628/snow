@@ -122,6 +122,15 @@ struct CollageResourceUsage final {
 };
 [[nodiscard]] CollageResourceUsage collageResourceUsage();
 
+// A single imported image is limited to 64 million pixels. Rendering reserves room for two
+// four-byte rasters; use the same admission policy before capturing or importing live pins.
+[[nodiscard]] qint64 collageImageImportBytes(QSize size, QString* error = nullptr);
+
+// Admit pixels and painting scratch before capture() allocates its four-byte raster. The returned
+// immutable image owns the pixel reservation, including while queued or held by an export worker.
+[[nodiscard]] QImage captureCollageImage(QSize size, const std::function<QImage()>& capture,
+                                         QString* error = nullptr);
+
 class CollageImportReservation final {
   public:
     CollageImportReservation();

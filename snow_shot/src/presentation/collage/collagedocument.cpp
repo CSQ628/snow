@@ -42,6 +42,11 @@ void report(QString* destination, const QString& error) {
         *destination = error;
 }
 
+struct CapturedImageLifetime final {
+    std::shared_ptr<collage_detail::ResourceReservation> reservation;
+    QImage image;
+};
+
 struct SourceLifetime final {
     std::shared_ptr<collage_detail::ResourceReservation> source;
     std::shared_ptr<collage_detail::ResourceReservation> preview;
@@ -713,5 +718,72 @@ std::shared_ptr<void> reserveCollageClipboard(QSize outputSize, QString* error) 
 
 CollageResourceUsage collageResourceUsage() {
     return {collage_detail::reservedBytes(), collage_detail::budgetLimit()};
+}
+
+qint64 collageImageImportBytes(QSize size, QString* error) {
+    if (error)
+        error->clear();
+    if (size.isEmpty()) {
+        report(error, preparationError());
+        return 0;
+    }
+    const qint64 pixels = qint64(size.width()) * size.height();
+    if (pixels > 64'000'000) {
+        report(error, QCoreApplication::translate(
+                          "CollageDocument",
+                          "This collage requires too much temporary memory. Try fewer images "
+                          "or smaller image sizes."));
+        return 0;
+    }
+    return pixels * 8;
+}
+
+QImage captureCollageImage(QSize size, const std::function<QImage()>& capture, QString* error) {
+    const qint64 bytes = collageImageImportBytes(size, error) / 2;
+    if (bytes == 0)
+        return {};
+    if (!capture) {
+        report(error, preparationError());
+        return {};
+    }
+    try {
+        auto working = collage_detail::reserveWorking(bytes, error);
+        if (!working)
+            return {};
+        auto lifetime = std::make_unique<CapturedImageLifetime>();
+        lifetime->reservation = collage_detail::reserve(bytes, error);
+        if (!lifetime->reservation)
+            return {};
+        lifetime->image = capture();
+        const QImage image = lifetime->image;
+        if (image.isNull() || image.size() != size || image.sizeInBytes() > bytes) {
+            report(error, preparationError());
+            return {};
+        }
+        static_cast<void>(lifetime->reservation->resize(image.sizeInBytes()));
+        // A const view keeps admission attached to QImage's implicitly shared pixel lifetime.
+        // Metadata changes below do not duplicate the raster; writers detach as usual.
+        QImage result(
+            image.constBits(), image.width(), image.height(), image.bytesPerLine(), image.format(),
+            [](void* context) { delete static_cast<CapturedImageLifetime*>(context); },
+            lifetime.get());
+        if (result.isNull()) {
+            report(error, preparationError());
+            return {};
+        }
+        [[maybe_unused]] const auto* imageOwner = lifetime.release();
+        result.setColorSpace(image.colorSpace());
+        result.setDevicePixelRatio(image.devicePixelRatio());
+        result.setDotsPerMeterX(image.dotsPerMeterX());
+        result.setDotsPerMeterY(image.dotsPerMeterY());
+        result.setOffset(image.offset());
+        result.setColorTable(image.colorTable());
+        for (const auto& key : image.textKeys())
+            result.setText(key, image.text(key));
+        return result;
+    } catch (const std::bad_alloc&) {
+        report(error, preparationError());
+        return {};
+    }
 }
 } // namespace snow_shot::presentation

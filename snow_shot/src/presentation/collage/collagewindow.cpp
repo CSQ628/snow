@@ -497,20 +497,21 @@ struct CollageWindow::Impl {
             });
         };
         const auto& snapshot = *request.live;
+        if (!snapshot.error.isEmpty()) {
+            fail(snapshot.error);
+            return;
+        }
         if (!snapshot.source.isValid() || snapshot.outputSize.isEmpty()) {
             fail(collageText("The image could not be decoded or is no longer available"));
             return;
         }
-        const qint64 pixels = qint64(snapshot.outputSize.width()) * snapshot.outputSize.height();
         QString error;
-        if (pixels > 64'000'000) {
-            fail(QCoreApplication::translate(
-                "CollageDocument",
-                "This collage requires too much temporary memory. Try fewer images "
-                "or smaller image sizes."));
+        const qint64 bytes = collageImageImportBytes(snapshot.outputSize, &error);
+        if (bytes == 0) {
+            fail(error);
             return;
         }
-        decoded->reservation = reserveCollageImport(pixels * 8, &error);
+        decoded->reservation = reserveCollageImport(bytes, &error);
         if (!decoded->reservation) {
             fail(error);
             return;
@@ -623,7 +624,9 @@ struct CollageWindow::Impl {
             emit q.importFinished(errors);
             return;
         }
-        const ImportItem request = imports.at(importIndex++);
+        // Consume the source now; processed snapshots must not retain raster donors or rendered
+        // caches while subsequent imports are pending. The worker/completion owns this request.
+        const ImportItem request = std::move(imports[importIndex++]);
         showStatus(request.selection ? Status::ReadingSelection : Status::Loading);
         const quint64 token = generation;
         if (request.selection) {
@@ -651,15 +654,8 @@ struct CollageWindow::Impl {
                 if (request.record) {
                     const QSize size =
                         request.record->result ? request.record->result->imageSize : QSize();
-                    const qint64 pixels = qint64(size.width()) * size.height();
-                    if (!size.isEmpty() && pixels > 64'000'000)
-                        return ScreenshotExportTaskResult::failure(
-                            ScreenshotExportFailureStage::Source,
-                            QCoreApplication::translate(
-                                "CollageDocument",
-                                "This collage requires too much temporary memory. Try fewer images "
-                                "or smaller image sizes."));
-                    if (size.isEmpty() || !decoded->reservation->resize(pixels * 8, &error))
+                    const qint64 bytes = size.isEmpty() ? 0 : collageImageImportBytes(size, &error);
+                    if (bytes == 0 || !decoded->reservation->resize(bytes, &error))
                         return ScreenshotExportTaskResult::failure(
                             ScreenshotExportFailureStage::Source,
                             error.isEmpty() ? collageText("The final screenshot is unavailable")
