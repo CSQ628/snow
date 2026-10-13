@@ -7,6 +7,7 @@
 #include "snow_shot/presentation/screenshotcontentdrop.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/windowcloseshortcut.h"
+#include "snow_shot/presentation/cursormovementshortcuts.h"
 #include "snow_shot/presentation/screenshotencodingsettings.h"
 #include "widgets/detail/pointer_region.h"
 #include "snow_shot/presentation/pinnedgeometry.h"
@@ -1601,22 +1602,24 @@ void ScreenshotPinnedWindow::registerWindowShortcuts() {
                                         m_shortcutManager->addBinding(this, std::move(binding)));
     }
 
+    snow_shot::presentation::CursorMovementShortcuts cursorMovement;
     const struct {
         const char* id;
-        snow_shot::platform::PhysicalCursorDirection direction;
         QPoint delta;
     } cursorMovements[] = {
-        {"move_cursor_up", snow_shot::platform::PhysicalCursorDirection::Up, QPoint(0, -1)},
-        {"move_cursor_down", snow_shot::platform::PhysicalCursorDirection::Down, QPoint(0, 1)},
-        {"move_cursor_left", snow_shot::platform::PhysicalCursorDirection::Left, QPoint(-1, 0)},
-        {"move_cursor_right", snow_shot::platform::PhysicalCursorDirection::Right, QPoint(1, 0)},
+        {"move_cursor_up", QPoint(0, -1)},
+        {"move_cursor_down", QPoint(0, 1)},
+        {"move_cursor_left", QPoint(-1, 0)},
+        {"move_cursor_right", QPoint(1, 0)},
     };
     for (const auto& movement : cursorMovements) {
         const QString actionId = QString::fromLatin1(movement.id);
         ShortcutManager::Binding binding;
+        cursorMovement.configureBinding(binding, movement.delta, [this](const auto& combined) {
+            return moveCursorOnePixel(combined);
+        });
         binding.id = QStringLiteral("pinned.") + actionId;
         binding.priority = ShortcutManager::StandardPriority::ScreenshotShortcut;
-        binding.autoRepeat = true;
         binding.canActivate = [this, localCommandsAllowed](const auto& context) {
             if (!m_windowDragActive && !m_ocrMode && windowDragEligible()) {
                 return localCommandsAllowed(context);
@@ -1630,8 +1633,8 @@ void ScreenshotPinnedWindow::registerWindowShortcuts() {
         binding.canActivateOutsideScope = [this](const auto&) {
             return m_editController != nullptr && m_editController->canvasColorSamplingActive();
         };
-        binding.activate = [this, direction = movement.direction,
-                            delta = movement.delta](const auto&) {
+        binding.activate = [this, cursorActivate = std::move(binding.activate),
+                            delta = movement.delta](const auto& context) {
             if (!m_windowDragActive && !m_ocrMode && windowDragEligible()) {
                 if (m_lockedMode) {
                     showLockedReadout();
@@ -1644,7 +1647,7 @@ void ScreenshotPinnedWindow::registerWindowShortcuts() {
                 schedulePersistence();
                 return true;
             }
-            return moveCursorOnePixel(direction);
+            return cursorActivate(context);
         };
         m_pinnedShortcutBindings.insert(actionId,
                                         m_shortcutManager->addBinding(this, std::move(binding)));
@@ -5696,14 +5699,20 @@ ScreenshotRecognitionWindow* ScreenshotPinnedWindow::ensureRecognitionContent() 
                 }
                 const bool physical = ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry();
                 const qreal scale = physical ? m_canvas->devicePixelRatioF() : 1.0;
+                const QRectF viewport = contentViewRect();
+                // Placement and pixels share the visible content origin, without the pin's
+                // permanent decoration margins (including when its shadow is hidden).
                 QRectF imageRect =
                     m_canvas->canvasToViewTransform().mapRect(source.materializedCanvasRect);
+                imageRect.translate(-viewport.topLeft());
                 imageRect = QRectF(imageRect.topLeft() * scale, imageRect.size() * scale);
                 ScreenshotOriginalImagePreviewState state{
                     source.materializedImage,
                     imageRect,
-                    physical ? currentNativeGeometry()
-                             : ScreenshotOriginalImagePreviewWindow::nativeClientRect(this),
+                    physical ? currentContentNativeGeometry()
+                             : QRectF(QPointF(mapToGlobal(QPoint())) + viewport.topLeft(),
+                                      viewport.size())
+                                   .toRect(),
                     this,
                     true,
                     m_alwaysOnTop};
@@ -9006,8 +9015,7 @@ bool ScreenshotPinnedWindow::cursorMovementEnabled() const {
                                                  m_editController->editMode()));
 }
 
-bool ScreenshotPinnedWindow::moveCursorOnePixel(
-    snow_shot::platform::PhysicalCursorDirection direction) {
+bool ScreenshotPinnedWindow::moveCursorOnePixel(const QPoint& direction) {
     if (!cursorMovementEnabled() || m_physicalCursor == nullptr) {
         return false;
     }

@@ -2100,8 +2100,14 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
         const auto source = Access::originalPreviewSource(window);
         const bool physical = ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry();
         const qreal scale = physical ? canvas->devicePixelRatioF() : 1.0;
+        const QRect contentNative =
+            snow_shot::presentation::pinnedContentRect(window.currentNativeGeometry());
+        const qreal contentDpr =
+            snow_shot::presentation::pinnedGeometryScale(canvas->devicePixelRatioF());
+        const qreal inset = snow_shot::presentation::pinnedShadowMargin() / contentDpr;
         QRectF expectedRect =
             canvas->canvasToViewTransform().mapRect(source.materializedCanvasRect);
+        expectedRect.translate(-inset, -inset);
         expectedRect = QRectF(expectedRect.topLeft() * scale, expectedRect.size() * scale);
         if (!preview->isVisible() || PreviewAccess::imageRect(*preview) != expectedRect ||
             PreviewAccess::source(*preview).cacheKey() != source.materializedImage.cacheKey()) {
@@ -2118,9 +2124,11 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
                     PreviewAccess::source(*preview).cacheKey() ==
                         source.materializedImage.cacheKey(),
                 "the preview must share the displayed source image and its exact viewport mapping");
-        const QRect result = physical
-                                 ? window.currentNativeGeometry()
-                                 : ScreenshotOriginalImagePreviewWindow::nativeClientRect(&window);
+        const QRect result =
+            physical ? contentNative
+                     : QRectF(QPointF(window.mapToGlobal(QPoint())) + QPointF(inset, inset),
+                              QSizeF(contentNative.size()) / contentDpr)
+                           .toRect();
         const auto placement = ScreenshotOriginalImagePreviewWindow::placement(
             result, PreviewAccess::workArea(*preview), PreviewAccess::gap(*preview));
         const QSize expectedSize = placement.geometry.size();
@@ -2140,6 +2148,15 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
         require(ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).size() ==
                     expectedSize,
                 "the preview must use the automatically fitted recognition viewport dimensions");
+        require(ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview) ==
+                    placement.geometry,
+                "the comparison gap must be measured from content edges, excluding pin shadows");
+        const QRect comparison = ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview);
+        const int gap = physical ? qRound(4 * canvas->devicePixelRatioF()) : 4;
+        require(comparison.right() + 1 + gap == result.left() ||
+                    comparison.bottom() + 1 + gap == result.top() ||
+                    result.right() + 1 + gap == comparison.left(),
+                "automatic comparison must retain only the four-DIP content-edge gap");
         const QImage& raster = PreviewAccess::raster(*preview);
         require(!raster.isNull(), "the original-image preview needs a painted viewport");
         if (physical) {
@@ -2183,6 +2200,41 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
         }
     };
     verifyProjection();
+    const QRect originalPin = window.currentNativeGeometry();
+    const QRect work = PreviewAccess::workArea(*preview);
+    const QSize viewportSize =
+        ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).size();
+    // Exercise each automatic direction with enough room for an unscaled comparison.
+    const qreal placementScale =
+        ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry()
+            ? 1.0
+            : snow_shot::presentation::pinnedGeometryScale(canvas->devicePixelRatioF());
+    const QPoint contentOrigin =
+        ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry()
+            ? snow_shot::presentation::pinnedContentRect(originalPin).topLeft()
+            : (QPointF(window.mapToGlobal(QPoint())) +
+               QPointF(snow_shot::presentation::pinnedShadowMargin() / placementScale,
+                       snow_shot::presentation::pinnedShadowMargin() / placementScale))
+                  .toPoint();
+    for (const QPoint contentPosition : {work.topLeft() + QPoint(viewportSize.width() + 24, 24),
+                                         work.topLeft() + QPoint(24, viewportSize.height() + 24),
+                                         work.topLeft() + QPoint(24, 24)}) {
+        const QPoint delta = contentPosition - contentOrigin;
+        const QPoint target = originalPin.topLeft() + QPoint(qRound(delta.x() * placementScale),
+                                                             qRound(delta.y() * placementScale));
+        Access::beginAuxiliaryInteraction(window);
+        require(Access::moveForOriginalPreview(window,
+                                               target - window.currentNativeGeometry().topLeft()),
+                "move the pin to exercise content-edge preview placement");
+        Access::endAuxiliaryInteraction(window);
+        verifyProjection();
+    }
+    Access::beginAuxiliaryInteraction(window);
+    require(Access::moveForOriginalPreview(window, originalPin.topLeft() -
+                                                       window.currentNativeGeometry().topLeft()),
+            "restore the pin after content-edge placement checks");
+    Access::endAuxiliaryInteraction(window);
+    verifyProjection();
 #ifdef Q_OS_WIN
     require(Access::beginPreviewNativeMove(window), "prepare a pending native preview drag");
     Access::previewNativeMessage(window, WM_CAPTURECHANGED);
@@ -2217,7 +2269,8 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
     for (const auto* actionName :
          {"screenshotPinnedRotateClockwiseAction", "screenshotPinnedFlipHorizontalAction",
           "screenshotPinnedFlipVerticalAction", "screenshotPinnedIncreaseScaleAction",
-          "screenshotPinnedDecreaseScaleAction"}) {
+          "screenshotPinnedDecreaseScaleAction", "screenshotPinnedShowShadowAction",
+          "screenshotPinnedShowBorderAction"}) {
         materializePinnedMenuTree(window);
         auto* action = window.findChild<QAction*>(QString::fromLatin1(actionName));
         require(action != nullptr, "the preview fixture needs image transform actions");
@@ -6504,7 +6557,6 @@ void pinnedMovementShortcutsMoveIdleWindow() {
     auto* canvas = pinnedWindow->findChild<SnowCanvasWidget*>();
     require(canvas != nullptr, "keyboard movement pin canvas was not found");
     canvas->setFocus();
-    const QPoint cursorBefore = systemCursorPosition();
     const struct {
         Qt::Key key;
         QPoint delta;
@@ -6516,16 +6568,16 @@ void pinnedMovementShortcutsMoveIdleWindow() {
     for (const auto& movement : movements) {
         for (const bool repeat : {false, true}) {
             const QRect before = pinnedWindow->currentNativeGeometry();
+            const QPoint cursorBefore = systemCursorPosition();
             sendShortcut(*canvas, movement.key, Qt::NoModifier, repeat);
+            require(systemCursorPosition() == cursorBefore,
+                    "moving an idle pin with the keyboard must not move the cursor");
             QCoreApplication::processEvents();
             require(pinnedWindow->currentNativeGeometry() == before.translated(movement.delta),
                     "movement shortcuts must move an idle pin by one physical pixel, including "
                     "repeats");
         }
     }
-    require(systemCursorPosition() == cursorBefore,
-            "moving an idle pin with the keyboard must not move the cursor");
-
     const snow_shot::storage::PinToScreenShortcutSettings shortcuts;
     const QString actionId = QStringLiteral("move_cursor_up");
     const auto previousShortcuts = shortcuts.shortcuts(actionId);
@@ -6542,7 +6594,7 @@ void pinnedMovementShortcutsMoveIdleWindow() {
     require(shortcuts.setShortcuts(actionId, previousShortcuts),
             "the window movement shortcuts could not be restored");
     require(pinnedWindow->persistenceSnapshot().nativeGeometry ==
-                beforeCustomShortcut.translated(0, -1),
+                snow_shot::presentation::pinnedContentRect(beforeCustomShortcut.translated(0, -1)),
             "the persisted pin geometry must include keyboard movement");
 
     auto* textInput = new QLineEdit(pinnedWindow);
@@ -6595,6 +6647,11 @@ void pinnedNativeDragAcceptsCursorMovementShortcuts(SnowCanvasRuntime&) {
     require(shortcuts.setShortcuts(
                 actionId, snow_shot::shortcuts::bindingsFromPortableText({QStringLiteral("W")})),
             "the native-drag cursor shortcut fixture could not be configured");
+    const QString leftActionId = QStringLiteral("move_cursor_left");
+    const auto previousLeftShortcuts = shortcuts.shortcuts(leftActionId);
+    require(shortcuts.setShortcuts(leftActionId, snow_shot::shortcuts::bindingsFromPortableText(
+                                                     {QStringLiteral("A")})),
+            "the native-drag horizontal cursor shortcut could not be configured");
 
     QImage background(240, 140, QImage::Format_ARGB32_Premultiplied);
     background.fill(QColor(48, 96, 144));
@@ -6626,6 +6683,22 @@ void pinnedNativeDragAcceptsCursorMovementShortcuts(SnowCanvasRuntime&) {
     const QPoint cursorBeforeShortcut = platformCursorPosition();
     const QPoint windowPositionBeforeShortcut = pinnedWindow->currentNativeGeometry().topLeft();
     sendShortcut(*pinnedWindow, Qt::Key_W);
+    const bool initialDirectionApplied =
+        platformCursorPosition() == cursorBeforeShortcut + QPoint(0, -1);
+    const QPoint beforeDiagonal = platformCursorPosition();
+    sendShortcut(*pinnedWindow, Qt::Key_A);
+    const bool diagonalApplied = platformCursorPosition() == beforeDiagonal + QPoint(-1, -1);
+    const QPoint beforeRepeat = platformCursorPosition();
+    sendShortcut(*pinnedWindow, Qt::Key_W, Qt::NoModifier, true);
+    const bool diagonalRepeated = platformCursorPosition() == beforeRepeat + QPoint(-1, -1);
+    PhysicalKeyEvent leftRelease(QEvent::KeyRelease, Qt::Key_A, Qt::NoModifier);
+    QCoreApplication::sendEvent(pinnedWindow, &leftRelease);
+    const QPoint beforeRelease = platformCursorPosition();
+    sendShortcut(*pinnedWindow, Qt::Key_W, Qt::NoModifier, true);
+    const bool remainingDirectionApplied =
+        platformCursorPosition() == beforeRelease + QPoint(0, -1);
+    PhysicalKeyEvent upRelease(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+    QCoreApplication::sendEvent(pinnedWindow, &upRelease);
     const QPoint cursorAfterShortcuts = platformCursorPosition();
     // USER32 reacts to cursor movement with WM_MOVING on its next iteration.
     RECT shortcutProposal =
@@ -6637,7 +6710,7 @@ void pinnedNativeDragAcceptsCursorMovementShortcuts(SnowCanvasRuntime&) {
     const QPoint windowPositionAfterShortcuts = pinnedWindow->currentNativeGeometry().topLeft();
     const QPoint shortcutCursorDelta = cursorAfterShortcuts - cursorBeforeShortcut;
     const QPoint shortcutWindowDelta = windowPositionAfterShortcuts - windowPositionBeforeShortcut;
-    const bool cursorShortcutsMoved = shortcutCursorDelta == QPoint(0, -1);
+    const bool cursorShortcutsMoved = shortcutCursorDelta == QPoint(-2, -4);
     const bool windowFollowedShortcuts = shortcutWindowDelta == shortcutCursorDelta;
 
     // A system drag tracks the pointer inside USER32's move loop and hands
@@ -6663,10 +6736,15 @@ void pinnedNativeDragAcceptsCursorMovementShortcuts(SnowCanvasRuntime&) {
 
     require(shortcuts.setShortcuts(actionId, previousShortcuts),
             "the native-drag cursor shortcut fixture could not restore its configuration");
+    require(shortcuts.setShortcuts(leftActionId, previousLeftShortcuts),
+            "the native-drag horizontal cursor shortcut could not restore its configuration");
     pinnedWindow->close();
     require(processUntilDeleted(guardedWindow, 2000), "native-drag shortcut pin was not deleted");
     require(cursorShortcutsMoved,
             "configured cursor shortcuts must remain active throughout a pinned-window drag");
+    require(initialDirectionApplied && diagonalApplied && diagonalRepeated &&
+                remainingDirectionApplied,
+            "pinned cursor shortcuts must combine held directions and remove released directions");
     require(windowFollowedShortcuts,
             "a pinned window must follow cursor shortcuts before its native drag is released");
     require(windowFollowedPointer,

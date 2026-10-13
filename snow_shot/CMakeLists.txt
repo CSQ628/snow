@@ -138,7 +138,8 @@ if(APPLE)
         src/presentation/pinned/pinnedwindowplatform.cpp)
     target_include_directories(snow_shot_macos_window_platform PRIVATE include)
     target_link_libraries(snow_shot_macos_window_platform PUBLIC Qt6::Widgets
-        PRIVATE Qt6::GuiPrivate snow_shot_macos_cursor "-framework AppKit" "-framework ApplicationServices")
+        PRIVATE Qt6::GuiPrivate snow_shot_macos_cursor "-framework AppKit" "-framework ApplicationServices"
+        "-framework QuartzCore")
 endif()
 
 
@@ -3838,6 +3839,8 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-selection-geometry-tests
         tests/screenshot_selection_geometry_tests.cpp
+        include/snow_shot/presentation/screenshotinteractionstate.h
+        src/presentation/core/screenshotinteractionstate.cpp
         include/snow_shot/platform/windows/monitorgeometry.h
         include/snow_shot/presentation/historypinplacement.h
         include/snow_shot/presentation/screenshotgeometry.h
@@ -6667,9 +6670,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_executable(snow-shot-selection-quick-set-tests
-        tests/screenshot_selection_quick_sets_tests.cpp)
+        tests/screenshot_selection_quick_sets_tests.cpp
+        src/presentation/services/screenshothistoryservice.cpp
+        src/presentation/services/screenshotimagefileservice.cpp)
+    target_include_directories(snow-shot-selection-quick-set-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
     target_link_libraries(snow-shot-selection-quick-set-tests PRIVATE
-        snow-shot-selection-presentation-runtime)
+        snow-shot-selection-presentation-runtime snow_shot_image_codec)
     snow_shot_import_offscreen_platform(snow-shot-selection-quick-set-tests)
     add_test(NAME snow-shot-selection-quick-set-compound-tests
         COMMAND snow-shot-selection-quick-set-tests --compound-only -platform offscreen)
@@ -10481,6 +10488,21 @@ if(APPLE AND SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-macos-scrolling-input-tests -platform cocoa)
     set_tests_properties(snow-shot-macos-scrolling-input-native-tests PROPERTIES
         LABELS "interactive;macos" RUN_SERIAL TRUE SKIP_RETURN_CODE 77 TIMEOUT 30)
+
+    add_executable(snow-shot-macos-screenshot-window-release-tests
+        tests/macos_screenshot_window_release_tests.mm)
+    snow_shot_link_macos_window_platform(snow-shot-macos-screenshot-window-release-tests)
+    target_include_directories(snow-shot-macos-screenshot-window-release-tests PRIVATE include)
+    target_link_libraries(snow-shot-macos-screenshot-window-release-tests PRIVATE Qt6::Widgets
+        "-framework AppKit" "-framework QuartzCore" "-framework IOSurface")
+    add_test(NAME snow-shot-macos-screenshot-window-release-tests
+        COMMAND snow-shot-macos-screenshot-window-release-tests -platform offscreen)
+    set_tests_properties(snow-shot-macos-screenshot-window-release-tests PROPERTIES
+        LABELS "unit;macos" TIMEOUT 30)
+    add_test(NAME snow-shot-macos-screenshot-window-release-native-tests
+        COMMAND snow-shot-macos-screenshot-window-release-tests -platform cocoa)
+    set_tests_properties(snow-shot-macos-screenshot-window-release-native-tests PROPERTIES
+        LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 30)
 
     add_executable(snow-shot-macos-overlay-initialization-tests
         tests/macos_overlay_initialization_tests.mm

@@ -342,7 +342,8 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void scheduleAutomaticQrRecognition();
     void synchronizeAutomaticQr();
     void synchronizeQrToolbar();
-    [[nodiscard]] bool selectPreviousSelection();
+    [[nodiscard]] ScreenshotSelectionRestoreTarget selectionRestoreTarget() const;
+    [[nodiscard]] bool selectPreviousSelection(bool previous = true);
     void handleAutomaticTextRecognitionAction(bool available);
     [[nodiscard]] bool canBeginCapture() const;
     [[nodiscard]] ScreenshotOverlayWindow* overlayUnderCursor() const;
@@ -382,7 +383,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void setCanvasColorSamplingCursor(bool enabled);
     void setCanvasColorSamplingShortcutScope(bool enabled);
     void clearCanvasColorSampling();
-    [[nodiscard]] bool moveCursorOnePixel(snow_shot::platform::PhysicalCursorDirection direction);
+    [[nodiscard]] bool moveCursorOnePixel(const QPoint& direction);
     [[nodiscard]] bool canRecapture() const;
     void prepareRecaptureWindows(quint64 generation);
     void waitForRecaptureWindowsHidden(quint64 generation);
@@ -982,11 +983,6 @@ void ScreenshotController::Impl::createHistoryService() {
                     m_geometry.physicalPositionForLogicalPoint(
                         m_displaySession, m_displaySession.logicalCursorPosition())));
             },
-            [this](const ScreenshotSelectionParams& selection) {
-                if (m_selectionSettings != nullptr) {
-                    m_selectionSettings->setPreviousSelectionParams(selection);
-                }
-            },
         },
         storage.captureHistory());
     QObject::connect(&storage, &snow_shot::storage::ApplicationStorage::captureHistoryChanged,
@@ -1475,7 +1471,12 @@ void ScreenshotController::Impl::createSelectionWorkflows() {
                 },
                 [this](QObject* modalParent, const ScreenshotSelectionResizeRequest& request,
                        ScreenshotApplySelectionCallback applySelection) {
-                    return m_selectionResizeWorkflow->open(modalParent, request,
+                    auto historyRequest = request;
+                    if (m_historyService != nullptr) {
+                        historyRequest.previousParams =
+                            m_historyService->latestSelectionParams(selectionRestoreTarget());
+                    }
+                    return m_selectionResizeWorkflow->open(modalParent, historyRequest,
                                                            std::move(applySelection));
                 },
                 [this]() { hideColorPicker(); },
@@ -1990,9 +1991,7 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
             return m_colorPickerController->toggleCoordinateMode(
                 m_presentationServices->colorPickerContext());
         },
-        [this](snow_shot::platform::PhysicalCursorDirection direction) {
-            return moveCursorOnePixel(direction);
-        },
+        [this](const QPoint& direction) { return moveCursorOnePixel(direction); },
         [this]() { handleSelectionConfirmed(); },
         [this]() { return selectPreviousSelection(); },
         [this](ScreenshotActiveTool tool) { return activateToolForSelectionResize(tool); },
@@ -2101,6 +2100,7 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
     actions.adjustSelectionFromToolbar = [this](int minDx, int minDy, int maxDx, int maxDy) {
         m_selectionEditWorkflow->adjustSelectionFromToolbar(minDx, minDy, maxDx, maxDy);
     };
+    actions.selectNextPreviousSelection = [this] { return selectPreviousSelection(false); };
     m_overlayInputHandler =
         std::make_unique<ScreenshotOverlayInputHandler>(ScreenshotOverlayInputHandlerContext{
             m_captureState,
@@ -2122,8 +2122,7 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
         });
 }
 
-bool ScreenshotController::Impl::moveCursorOnePixel(
-    snow_shot::platform::PhysicalCursorDirection direction) {
+bool ScreenshotController::Impl::moveCursorOnePixel(const QPoint& direction) {
     const bool canvasColorSampling =
         m_overlayInputHandler != nullptr && m_overlayInputHandler->canvasColorSamplingActive();
     if (m_physicalCursor == nullptr || m_colorPickerController == nullptr ||
@@ -2138,7 +2137,7 @@ bool ScreenshotController::Impl::moveCursorOnePixel(
     }
 
     const snow_shot::platform::PhysicalCursorMoveResult result =
-        m_physicalCursor->moveOnePixel(direction);
+        m_physicalCursor->movePixels(direction, 1);
     if (!result.commandApplied()) {
         return false;
     }
@@ -5485,7 +5484,9 @@ ScreenshotController::Impl::selectionQuickSetsForToolbar() const {
     if (bounds.isEmpty()) {
         return quickSets;
     }
-    quickSets.previous = m_selectionSettings->previousSelectionParams(bounds);
+    if (m_historyService != nullptr) {
+        quickSets.previous = m_historyService->latestSelectionParams(selectionRestoreTarget());
+    }
     quickSets.presets = sanitizeScreenshotSelectionPresets(m_selectionSettings->presets(), bounds);
     return quickSets;
 }
@@ -5812,13 +5813,28 @@ bool ScreenshotController::Impl::beginCapture(PendingSelectionAction action,
     return true;
 }
 
-bool ScreenshotController::Impl::selectPreviousSelection() {
-    if (!m_selectionSettings || !m_selectionSettings->hasPreviousSelectionParams() ||
-        !m_overlayInputHandler) {
+ScreenshotSelectionRestoreTarget ScreenshotController::Impl::selectionRestoreTarget() const {
+    ScreenshotSelectionRestoreTarget target;
+    target.bounds = ScreenshotHalfOpenRect::fromRectF(m_geometry.canvasBounds()).toAlignedQRect();
+    target.canvasOrigin = m_geometry.canvasOrigin();
+    m_displaySession.forEachActiveDisplay([&](qsizetype, const CapturedDisplayModel& display) {
+        target.canvasUsesPoints = display.canvasUsesPoints;
+    });
+    return target;
+}
+
+bool ScreenshotController::Impl::selectPreviousSelection(bool previous) {
+    if (!m_historyService || !m_overlayInputHandler) {
         return false;
     }
-    if (!m_overlayInputHandler->restorePreviousSelection(
-            m_selectionSettings->previousSelectionParams())) {
+    const auto applySelection = [this](const ScreenshotSelectionParams& params) {
+        return m_overlayInputHandler->restorePreviousSelection(params);
+    };
+    const auto target = selectionRestoreTarget();
+    const bool restored = previous
+                              ? m_historyService->browsePreviousSelection(target, applySelection)
+                              : m_historyService->browseNextSelection(target, applySelection);
+    if (!restored) {
         return false;
     }
     if (m_colorPickerController != nullptr && m_presentationServices != nullptr) {
