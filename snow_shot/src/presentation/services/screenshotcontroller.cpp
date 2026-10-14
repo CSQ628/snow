@@ -3967,6 +3967,7 @@ void ScreenshotController::Impl::pinClipboardContentToScreen() {
         return;
     }
 
+    snapshot->textStyle = ScreenshotClipboardContentReader::capturePinnedTextStyle();
     QScreen* prewarmScreen = screen;
     if (snapshot->placement && snapshot->placement->filePath.isEmpty()) {
         const auto resolved = resolveScreenshotClipboardPlacement(
@@ -6399,6 +6400,7 @@ void ScreenshotController::pinDroppedContent(ScreenshotClipboardContentSnapshot 
         m_impl->m_filePinBatch.start(paths, present, filter);
         return;
     }
+    snapshot.textStyle = ScreenshotClipboardContentReader::capturePinnedTextStyle();
     auto content = std::make_shared<std::optional<ScreenshotClipboardContent>>();
     m_impl->m_clipboardPinJob = ScreenshotExportCoordinator::shared().submit(
         this, ScreenshotExportCoordinator::Priority::Foreground,
