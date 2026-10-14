@@ -3810,8 +3810,8 @@ void ScreenshotPinnedWindow::createContextMenu() {
                     &ScreenshotPinnedWindow::resetImageTransform);
             processMenu->addSeparator();
             m_splitImageAction = processMenu->addItem(
-                QCoreApplication::translate("ImageSplitWindow",
-                                            QT_TRANSLATE_NOOP("ImageSplitWindow", "Split Image")),
+                QCoreApplication::translate(
+                    "ImageSplitWindow", QT_TRANSLATE_NOOP("ImageSplitWindow", "Image Splitting")),
                 custom_outlined_icons::ImageSplitting());
             m_splitImageAction->setObjectName(QStringLiteral("screenshotPinnedSplitImageAction"));
             connect(m_splitImageAction, &QAction::triggered, this, [this] {
@@ -4025,7 +4025,7 @@ void ScreenshotPinnedWindow::refreshContextMenu() {
                                                 : tr("Default")));
     }
     if (m_splitImageAction != nullptr) {
-        const QString label = QCoreApplication::translate("ImageSplitWindow", "Split Image");
+        const QString label = QCoreApplication::translate("ImageSplitWindow", "Image Splitting");
         m_splitImageAction->setText(label);
         m_splitImageAction->setToolTip(label);
         m_splitImageAction->setEnabled(m_firstContentFramePublished &&

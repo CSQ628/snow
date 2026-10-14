@@ -3665,8 +3665,7 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
         for (adqt::widgets::AdButton* button :
              m_selectActionPanel->findChildren<adqt::widgets::AdButton*>()) {
             if (button != nullptr && button != m_scrollingAutoScrollIntervalEditor) {
-                const QByteArray tooltip = button->toolTip().toUtf8();
-                configureScreenshotToolPaletteStyleButton(button, tooltip.constData(), metrics);
+                configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
             }
         }
         for (adqt::widgets::AdSelect* select : {m_textFormattingSelect, m_textPunctuationSelect,
@@ -4997,7 +4996,7 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
         toolbar_settings::DrawingSettings().alwaysShowFirstToolbarGroupButton();
     const bool alreadyActive =
         !toggleVisibleButton || fixedGroupButton ? m_activeTool.has_value() && *m_activeTool == tool
-        : requestedButton != nullptr ? m_activeToolButton == requestedButton
+        : requestedButton != nullptr             ? m_activeToolButton == requestedButton
                                      : m_activeTool.has_value() && *m_activeTool == tool;
     const Tool requestedTool = alreadyActive && tool != Tool::Select ? Tool::Select : tool;
     activateDrawingTool(requestedTool);
@@ -9066,6 +9065,14 @@ void ScreenshotToolPalette::createScrollingRecognitionActionFamily() {
     settingsSeparator->setObjectName(QStringLiteral("screenshotScrollingSettingsSeparator"));
     layout->addWidget(settingsSeparator);
     addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
+    auto* splitButton = createScreenshotToolPaletteStyleActionButton(
+        m_scrollingRecognitionControls, QT_TR_NOOP("Image Splitting"),
+        custom_outlined_icons::ImageSplitting(), actionButtonMetrics(m_physicalScale));
+    splitButton->setObjectName(QStringLiteral("screenshotScrollingImageSplittingButton"));
+    layout->addWidget(splitButton);
+    addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
+    connect(splitButton, &adqt::widgets::AdButton::clicked, this,
+            &ScreenshotToolPalette::scrollingImageSplittingRequested);
     auto* settingsButton = createScreenshotToolPaletteStyleActionButton(
         m_scrollingRecognitionControls, QT_TR_NOOP("Settings"), outlined_icons::Setting(),
         actionButtonMetrics(m_physicalScale));
@@ -9076,9 +9083,9 @@ void ScreenshotToolPalette::createScrollingRecognitionActionFamily() {
     m_selectActionLayout->addWidget(m_scrollingRecognitionControls);
     stampScreenshotToolbarReferenceWidth(
         m_scrollingRecognitionControls,
-        actionButtonMetrics(1.0).buttonSize * 6 +
+        actionButtonMetrics(1.0).buttonSize * 7 +
             screenshotToolbarReferenceWidth(m_scrollingAutoScrollIntervalEditor) +
-            STYLE_GROUP_SPACING * 12 + STYLE_ITEM_SPACING * 3 + TOOLBAR_SEPARATOR_WIDTH * 3);
+            STYLE_GROUP_SPACING * 12 + STYLE_ITEM_SPACING * 4 + TOOLBAR_SEPARATOR_WIDTH * 3);
     connect(m_scrollingAutoScrollButton, &adqt::widgets::AdButton::clicked, this, [this]() {
         m_scrollingAutoScroll = !m_scrollingAutoScroll;
         updateScrollingRecognitionButtons();

@@ -308,8 +308,8 @@ void historyAndManualEditing() {
             "line movement starts an atomic gesture");
     document.moveDraggedLine(21);
     document.moveDraggedLine(1);
-    require(document.layout().verticalLines == QVector<int>{20, 21},
-            "dragging clamps against neighbors with one-pixel minimum regions");
+    require(document.layout().verticalLines == QVector<int>{1, 20},
+            "dragging crosses neighboring lines and keeps cuts sorted");
     document.moveDraggedLine(1000);
     require(document.layout().verticalLines.last() == 99, "dragging clamps to image interior");
     document.endLineDrag();
@@ -372,6 +372,76 @@ void historyAndManualEditing() {
                 document.layout().errors.isEmpty() && document.layout().outputCount() == 1,
             "redo restores a valid tiny-image split without stale errors");
 }
+void lineDragsCrossOtherLines() {
+    for (const auto direction : {ImageSplitDirection::Vertical, ImageSplitDirection::Horizontal,
+                                 ImageSplitDirection::Grid}) {
+        for (const bool vertical : {true, false}) {
+            if ((direction == ImageSplitDirection::Vertical && !vertical) ||
+                (direction == ImageSplitDirection::Horizontal && vertical))
+                continue;
+            ImageSplitDocument document;
+            document.setImage(fixture({100, 100}));
+            auto settings = document.settings();
+            settings.direction = direction;
+            settings.count = 5;
+            settings.rows = 5;
+            settings.columns = 5;
+            require(document.setSettings(settings), "crossing fixture settings apply");
+            const auto original = document.state();
+            const auto lines = [&] {
+                const auto layout = document.layout();
+                return vertical ? layout.verticalLines : layout.horizontalLines;
+            };
+            QObject::connect(&document, &ImageSplitDocument::changed, &document,
+                             [&] { requireCoverage(document.layout()); });
+            require(document.beginLineDrag(vertical, 1), "a middle line starts dragging");
+            require(document.moveDraggedLine(95) && lines() == QVector<int>{20, 60, 80, 95},
+                    "one movement can cross multiple lines toward the end of either axis");
+            require(!document.moveDraggedLine(60) && lines() == QVector<int>{20, 60, 80, 95},
+                    "occupied pixel boundaries do not create duplicate cuts or lose the drag");
+            require(document.moveDraggedLine(10) && lines() == QVector<int>{10, 20, 60, 80},
+                    "the same dragged line crosses back over multiple neighbors");
+            require(document.moveDraggedLine(50) && lines() == QVector<int>{20, 50, 60, 80},
+                    "continued movement follows the dragged line after its sorted index changes");
+            require(document.moveDraggedLine(-100) && lines() == QVector<int>{1, 20, 60, 80} &&
+                        document.moveDraggedLine(1000) && lines() == QVector<int>{20, 60, 80, 99},
+                    "crossing drags clamp only at the image interior");
+            document.endLineDrag();
+            const auto moved = document.state();
+            document.undo();
+            require(document.state() == original, "one undo restores the entire crossing gesture");
+            document.redo();
+            require(document.state() == moved, "redo restores the crossed line geometry");
+            require(document.beginLineDrag(vertical, 3) && document.moveDraggedLine(10),
+                    "a committed line can cross back during another gesture");
+            document.cancelLineDrag();
+            require(document.state() == moved, "cancel restores the state before crossing");
+            require(document.beginLineDrag(vertical, 3) && document.moveDraggedLine(10) &&
+                        document.moveDraggedLine(99),
+                    "a crossed line can return to its original coordinate");
+            document.endLineDrag();
+            document.undo();
+            require(document.state() == original,
+                    "crossing away and back does not add a redundant history entry");
+        }
+    }
+
+    ImageSplitDocument dense;
+    dense.setImage(fixture({20'000, 2}));
+    auto settings = dense.settings();
+    settings.count = 10'000;
+    require(dense.setSettings(settings), "dense crossing fixture settings apply");
+    const auto original = dense.state();
+    require(dense.beginLineDrag(true, 0) && dense.moveDraggedLine(19'999) &&
+                dense.layout().verticalLines.first() == 4 &&
+                dense.layout().verticalLines.last() == 19'999 &&
+                dense.layout().verticalLines.size() == 9'999 &&
+                dense.layout().verticalLines.storageBytes() < 1024,
+            "crossing thousands of generated guides preserves compact sorted axes");
+    requireCoverage(dense.layout());
+    dense.cancelLineDrag();
+    require(dense.state() == original, "cancel restores the shared dense-axis snapshot");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -382,6 +452,7 @@ int main(int argc, char** argv) {
         exactPercentageConversion();
         preciseAndValidation();
         historyAndManualEditing();
+        lineDragsCrossOtherLines();
         std::cout << "Image split document tests passed\n";
         return 0;
     } catch (const std::exception& error) {

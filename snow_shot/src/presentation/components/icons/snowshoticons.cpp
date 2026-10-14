@@ -958,14 +958,13 @@ SOFTWARE.
     {std::string_view("snow-shot"), std::string_view("outlined"),
      std::string_view("image-splitting"),
      std::string_view(
-         R"ADQT_SVG_82(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="72" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="100" y="212" width="824" height="600" rx="72"/>
-  <path d="M512 280v464M168 512h688" stroke-dasharray="72 96"/>
-  <path d="M100 720l116-116 144 144"/>
-  <circle cx="292" cy="380" r="36" fill="__ADQT_SLOT_PRIMARY__" stroke="none"/>
+         R"ADQT_SVG_82(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="__ADQT_SLOT_PRIMARY__">
+  <path fill-rule="evenodd" d="M96 176h320a32 32 0 0 1 32 32v608a32 32 0 0 1-32 32H96a32 32 0 0 1-32-32V208a32 32 0 0 1 32-32zm40 72v528h240V248H136zm472-72h320a32 32 0 0 1 32 32v608a32 32 0 0 1-32 32H608a32 32 0 0 1-32-32V208a32 32 0 0 1 32-32zm40 72v528h240V248H648z"/>
+  <path d="M136 680l120-120 120 120M648 616l104-104 136 136" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="72" stroke-linejoin="round"/>
+  <circle cx="256" cy="384" r="48"/>
 </svg>
 )ADQT_SVG_82"),
-     std::string_view("fcc7b0ce3e3eb96d75a4fdbbf733e20917665da3ccf27e257a9fffad594b01b3"),
+     std::string_view("fd179402e6a978a4d7dcb9f72fad5d36379b06459fb081f14e3eeded48d68586"),
      IconColorModel::Monochrome, IconFit::Contain,
      IconStaticColors{std::string_view(""), std::string_view(""), std::string_view("")}, false},
     {std::string_view("snow-shot"), std::string_view("outlined"),
@@ -1195,8 +1194,7 @@ SOFTWARE.
      std::string_view("4324496ead0fa9695ace2623a0c11c0a581d0b5ddcf2329eb240e465c6f4cdc6"),
      IconColorModel::Monochrome, IconFit::Contain,
      IconStaticColors{std::string_view(""), std::string_view(""), std::string_view("")}, false},
-    {std::string_view("snow-shot"), std::string_view("outlined"),
-     std::string_view("opacity"), std::string_view(R"ADQT_SVG_100(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="80.64" stroke-linejoin="round">
+    {std::string_view("snow-shot"), std::string_view("outlined"), std::string_view("opacity"), std::string_view(R"ADQT_SVG_100(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="80.64" stroke-linejoin="round">
   <path d="M512 64C449.28 187.2 180.48 422.4 180.48 637.44c0 183.68 147.84 331.52 331.52 331.52s331.52-147.84 331.52-331.52c0-215.04-268.8-450.24-331.52-573.44z"/>
   <path d="M180.48 610.56h662.24v26.88c0 183.68-147.84 331.52-331.52 331.52S180.48 821.12 180.48 637.44v-26.88z" fill="__ADQT_SLOT_PRIMARY__" stroke="none"/>
 </svg>
@@ -2157,7 +2155,7 @@ SOFTWARE.
 
 constexpr IconPack kStaticPack{
     std::string_view("snow-shot"), std::string_view("Snow Shot project-owned static SVG assets"),
-    std::string_view("dae169a271f5ef9f232d32142a2e41a2fa7c893038e31c76ed7e3fe61aefbada"), kEntries,
+    std::string_view("6e815d90a504eed9287273b0bd55feebbf1924a595d0b9fa3fd91e4731a2b642"), kEntries,
     sizeof(kEntries) / sizeof(kEntries[0])};
 
 } // namespace

@@ -8,8 +8,10 @@
 #include "widgets/segmented.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFontMetrics>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -20,6 +22,7 @@
 #include <QUrl>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <iostream>
@@ -64,6 +67,21 @@ void wheel(QWidget* target, QPointF point, int delta) {
                       Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
     QApplication::sendEvent(target, &event);
 }
+QPointF rulerPoint(const ImageSplitPreviewCanvas& canvas, bool horizontal, int coordinate) {
+    return horizontal ? QPointF(canvas.imageToViewport({qreal(coordinate), 0}).x(),
+                                std::max(28.0, canvas.offset().y()) - 14)
+                      : QPointF(std::max(38.0, canvas.offset().x()) - 19,
+                                canvas.imageToViewport({0, qreal(coordinate)}).y());
+}
+QImage renderCanvas(ImageSplitPreviewCanvas& canvas, qreal scale) {
+    QImage output(QSize(qRound(canvas.width() * scale), qRound(canvas.height() * scale)),
+                  QImage::Format_ARGB32_Premultiplied);
+    output.setDevicePixelRatio(scale);
+    output.fill(Qt::transparent);
+    QPainter painter(&output);
+    canvas.render(&painter);
+    return output;
+}
 template <class T> T* child(QWidget& editor, const char* name) {
     auto* result = editor.findChild<T*>(QString::fromLatin1(name));
     require(result != nullptr, "expected split editor control is missing");
@@ -80,6 +98,9 @@ void defaultsConditionalControlsAndActions() {
     document.setImage(image({1200, 900}));
     ImageSplitEditorWidget editor(&document);
     show(editor);
+    require(editor.canvas()->toolTip().isEmpty() &&
+                !editor.canvas()->accessibleDescription().isEmpty(),
+            "the preview canvas must keep accessible instructions without a tooltip");
     auto* form = child<AdForm>(editor, "imageSplitSettingsForm");
     require(
         !form->autoFillBackground(),
@@ -103,6 +124,17 @@ void defaultsConditionalControlsAndActions() {
                 !form->field(QStringLiteral("columns"))->itemHidden() &&
                 document.layout().outputCount() == 4,
             "grid must hide split type and display the default two by two controls");
+    pump();
+    const auto rows = form->field(QStringLiteral("rows"))->geometry();
+    const auto columns = form->field(QStringLiteral("columns"))->geometry();
+    require(rows.top() == columns.top() && rows.right() < columns.left() &&
+                std::abs(rows.width() - columns.width()) <= 1,
+            "grid rows and columns must share one row with equal-width columns");
+    const auto* rowsInput = child<AdInputNumber>(editor, "imageSplitRows");
+    const auto* columnsInput = child<AdInputNumber>(editor, "imageSplitColumns");
+    require(rowsInput->mapTo(form, QPoint{}).y() == columnsInput->mapTo(form, QPoint{}).y() &&
+                rowsInput->width() == rows.width() && columnsInput->width() == columns.width(),
+            "grid number inputs must align and fill their respective columns");
     child<AdInputNumber>(editor, "imageSplitColumns")->setValue(3);
     require(document.settings().rows == 2 && document.settings().columns == 3 &&
                 document.layout().outputCount() == 6 &&
@@ -121,14 +153,137 @@ void defaultsConditionalControlsAndActions() {
     const std::array<const char*, 4> names{"imageSplitUndo", "imageSplitRedo", "imageSplitFit",
                                            "imageSplitReload"};
     const std::array<const char*, 4> labels{"Undo", "Redo", "Fit to Canvas", "Reload"};
+    auto* toolbar = child<QWidget>(editor, "imageSplitCanvasToolbar");
+    require(toolbar->parentWidget() == editor.canvas() && toolbar->isVisible() &&
+                editor.canvas()->rect().contains(toolbar->geometry()),
+            "canvas actions must float inside the preview canvas");
     int lastX = -1;
     for (std::size_t i = 0; i < names.size(); ++i) {
         auto* button = child<AdButton>(editor, names[i]);
         require(button->buttonStyle() == AdButton::ButtonStyle::Text &&
-                    button->text() == QString::fromLatin1(labels[i]) &&
-                    button->y() >= editor.canvas()->geometry().bottom() && button->x() > lastX,
-                "canvas actions must be ordered text buttons below the canvas");
+                    button->sizeClass() == AdButton::SizeClass::Small &&
+                    button->size() == QSize(26, 26) && button->text().isEmpty() &&
+                    button->iconRef().isValid() &&
+                    button->toolTip() == QString::fromLatin1(labels[i]) &&
+                    button->accessibleName() == button->toolTip() &&
+                    button->focusPolicy() == Qt::StrongFocus && button->parentWidget() == toolbar &&
+                    button->x() > lastX,
+                "floating actions must keep their order, compact icons and translated labels");
         lastX = button->x();
+    }
+}
+
+class SizeLabelTranslator final : public QTranslator {
+  public:
+    QString translate(const char* context, const char* source, const char*, int) const override {
+        if (QByteArray(context) == "ImageSplitEditorWidget") {
+            if (QByteArray(source) == "Width per Image")
+                return QStringLiteral("每张图片宽度");
+            if (QByteArray(source) == "Height per Image")
+                return QStringLiteral("每张图片高度");
+        }
+        return {};
+    }
+};
+
+void preciseSizeUsesSharedFormLabel() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto original = themes.config();
+    ImageSplitDocument document;
+    document.setImage(image({1200, 900}));
+    ImageSplitEditorWidget editor(&document);
+    show(editor);
+    auto* form = child<AdForm>(editor, "imageSplitSettingsForm");
+    auto* type = child<AdSegmented>(editor, "imageSplitType");
+    auto* direction = child<AdSegmented>(editor, "imageSplitDirection");
+    auto* size = child<AdInputNumber>(editor, "imageSplitSize");
+    auto* unit = child<AdSegmented>(editor, "imageSplitUnit");
+    auto* field = form->field(QStringLiteral("size"));
+    auto* label = field->findChild<QLabel*>(QStringLiteral("ad-form-item-label"));
+    auto* reference = form->field(QStringLiteral("count"))
+                          ->findChild<QLabel*>(QStringLiteral("ad-form-item-label"));
+    require(field->controlWidget() == size && field->labelAccessoryWidget() == unit && label &&
+                reference && label->buddy() == size,
+            "precise image size must use the shared form field with a label and unit accessory");
+    type->setCurrentValue(QStringLiteral("precise"));
+    for (const auto theme : {adqt::theme::ThemeScheme::Light, adqt::theme::ThemeScheme::Dark}) {
+        themes.setPreset(theme);
+        for (const auto& value : {QStringLiteral("vertical"), QStringLiteral("horizontal")}) {
+            direction->setCurrentValue(value);
+            pump();
+            const auto expected = value == QStringLiteral("vertical")
+                                      ? QStringLiteral("Width per Image")
+                                      : QStringLiteral("Height per Image");
+            require(field->label() == expected && label->text() == expected &&
+                        size->accessibleName() == expected && label->font() == reference->font() &&
+                        label->palette().color(QPalette::WindowText) ==
+                            reference->palette().color(QPalette::WindowText),
+                    "width and height labels must use the shared form typography and theme color");
+            require(label->isVisible() && unit->isVisible() &&
+                        label->parentWidget() == unit->parentWidget() &&
+                        label->geometry().right() < unit->geometry().left() &&
+                        unit->mapTo(field, QPoint(0, unit->height())).y() <=
+                            size->mapTo(field, QPoint{}).y() &&
+                        size->width() == field->width(),
+                    "the unit selector must stay beside the label above a full-width number input");
+        }
+    }
+    SizeLabelTranslator translator;
+    const auto state = document.state();
+    QApplication::installTranslator(&translator);
+    QEvent language(QEvent::LanguageChange);
+    QApplication::sendEvent(&editor, &language);
+    require(field->label() == QStringLiteral("每张图片高度") && label->text() == field->label() &&
+                size->accessibleName() == field->label() && document.state() == state,
+            "runtime language changes must refresh the shared size label and accessible name");
+    direction->setCurrentValue(QStringLiteral("vertical"));
+    require(field->label() == QStringLiteral("每张图片宽度") && label->text() == field->label() &&
+                size->accessibleName() == field->label(),
+            "changing direction must update the translated size label and accessible name");
+    QApplication::removeTranslator(&translator);
+    QApplication::sendEvent(&editor, &language);
+    type->setCurrentValue(QStringLiteral("equal"));
+    require(!unit->isVisible(), "equal splitting must hide the precise size unit selector");
+    themes.setConfig(original);
+}
+
+void floatingToolbarFollowsCanvas() {
+    ImageSplitDocument document;
+    document.setImage(image({1200, 900}));
+    ImageSplitEditorWidget editor(&document);
+    show(editor);
+    auto* canvas = editor.canvas();
+    auto* toolbar = child<QWidget>(editor, "imageSplitCanvasToolbar");
+    const auto state = document.state();
+    for (const QSize size : {QSize(1100, 720), QSize(900, 600), QSize(540, 240)}) {
+        editor.resize(size);
+        pump();
+        require(canvas->rect().contains(toolbar->geometry()) &&
+                    std::abs(QRectF(toolbar->geometry()).center().x() -
+                             QRectF(canvas->rect()).center().x()) <= .5 &&
+                    canvas->height() - toolbar->geometry().bottom() - 1 == 16,
+                "floating toolbar must stay centered with a bottom inset when resized");
+        const auto geometry = toolbar->geometry();
+        canvas->fitToCanvas();
+        const auto fittedZoom = canvas->zoom();
+        const auto fittedOffset = canvas->offset();
+        wheel(canvas, {100, 100}, 120);
+        mouse(canvas, QEvent::MouseButtonPress, {80, 80}, Qt::MiddleButton, Qt::MiddleButton);
+        mouse(canvas, QEvent::MouseMove, {100, 90}, Qt::NoButton, Qt::MiddleButton);
+        mouse(canvas, QEvent::MouseButtonRelease, {100, 90}, Qt::MiddleButton, Qt::NoButton);
+        pump();
+        require(toolbar->geometry() == geometry,
+                "zooming and panning must not move the floating toolbar");
+        click(child<AdButton>(editor, "imageSplitFit"));
+        require(qFuzzyCompare(canvas->zoom(), fittedZoom) &&
+                    (canvas->offset() - fittedOffset).manhattanLength() < .001 &&
+                    document.state() == state,
+                "floating fit action must restore the viewport without editing the image");
+        mouse(toolbar, QEvent::MouseButtonPress, {1, 1}, Qt::MiddleButton, Qt::MiddleButton);
+        mouse(toolbar, QEvent::MouseMove, {6, 1}, Qt::NoButton, Qt::MiddleButton);
+        mouse(toolbar, QEvent::MouseButtonRelease, {6, 1}, Qt::MiddleButton, Qt::NoButton);
+        require(canvas->offset() == fittedOffset && document.state() == state,
+                "toolbar background gestures must not reach the image canvas");
     }
 }
 
@@ -152,6 +307,9 @@ void formValidationUnitsAndUndoableRegeneration() {
             "correcting a draft must restore validity and commit the new count");
     document.createLine(true, 100);
     const auto manual = document.state();
+    require(manual.manuallyEdited &&
+                !editor.findChild<QLabel*>(QStringLiteral("imageSplitManualStatus")),
+            "manual split line edits must not add a status message to the settings form");
     QMetaObject::invokeMethod(count, "editingFinished", Qt::DirectConnection);
     require(document.state() == manual,
             "finishing an unchanged numeric field must preserve manual split lines");
@@ -274,12 +432,11 @@ void transformedRulersAndManualGestures() {
     mouse(canvas, QEvent::MouseButtonPress, {200, 150}, Qt::MiddleButton, Qt::MiddleButton);
     mouse(canvas, QEvent::MouseMove, {220, 180}, Qt::NoButton, Qt::MiddleButton);
     mouse(canvas, QEvent::MouseButtonRelease, {220, 180}, Qt::MiddleButton, Qt::NoButton);
-    const auto rulerX = canvas->imageToViewport({300, 0}).x();
-    click(canvas, {rulerX, 12});
+    click(canvas, rulerPoint(*canvas, true, 300));
     require(document.layout().verticalLines.contains(300),
             "top ruler clicks must create image-pixel coordinates synchronized with zoom and pan");
     const auto beforeBlocked = document.state();
-    click(canvas, {12, canvas->imageToViewport({0, 200}).y()});
+    click(canvas, rulerPoint(*canvas, false, 200));
     require(document.state() == beforeBlocked,
             "the left ruler must not create horizontal lines in vertical mode");
     const auto start = canvas->imageToViewport({300, 400});
@@ -326,9 +483,65 @@ void transformedRulersAndManualGestures() {
     require(document.state() == countBeforeViewport && document.image() == source,
             "viewport operations must preserve document state and source pixels");
     child<AdSegmented>(editor, "imageSplitDirection")->setCurrentValue(QStringLiteral("grid"));
-    click(canvas, {12, canvas->imageToViewport({0, 200}).y()});
+    click(canvas, rulerPoint(*canvas, false, 200));
     require(document.layout().horizontalLines.contains(200),
             "grid must permit horizontal ruler edits");
+}
+
+void splitLineSelectionFollowsCrossing() {
+    for (const bool vertical : {true, false}) {
+        ImageSplitDocument document;
+        document.setImage(image({400, 400}));
+        auto settings = document.settings();
+        settings.direction = ImageSplitDirection::Grid;
+        settings.rows = 4;
+        settings.columns = 4;
+        require(document.setSettings(settings), "canvas crossing fixture settings apply");
+        ImageSplitPreviewCanvas canvas(&document);
+        canvas.resize(900, 700);
+        canvas.show();
+        pump();
+        wheel(&canvas, canvas.imageToViewport({200, 200}), 120);
+        mouse(&canvas, QEvent::MouseButtonPress, {80, 80}, Qt::MiddleButton, Qt::MiddleButton);
+        mouse(&canvas, QEvent::MouseMove, {95, 92}, Qt::NoButton, Qt::MiddleButton);
+        mouse(&canvas, QEvent::MouseButtonRelease, {95, 92}, Qt::MiddleButton, Qt::NoButton);
+        const auto point = [&](int coordinate) {
+            return canvas.imageToViewport(vertical ? QPointF(coordinate, 150)
+                                                   : QPointF(150, coordinate));
+        };
+        const auto lines = [&] {
+            const auto layout = document.layout();
+            return vertical ? layout.verticalLines : layout.horizontalLines;
+        };
+        const auto original = document.state();
+        mouse(&canvas, QEvent::MouseMove, point(100), Qt::NoButton, Qt::NoButton);
+        mouse(&canvas, QEvent::MouseButtonPress, point(100), Qt::LeftButton, Qt::LeftButton);
+        for (const int coordinate : {350, 50, 200, 250, 350})
+            mouse(&canvas, QEvent::MouseMove, point(coordinate), Qt::NoButton, Qt::LeftButton);
+        mouse(&canvas, QEvent::MouseButtonRelease, point(350), Qt::LeftButton, Qt::NoButton);
+        require(lines() == QVector<int>{200, 300, 350},
+                "zoomed and panned canvas drags can cross several lines in both directions");
+        const auto moved = document.state();
+        QKeyEvent deletion(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &deletion);
+        require(lines() == QVector<int>{200, 300},
+                "Delete follows the dragged line after it crosses other lines");
+        document.undo();
+        require(document.state() == moved, "undo restores the selected crossed line");
+        document.undo();
+        require(document.state() == original, "one undo reverses the canvas crossing gesture");
+        document.redo();
+        mouse(&canvas, QEvent::MouseButtonPress, point(350), Qt::LeftButton, Qt::LeftButton);
+        mouse(&canvas, QEvent::MouseMove, point(50), Qt::NoButton, Qt::LeftButton);
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &escape);
+        mouse(&canvas, QEvent::MouseButtonRelease, point(50), Qt::LeftButton, Qt::NoButton);
+        require(document.state() == moved,
+                "Escape restores crossed lines without changing history");
+        QApplication::sendEvent(&canvas, &deletion);
+        require(lines() == QVector<int>{200, 300},
+                "Escape restores selection to the original dragged line before Delete");
+    }
 }
 
 void replacementResetBusyAndDrops() {
@@ -386,6 +599,137 @@ void replacementResetBusyAndDrops() {
             "ending busy work must restore controls");
 }
 
+void dragFeedbackUsesUploadSurface() {
+    ImageSplitDocument document;
+    document.setImage(image({800, 600}));
+    ImageSplitEditorWidget editor(&document);
+    show(editor);
+    const auto state = document.state();
+    auto* hint = child<QWidget>(editor, "imageSplitDropHint");
+    auto* title = child<QLabel>(editor, "imageSplitDropTitle");
+    auto* description = child<QLabel>(editor, "imageSplitDropDescription");
+    require(hint->isHidden() && hint->testAttribute(Qt::WA_TransparentForMouseEvents) &&
+                hint->accessibleName() == title->text() &&
+                hint->accessibleDescription() == description->text(),
+            "upload feedback must start hidden with accessible labels and pass-through input");
+    QMimeData files;
+    files.setUrls({QUrl::fromLocalFile(QStringLiteral("C:/replacement.png"))});
+    const auto enter = [&](QWidget* target, Qt::DropActions actions = Qt::CopyAction) {
+        QDragEnterEvent event(QRectF(target->rect()).center(), actions, &files, Qt::LeftButton,
+                              Qt::NoModifier);
+        QApplication::sendEvent(target, &event);
+        return event.isAccepted() && event.dropAction() == Qt::CopyAction;
+    };
+    const auto leave = [&] {
+        QDragLeaveEvent event;
+        QApplication::sendEvent(&editor, &event);
+        require(event.isAccepted() && hint->isHidden(), "drag leave must clear upload feedback");
+    };
+    for (auto* target :
+         {static_cast<QWidget*>(editor.canvas()), child<QWidget>(editor, "imageSplitCanvasToolbar"),
+          child<QWidget>(editor, "imageSplitSettingsScroll")}) {
+        require(enter(target) && hint->isVisible() &&
+                    hint->geometry() == editor.canvas()->geometry(),
+                "drags over the canvas, actions and settings must highlight only the preview");
+        leave();
+    }
+    require(enter(&editor), "image files must activate upload feedback");
+    editor.resize(900, 600);
+    pump();
+    require(hint->geometry() == editor.canvas()->geometry(),
+            "upload feedback must follow the resized canvas");
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalTheme = themes.config();
+    for (const auto theme : {adqt::theme::ThemeScheme::Light, adqt::theme::ThemeScheme::Dark}) {
+        themes.setPreset(theme);
+        pump();
+        const auto tokens = themes.resolveTheme(hint);
+        require(title->font().pixelSize() == qRound(tokens.fontSizeLG) &&
+                    description->font().pixelSize() == qRound(tokens.fontSize) &&
+                    title->palette().color(QPalette::WindowText) == tokens.colorText &&
+                    description->palette().color(QPalette::WindowText) == tokens.colorTextSecondary,
+                "upload feedback must use Stitch Image's title and description typography");
+        for (const qreal scale : {1.0, 1.5, 2.0}) {
+            QImage pixels(QSize(qRound(hint->width() * scale), qRound(hint->height() * scale)),
+                          QImage::Format_ARGB32_Premultiplied);
+            pixels.setDevicePixelRatio(scale);
+            pixels.fill(Qt::transparent);
+            QPainter painter(&pixels);
+            hint->render(&painter);
+            painter.end();
+            require(pixels.pixelColor(pixels.width() / 2, qRound(12 * scale)) ==
+                            tokens.colorPrimaryBg &&
+                        pixels.pixelColor(0, 0) == tokens.colorBgContainer,
+                    "upload feedback must share Stitch Image's tinted surface and rounded corners "
+                    "in both themes at every DPI scale");
+            bool hasPrimaryIcon = false;
+            const auto icon = hint->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly);
+            for (auto* widget : icon) {
+                if (widget->size() != QSize(48, 48))
+                    continue;
+                const auto bounds = widget->geometry();
+                for (int y = qRound(bounds.top() * scale);
+                     y < qRound((bounds.bottom() + 1) * scale); ++y)
+                    for (int x = qRound(bounds.left() * scale);
+                         x < qRound((bounds.right() + 1) * scale); ++x)
+                        hasPrimaryIcon |= pixels.pixelColor(x, y) == tokens.colorPrimary;
+            }
+            require(hasPrimaryIcon, "upload feedback must include the primary-colored inbox icon");
+        }
+    }
+    themes.setConfig(originalTheme);
+    for (const auto* language : {"en_US", "zh_CN", "zh_TW"}) {
+        QTranslator translator;
+        require(translator.load(
+                    QStringLiteral(":/i18n/snow_shot_%1.qm").arg(QString::fromLatin1(language))),
+                "upload feedback translations must be available in every language");
+        QApplication::installTranslator(&translator);
+        QEvent change(QEvent::LanguageChange);
+        QApplication::sendEvent(&editor, &change);
+        require(hint->isVisible() &&
+                    title->text() == QCoreApplication::translate(
+                                         "ImageSplitEditorWidget",
+                                         "Drop one image to replace the current image") &&
+                    description->text() ==
+                        QCoreApplication::translate("ImageSplitEditorWidget",
+                                                    "Drop one image file at a time.") &&
+                    hint->accessibleName() == title->text() &&
+                    hint->accessibleDescription() == description->text(),
+                "visible upload feedback and accessibility must retranslate together");
+        QApplication::removeTranslator(&translator);
+    }
+    require(document.state() == state && !document.canUndo(),
+            "drag feedback, resizing and language changes must preserve image edits");
+    QDragMoveEvent rejected(QPointF(editor.rect().center()), Qt::MoveAction, &files, Qt::LeftButton,
+                            Qt::NoModifier);
+    QApplication::sendEvent(&editor, &rejected);
+    require(!rejected.isAccepted() && hint->isHidden(),
+            "a drag without copy permission must clear feedback");
+    leave();
+    require(!enter(&editor, Qt::MoveAction) && hint->isHidden(),
+            "a move-only drag must not activate upload feedback");
+    require(enter(&editor), "copy drags must recover after a rejected drag");
+    int drops = 0;
+    QObject::connect(&editor, &ImageSplitEditorWidget::imageFilesDropped, &editor,
+                     [&](const QStringList&) { ++drops; });
+    QDropEvent rejectedDrop(editor.rect().center(), Qt::MoveAction, &files, Qt::LeftButton,
+                            Qt::NoModifier);
+    QApplication::sendEvent(&editor, &rejectedDrop);
+    require(!rejectedDrop.isAccepted() && hint->isHidden() && drops == 0,
+            "a move-only drop must not replace an image or leave stale feedback");
+    require(enter(&editor), "copy drags must recover after a rejected drop");
+    editor.setLoading(true);
+    require(hint->isHidden() && !enter(&editor), "loading must clear and block upload feedback");
+    editor.setLoading(false);
+    require(enter(&editor), "upload feedback must recover after loading");
+    editor.setExportBusy(true);
+    require(hint->isHidden() && !enter(&editor), "export must clear and block upload feedback");
+    editor.setExportBusy(false);
+    require(enter(&editor), "upload feedback must recover after export");
+    editor.hide();
+    require(hint->isHidden(), "hiding the editor must clear upload feedback");
+}
+
 void invalidDraftsSurviveFocusAndCanceledLoading() {
     ImageSplitDocument document;
     document.setImage(image({1001, 800}));
@@ -437,7 +781,7 @@ void invalidDirectionDoesNotEditThePreviousAxis() {
                 document.settings().direction == ImageSplitDirection::Vertical,
             "an invalid direction draft must remain displayed while preserving valid geometry");
     const auto previous = document.state();
-    click(editor.canvas(), {editor.canvas()->imageToViewport({300, 0}).x(), 12});
+    click(editor.canvas(), rulerPoint(*editor.canvas(), true, 300));
     require(
         document.state() == previous,
         "an invalid displayed horizontal direction must not allow edits to the old vertical axis");
@@ -587,11 +931,537 @@ class SplitTranslator final : public QTranslator {
         if (QByteArray(context) == "ImageSplitEditorWidget" && QByteArray(source) == "Reload")
             return QStringLiteral("重新加载");
         if (QByteArray(context) == "ImageSplitPreviewCanvas" &&
-            QByteArray(source) == "Image split preview")
-            return QStringLiteral("拆分预览");
+            QByteArray(source) == "Image splitting preview")
+            return QStringLiteral("分割预览");
         return {};
     }
 };
+void canvasBackgroundAndRulersFollowImage() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto original = themes.config();
+    const QColor background(201, 183, 165);
+    for (const auto theme : {adqt::theme::ThemeScheme::Light, adqt::theme::ThemeScheme::Dark}) {
+        themes.setPreset(theme);
+        QWidget host;
+        host.resize(900, 640);
+        host.setAutoFillBackground(true);
+        auto palette = host.palette();
+        palette.setColor(QPalette::Window, background);
+        host.setPalette(palette);
+        ImageSplitDocument document;
+        QImage source({400, 240}, QImage::Format_ARGB32_Premultiplied);
+        source.fill(Qt::black);
+        document.setImage(source);
+        auto settings = document.settings();
+        settings.direction = ImageSplitDirection::Grid;
+        document.setSettings(settings);
+        ImageSplitPreviewCanvas canvas(&document, &host);
+        canvas.resize(host.size());
+        host.show();
+        pump();
+        const auto verifyRulers = [&] {
+            const auto bounds =
+                QRectF(canvas.offset(), QSizeF(document.image().size()) * canvas.zoom())
+                    .intersected(QRectF(38, 28, canvas.width() - 38, canvas.height() - 28));
+            require(!bounds.isEmpty(), "ruler fixture must leave part of the image visible");
+            for (const qreal scale : {1.0, 1.25, 1.5, 1.75, 2.0}) {
+                const auto output = renderCanvas(canvas, scale);
+                const auto pixel = [&](QPointF point) {
+                    return output.pixelColor(qFloor(point.x() * scale), qFloor(point.y() * scale));
+                };
+                require(pixel({5, 5}) == background &&
+                            pixel({canvas.width() - 5.0, canvas.height() - 5.0}) == background,
+                        "canvas whitespace must inherit the host background in both themes");
+                require(pixel({bounds.center().x(), bounds.top() - 2}) != background &&
+                            pixel({bounds.left() - 2, bounds.center().y()}) != background,
+                        "both rulers must draw directly against the visible image edges");
+                if (bounds.top() > 60)
+                    require(pixel({bounds.center().x(), bounds.top() - 30}) == background,
+                            "the top ruler must occupy only the strip beside the image");
+                if (bounds.left() > 80)
+                    require(pixel({bounds.left() - 40, bounds.center().y()}) == background,
+                            "the left ruler must occupy only the strip beside the image");
+                if (bounds.right() < canvas.width() - 40)
+                    require(pixel({bounds.right() + 10, bounds.top() - 10}) == background,
+                            "rulers must stop at the visible image extent");
+            }
+        };
+        verifyRulers();
+        const auto initial = document.state();
+        click(&canvas, {canvas.imageToViewport({113, 0}).x(), 12});
+        require(document.state() == initial,
+                "empty space at the widget edge must no longer act as an image ruler");
+        click(&canvas, rulerPoint(canvas, true, 113));
+        click(&canvas, rulerPoint(canvas, false, 73));
+        require(document.layout().verticalLines.contains(113) &&
+                    document.layout().horizontalLines.contains(73),
+                "image-attached rulers must add split lines on both axes");
+        const auto beforePan = document.state();
+        const auto pan = [&](QPointF delta) {
+            mouse(&canvas, QEvent::MouseButtonPress, {80, 80}, Qt::MiddleButton, Qt::MiddleButton);
+            mouse(&canvas, QEvent::MouseMove, QPointF(80, 80) + delta, Qt::NoButton,
+                  Qt::MiddleButton);
+            mouse(&canvas, QEvent::MouseButtonRelease, QPointF(80, 80) + delta, Qt::MiddleButton,
+                  Qt::NoButton);
+        };
+        wheel(&canvas, canvas.imageToViewport({200, 120}), 240);
+        pan({35, 27});
+        verifyRulers();
+        pan(QPointF(10, 10) - canvas.offset());
+        verifyRulers();
+        const auto topPoint = rulerPoint(canvas, true, 173);
+        mouse(&canvas, QEvent::MouseMove, topPoint, Qt::NoButton, Qt::NoButton);
+        require(canvas.cursor().shape() == Qt::CrossCursor,
+                "a clipped image must retain an interactive ruler along its visible edge");
+        require(document.state() == beforePan && document.image() == source,
+                "moving the attached rulers must preserve split coordinates and image pixels");
+        click(&canvas, topPoint);
+        require(document.layout().verticalLines.contains(173),
+                "clipped rulers must still map clicks to the original image coordinates");
+        pan({1000, 1000});
+        const auto invisible = document.state();
+        mouse(&canvas, QEvent::MouseMove, {100, 12}, Qt::NoButton, Qt::NoButton);
+        require(canvas.cursor().shape() != Qt::CrossCursor,
+                "rulers must disappear when the image is entirely outside the viewport");
+        click(&canvas, {100, 12});
+        const auto output = renderCanvas(canvas, 1.5);
+        require(output.pixelColor(output.width() / 2, output.height() / 2) == background &&
+                    document.state() == invisible,
+                "an offscreen image must leave only the inherited canvas background");
+    }
+    themes.setConfig(original);
+}
+
+void splitPositionBadgesFollowRulers() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto original = themes.config();
+    for (const auto theme : {adqt::theme::ThemeScheme::Light, adqt::theme::ThemeScheme::Dark}) {
+        themes.setPreset(theme);
+        for (const bool vertical : {true, false}) {
+            ImageSplitDocument document;
+            QImage source({400, 240}, QImage::Format_ARGB32_Premultiplied);
+            source.fill(Qt::black);
+            document.setImage(source);
+            auto settings = document.settings();
+            settings.direction =
+                vertical ? ImageSplitDirection::Vertical : ImageSplitDirection::Horizontal;
+            settings.count = 2;
+            document.setSettings(settings);
+            ImageSplitPreviewCanvas canvas(&document);
+            canvas.resize(900, 640);
+            canvas.show();
+            pump();
+            const auto pan = [&](QPointF delta) {
+                mouse(&canvas, QEvent::MouseButtonPress, {80, 80}, Qt::MiddleButton,
+                      Qt::MiddleButton);
+                mouse(&canvas, QEvent::MouseMove, QPointF(80, 80) + delta, Qt::NoButton,
+                      Qt::MiddleButton);
+                mouse(&canvas, QEvent::MouseButtonRelease, QPointF(80, 80) + delta,
+                      Qt::MiddleButton, Qt::NoButton);
+            };
+            const auto badgeBounds = [&](const QImage& output) {
+                const auto primary = themes.resolveTheme(&canvas).colorPrimary.rgba();
+                QRect bounds;
+                for (int y = 0; y < output.height(); ++y) {
+                    const auto* pixels = reinterpret_cast<const QRgb*>(output.constScanLine(y));
+                    for (int x = 0; x < output.width(); ++x) {
+                        if (pixels[x] == primary)
+                            bounds = bounds.united(QRect(x, y, 1, 1));
+                    }
+                }
+                const qreal scale = output.devicePixelRatio();
+                return QRectF(bounds.x() / scale, bounds.y() / scale, bounds.width() / scale,
+                              bounds.height() / scale);
+            };
+            const auto verifyBadge = [&](int coordinate) {
+                const auto imageBounds =
+                    QRectF(canvas.offset(), QSizeF(source.size()) * canvas.zoom())
+                        .intersected(QRectF(38, 28, canvas.width() - 38, canvas.height() - 28));
+                const auto ruler = vertical ? QRectF(imageBounds.left(), imageBounds.top() - 28,
+                                                     imageBounds.width(), 28)
+                                            : QRectF(imageBounds.left() - 38, imageBounds.top(), 38,
+                                                     imageBounds.height());
+                const auto center = rulerPoint(canvas, vertical, coordinate);
+                for (const qreal scale : {1.0, 1.25, 1.5, 1.75, 2.0}) {
+                    const auto bounds = badgeBounds(renderCanvas(canvas, scale));
+                    require(!bounds.isEmpty() && QRectF(canvas.rect()).contains(bounds) &&
+                                ruler.intersects(bounds),
+                            "split position badges must remain visible beside their ruler");
+                    require(std::abs(vertical ? bounds.center().x() - center.x()
+                                              : bounds.center().y() - center.y()) <= 1 / scale,
+                            "ruler position badges must align with the split line at every DPI");
+                    QFont badgeFont = canvas.font();
+                    badgeFont.setPixelSize(12);
+                    const auto label = QString(vertical ? "X: %1 px" : "Y: %1 px").arg(coordinate);
+                    require(bounds.width() > bounds.height() &&
+                                std::abs(bounds.width() -
+                                         (QFontMetrics(badgeFont).horizontalAdvance(label) + 12)) <=
+                                    2 / scale,
+                            "both axes must show full-width horizontal coordinate hints");
+                }
+            };
+            for (const bool transformed : {false, true}) {
+                if (transformed) {
+                    wheel(&canvas, canvas.imageToViewport({200, 120}), 240);
+                    pan(QPointF(10, 10) - canvas.offset());
+                }
+                const int coordinate = vertical ? 200 : 120;
+                const auto line = canvas.imageToViewport(vertical ? QPointF(coordinate, 80)
+                                                                  : QPointF(80, coordinate));
+                click(&canvas, canvas.imageToViewport({50, 50}));
+                const auto before = document.state();
+                const bool couldUndo = document.canUndo();
+                const bool couldRedo = document.canRedo();
+                mouse(&canvas, QEvent::MouseMove, rulerPoint(canvas, vertical, coordinate - 37),
+                      Qt::NoButton, Qt::NoButton);
+                verifyBadge(coordinate - 37);
+                QEvent hoverLeave(QEvent::Leave);
+                QApplication::sendEvent(&canvas, &hoverLeave);
+                require(badgeBounds(renderCanvas(canvas, 1.5)).isEmpty(),
+                        "leaving a ruler must clear its coordinate hint without selecting a line");
+                mouse(&canvas, QEvent::MouseMove, rulerPoint(canvas, vertical, coordinate - 37),
+                      Qt::NoButton, Qt::NoButton);
+                canvas.setEditingEnabled(false);
+                require(badgeBounds(renderCanvas(canvas, 1.5)).isEmpty(),
+                        "disabled editing must clear the ruler coordinate hint");
+                canvas.setEditingEnabled(true);
+                require(badgeBounds(renderCanvas(canvas, 1.5)).isEmpty(),
+                        "re-enabling editing must not restore a stale coordinate hint");
+                mouse(&canvas, QEvent::MouseMove, line, Qt::NoButton, Qt::NoButton);
+                verifyBadge(coordinate);
+                require(document.state() == before && document.canUndo() == couldUndo &&
+                            document.canRedo() == couldRedo,
+                        "showing a ruler badge must preserve split settings and history");
+                click(&canvas, line);
+                QEvent leave(QEvent::Leave);
+                QApplication::sendEvent(&canvas, &leave);
+                verifyBadge(coordinate);
+                mouse(&canvas, QEvent::MouseMove, rulerPoint(canvas, vertical, coordinate + 37),
+                      Qt::NoButton, Qt::NoButton);
+                verifyBadge(coordinate + 37);
+                QApplication::sendEvent(&canvas, &leave);
+                verifyBadge(coordinate);
+                mouse(&canvas, QEvent::MouseButtonPress, line, Qt::LeftButton, Qt::LeftButton);
+                const int moved = coordinate + 20;
+                const auto destination =
+                    canvas.imageToViewport(vertical ? QPointF(moved, 80) : QPointF(80, moved));
+                mouse(&canvas, QEvent::MouseMove, destination, Qt::NoButton, Qt::LeftButton);
+                verifyBadge(moved);
+                QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+                QApplication::sendEvent(&canvas, &escape);
+                mouse(&canvas, QEvent::MouseButtonRelease, line, Qt::LeftButton, Qt::NoButton);
+                require(document.state() == before && document.canUndo() == couldUndo &&
+                            document.canRedo() == couldRedo,
+                        "canceling a drag must restore the split coordinate without history");
+                verifyBadge(coordinate);
+            }
+            const auto center = rulerPoint(canvas, vertical, vertical ? 200 : 120);
+            pan(vertical ? QPointF(38 - center.x() - 60, 0) : QPointF(0, 28 - center.y() - 60));
+            require(
+                badgeBounds(renderCanvas(canvas, 1.5)).isEmpty(),
+                "selected split lines outside the visible ruler must not show a position badge");
+        }
+    }
+    themes.setConfig(original);
+}
+
+void rulerHoverPreviewsSplitLines() {
+    ImageSplitDocument document;
+    QImage source({400, 240}, QImage::Format_ARGB32_Premultiplied);
+    source.fill(Qt::black);
+    document.setImage(source);
+    auto settings = document.settings();
+    settings.direction = ImageSplitDirection::Grid;
+    settings.rows = 1;
+    settings.columns = 1;
+    settings.count = 1;
+    document.setSettings(settings);
+    ImageSplitPreviewCanvas canvas(&document);
+    canvas.resize(900, 640);
+    canvas.show();
+    pump();
+    const auto hover = [&](QPointF point) {
+        mouse(&canvas, QEvent::MouseMove, point, Qt::NoButton, Qt::NoButton);
+    };
+    const auto hasGuide = [&](const QImage& output, bool vertical, int coordinate) {
+        const qreal scale = output.devicePixelRatio();
+        const auto bounds =
+            QRectF(canvas.offset(), QSizeF(source.size()) * canvas.zoom())
+                .intersected(QRectF(38, 28, canvas.width() - 38, canvas.height() - 28));
+        const auto point =
+            canvas.imageToViewport(vertical ? QPointF(coordinate, 0) : QPointF(0, coordinate));
+        const qreal cross = vertical ? point.x() : point.y();
+        const qreal first = (vertical ? bounds.top() : bounds.left()) + 35;
+        const qreal last = (vertical ? bounds.bottom() : bounds.right()) - 5;
+        qreal coverage = 0;
+        for (int along = qCeil(first * scale); along < qFloor(last * scale); ++along) {
+            for (int across = qFloor((cross - 3) * scale); across < qCeil((cross + 3) * scale);
+                 ++across) {
+                const auto color =
+                    vertical ? output.pixelColor(across, along) : output.pixelColor(along, across);
+                coverage += color.blueF();
+            }
+        }
+        return coverage > 10 * scale;
+    };
+    for (const bool transformed : {false, true}) {
+        if (transformed) {
+            wheel(&canvas, canvas.imageToViewport({200, 120}), 240);
+            const auto delta = QPointF(10, 10) - canvas.offset();
+            mouse(&canvas, QEvent::MouseButtonPress, {80, 80}, Qt::MiddleButton, Qt::MiddleButton);
+            mouse(&canvas, QEvent::MouseMove, QPointF(80, 80) + delta, Qt::NoButton,
+                  Qt::MiddleButton);
+            mouse(&canvas, QEvent::MouseButtonRelease, QPointF(80, 80) + delta, Qt::MiddleButton,
+                  Qt::NoButton);
+        }
+        const auto before = document.state();
+        const bool couldUndo = document.canUndo();
+        const bool couldRedo = document.canRedo();
+        for (const bool vertical : {true, false}) {
+            const int first = vertical ? 113 : 73;
+            const int second = vertical ? 173 : 93;
+            auto point = rulerPoint(canvas, vertical, first);
+            // Preview and click must agree on the rounded image-pixel boundary.
+            point += vertical ? QPointF(.25 * canvas.zoom(), 0) : QPointF(0, .25 * canvas.zoom());
+            hover(point);
+            for (const qreal scale : {1.0, 1.5, 2.0}) {
+                const auto output = renderCanvas(canvas, scale);
+                require(hasGuide(output, vertical, first),
+                        "ruler hover must preview a split line across the image at every DPI");
+                require(!hasGuide(output, vertical, second),
+                        "the hover preview must appear only at the pointer's image coordinate");
+            }
+            hover(rulerPoint(canvas, vertical, second));
+            auto output = renderCanvas(canvas, 1.5);
+            require(!hasGuide(output, vertical, first) && hasGuide(output, vertical, second),
+                    "moving along a ruler must move the temporary split line in real time");
+            hover(canvas.imageToViewport({300, 180}));
+            require(!hasGuide(renderCanvas(canvas, 1.5), vertical, second),
+                    "moving off a ruler must remove its split preview");
+            hover(point);
+            QEvent leave(QEvent::Leave);
+            QApplication::sendEvent(&canvas, &leave);
+            require(!hasGuide(renderCanvas(canvas, 1.5), vertical, first),
+                    "leaving the canvas must remove the ruler split preview");
+            hover(point);
+            canvas.setEditingEnabled(false);
+            require(!hasGuide(renderCanvas(canvas, 1.5), vertical, first),
+                    "disabled editing must clear the ruler split preview");
+            canvas.setEditingEnabled(true);
+            require(!hasGuide(renderCanvas(canvas, 1.5), vertical, first),
+                    "re-enabling editing must not restore a stale ruler preview");
+        }
+        require(document.state() == before && document.canUndo() == couldUndo &&
+                    document.canRedo() == couldRedo && document.image() == source,
+                "ruler hover must preserve split settings, output regions, history and pixels");
+    }
+    for (const auto direction : {ImageSplitDirection::Vertical, ImageSplitDirection::Horizontal}) {
+        settings.direction = direction;
+        document.setSettings(settings);
+        const bool vertical = direction == ImageSplitDirection::Vertical;
+        hover(rulerPoint(canvas, !vertical, vertical ? 73 : 113));
+        require(!hasGuide(renderCanvas(canvas, 1.5), !vertical, vertical ? 73 : 113),
+                "the ruler for a blocked split direction must not show a preview");
+        hover(rulerPoint(canvas, vertical, vertical ? 113 : 73));
+        require(hasGuide(renderCanvas(canvas, 1.5), vertical, vertical ? 113 : 73),
+                "the active split direction must retain its ruler preview");
+    }
+    settings.direction = ImageSplitDirection::Grid;
+    document.setSettings(settings);
+    canvas.fitToCanvas();
+    for (const bool vertical : {true, false}) {
+        for (const int boundary : {0, vertical ? source.width() : source.height()}) {
+            hover(rulerPoint(canvas, vertical, boundary));
+            const auto withHover = renderCanvas(canvas, 1.5);
+            QEvent leave(QEvent::Leave);
+            QApplication::sendEvent(&canvas, &leave);
+            require(withHover == renderCanvas(canvas, 1.5),
+                    "image edges must not preview split lines that cannot be created");
+        }
+    }
+    const auto point = rulerPoint(canvas, true, 113) + QPointF(.25 * canvas.zoom(), 0);
+    hover(point);
+    click(&canvas, point);
+    require(document.layout().verticalLines == QVector<int>{113},
+            "clicking a ruler must commit exactly the previewed split coordinate");
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(&canvas, &leave);
+    require(hasGuide(renderCanvas(canvas, 1.5), true, 113),
+            "a committed split line must remain after the hover preview clears");
+    document.undo();
+    require(document.layout().verticalLines.isEmpty() &&
+                !hasGuide(renderCanvas(canvas, 1.5), true, 113),
+            "one undo must remove a ruler click without any hover history entries");
+    hover(rulerPoint(canvas, true, 173));
+    document.setImage(source.copy());
+    const auto replaced = renderCanvas(canvas, 1.5);
+    QApplication::sendEvent(&canvas, &leave);
+    require(replaced == renderCanvas(canvas, 1.5),
+            "replacing the image must discard the previous ruler hover preview");
+}
+
+void splitGuidesKeepLogicalThicknessAndEngineDashes() {
+    enum class GuideState {
+        Idle,
+        Hovered,
+        RulerHovered,
+        Selected,
+        SelectedHovered,
+        SelectedRulerHovered
+    };
+    ImageSplitDocument document;
+    QImage source({400, 240}, QImage::Format_ARGB32_Premultiplied);
+    source.fill(Qt::black);
+    document.setImage(source);
+    auto settings = document.settings();
+    settings.direction = ImageSplitDirection::Grid;
+    document.setSettings(settings);
+    ImageSplitPreviewCanvas canvas(&document);
+    canvas.resize(900, 640);
+    canvas.show();
+    pump();
+    for (const int zoomSteps : {0, 240, -480}) {
+        wheel(&canvas, canvas.imageToViewport({200, 120}), zoomSteps);
+        // Exercise subpixel line placement independently of canvas zoom and output DPI.
+        mouse(&canvas, QEvent::MouseButtonPress, {80, 80}, Qt::MiddleButton, Qt::MiddleButton);
+        mouse(&canvas, QEvent::MouseMove, {80.3, 80.4}, Qt::NoButton, Qt::MiddleButton);
+        mouse(&canvas, QEvent::MouseButtonRelease, {80.3, 80.4}, Qt::MiddleButton, Qt::NoButton);
+        for (const bool vertical : {true, false}) {
+            for (const auto state :
+                 {GuideState::Idle, GuideState::Hovered, GuideState::RulerHovered,
+                  GuideState::Selected, GuideState::SelectedHovered,
+                  GuideState::SelectedRulerHovered}) {
+                // Settings changes clear both selection and hover without moving the viewport.
+                auto reset = document.settings();
+                reset.count = reset.count == 2 ? 3 : 2;
+                document.setSettings(reset);
+                const QPointF onLine =
+                    canvas.imageToViewport(vertical ? QPointF(200, 100) : QPointF(100, 120));
+                const bool selected = state == GuideState::Selected ||
+                                      state == GuideState::SelectedHovered ||
+                                      state == GuideState::SelectedRulerHovered;
+                if (selected)
+                    click(&canvas, onLine);
+                QEvent leave(QEvent::Leave);
+                QApplication::sendEvent(&canvas, &leave);
+                if (state == GuideState::Hovered || state == GuideState::SelectedHovered)
+                    mouse(&canvas, QEvent::MouseMove, onLine, Qt::NoButton, Qt::NoButton);
+                if (state == GuideState::RulerHovered ||
+                    state == GuideState::SelectedRulerHovered) {
+                    mouse(&canvas, QEvent::MouseMove,
+                          rulerPoint(canvas, vertical, vertical ? 200 : 120), Qt::NoButton,
+                          Qt::NoButton);
+                }
+                for (const qreal scale : {1.0, 1.25, 1.5, 1.75, 2.0}) {
+                    const auto output = renderCanvas(canvas, scale);
+                    constexpr qreal width = 1.0;
+                    const auto origin = canvas.offset();
+                    const qreal cross = vertical ? onLine.x() : onLine.y();
+                    const qreal start = vertical ? origin.y() : origin.x();
+                    // Isolate one guide from badges, intersections, image borders and rulers.
+                    const qreal first = start + 40 * canvas.zoom();
+                    const qreal last = start + 90 * canvas.zoom();
+                    qreal maximum = 0;
+                    qreal minimum = 10;
+                    int dashSamples = 0;
+                    int gapSamples = 0;
+                    for (int along = qCeil(first * scale); along < qFloor(last * scale); ++along) {
+                        qreal coverage = 0;
+                        for (int across = qFloor((cross - 3) * scale);
+                             across <= qCeil((cross + 3) * scale); ++across) {
+                            const auto color = vertical ? output.pixelColor(across, along)
+                                                        : output.pixelColor(along, across);
+                            coverage += color.blueF();
+                        }
+                        coverage /= scale;
+                        minimum = std::min(minimum, coverage);
+                        maximum = std::max(maximum, coverage);
+                        if (state != GuideState::Idle) {
+                            require(
+                                std::abs(coverage - 1.0) < .08,
+                                "hovered, selected and ruler preview split lines must stay solid "
+                                "and one logical pixel wide");
+                            continue;
+                        }
+                        const qreal phase = std::fmod((along + .5) / scale - start, width * 8);
+                        // Flat 5:3 dashes leave a full-width middle and a fully clear gap.
+                        if (phase > width && phase < width * 4) {
+                            require(
+                                std::abs(coverage - width) < .08,
+                                "split dashes must retain their logical width at fractional DPI");
+                            ++dashSamples;
+                        } else if (phase > width * 6 && phase < width * 7) {
+                            require(coverage < .04,
+                                    "idle guides must keep clear engine-style dash gaps");
+                            ++gapSamples;
+                        }
+                    }
+                    if (state == GuideState::Idle)
+                        require(dashSamples > 0 && gapSamples > 0 &&
+                                    std::abs(maximum - width) < .08 && minimum < .04,
+                                "both split axes must use fixed view widths and the engine's 5:3 "
+                                "dashes");
+                }
+            }
+        }
+    }
+}
+
+void saveCanvasInspectionImages() {
+    const auto directory = qEnvironmentVariable("SNOW_TEST_IMAGE_SPLIT_CANVAS_ARTIFACT_DIR");
+    if (directory.isEmpty())
+        return;
+    require(QDir().mkpath(directory), "create split canvas inspection directory");
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto original = themes.config();
+    for (const auto theme : {adqt::theme::ThemeScheme::Light, adqt::theme::ThemeScheme::Dark}) {
+        themes.setPreset(theme);
+        ImageSplitDocument document;
+        QImage source({800, 480}, QImage::Format_ARGB32_Premultiplied);
+        QPainter imagePainter(&source);
+        QLinearGradient gradient(0, 0, 800, 480);
+        gradient.setColorAt(0, QColor(27, 69, 112));
+        gradient.setColorAt(1, QColor(110, 165, 185));
+        imagePainter.fillRect(source.rect(), gradient);
+        imagePainter.end();
+        document.setImage(source);
+        auto settings = document.settings();
+        settings.direction = ImageSplitDirection::Grid;
+        settings.columns = 3;
+        document.setSettings(settings);
+        ImageSplitEditorWidget editor(&document);
+        editor.setAutoFillBackground(true);
+        auto palette = editor.palette();
+        palette.setColor(QPalette::Window, themes.resolveTheme(&editor).colorBgElevated);
+        editor.setPalette(palette);
+        show(editor);
+        const auto capture = [&](const char* name) {
+            const auto filename =
+                QStringLiteral("%1-%2.png")
+                    .arg(theme == adqt::theme::ThemeScheme::Light ? QStringLiteral("light")
+                                                                  : QStringLiteral("dark"),
+                         QString::fromLatin1(name));
+            require(renderCanvas(*editor.canvas(), 1.5).save(QDir(directory).filePath(filename)),
+                    "save split canvas inspection image");
+        };
+        capture("fit");
+        const auto line = editor.canvas()->imageToViewport({267, 120});
+        click(editor.canvas(), line);
+        mouse(editor.canvas(), QEvent::MouseMove, line, Qt::NoButton, Qt::NoButton);
+        capture("selected");
+        const auto horizontalLine = editor.canvas()->imageToViewport({400, 240});
+        click(editor.canvas(), horizontalLine);
+        mouse(editor.canvas(), QEvent::MouseMove, horizontalLine, Qt::NoButton, Qt::NoButton);
+        capture("selected-horizontal");
+        mouse(editor.canvas(), QEvent::MouseMove, rulerPoint(*editor.canvas(), false, 173),
+              Qt::NoButton, Qt::NoButton);
+        capture("ruler-hover-horizontal");
+        wheel(editor.canvas(), editor.canvas()->imageToViewport({400, 240}), 360);
+        capture("zoomed");
+    }
+    themes.setConfig(original);
+}
+
 void themesHighDpiAndLanguage() {
     auto& themes = adqt::theme::ThemeManager::instance();
     const auto original = themes.config();
@@ -612,6 +1482,20 @@ void themesHighDpiAndLanguage() {
             editor.canvas()->render(&painter);
             require(!output.isNull() && output.pixelColor(5, 5).alpha() == 255,
                     "rulers must render at fractional and integer high-DPI scales");
+            auto* toolbar = child<QWidget>(editor, "imageSplitCanvasToolbar");
+            QImage surface(
+                QSize(qRound(toolbar->width() * scale), qRound(toolbar->height() * scale)),
+                QImage::Format_ARGB32_Premultiplied);
+            surface.setDevicePixelRatio(scale);
+            surface.fill(Qt::transparent);
+            QPainter surfacePainter(&surface);
+            toolbar->render(&surfacePainter, {}, {}, QWidget::DrawWindowBackground);
+            surfacePainter.end();
+            const auto tokens = themes.resolveTheme(toolbar);
+            require(surface.pixelColor(surface.width() / 2, surface.height() / 2) ==
+                        tokens.colorBgContainer,
+                    "floating toolbar must use the collage surface token in both themes and DPI "
+                    "scales");
         }
     }
     themes.setConfig(original);
@@ -619,9 +1503,12 @@ void themesHighDpiAndLanguage() {
     QApplication::installTranslator(&translator);
     QEvent language(QEvent::LanguageChange);
     QApplication::sendEvent(&editor, &language);
-    require(child<AdButton>(editor, "imageSplitReload")->text() == QStringLiteral("重新加载") &&
-                editor.canvas()->accessibleName() == QStringLiteral("拆分预览") &&
-                document.state() == state && !document.canUndo(),
+    auto* reload = child<AdButton>(editor, "imageSplitReload");
+    require(reload->text().isEmpty() && reload->toolTip() == QStringLiteral("重新加载") &&
+                reload->accessibleName() == reload->toolTip() &&
+                editor.canvas()->accessibleName() == QStringLiteral("分割预览") &&
+                editor.canvas()->toolTip().isEmpty() && document.state() == state &&
+                !document.canUndo(),
             "runtime language changes must refresh controls without changing settings or history");
     QApplication::removeTranslator(&translator);
     QApplication::sendEvent(&editor, &language);
@@ -632,18 +1519,41 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     try {
+        if (application.arguments().contains(QStringLiteral("--canvas-only"))) {
+            saveCanvasInspectionImages();
+            canvasBackgroundAndRulersFollowImage();
+            splitPositionBadgesFollowRulers();
+            rulerHoverPreviewsSplitLines();
+            splitGuidesKeepLogicalThicknessAndEngineDashes();
+            transformedRulersAndManualGestures();
+            splitLineSelectionFollowsCrossing();
+            zoomedCanvasUsesFullResolutionPixels();
+            denseGuidesDoNotHideLaterReadableRegions();
+            elongatedImagesKeepViewportAndLineInteractionsUsable();
+            themesHighDpiAndLanguage();
+            std::cout << "Image split canvas tests passed\n";
+            return 0;
+        }
         defaultsConditionalControlsAndActions();
+        preciseSizeUsesSharedFormLabel();
+        floatingToolbarFollowsCanvas();
         formValidationUnitsAndUndoableRegeneration();
         unitConversionDoesNotClampInvalidResults();
         percentageDraftsKeepExactEnteredPrecision();
         transformedRulersAndManualGestures();
+        splitLineSelectionFollowsCrossing();
         replacementResetBusyAndDrops();
+        dragFeedbackUsesUploadSurface();
         invalidDraftsSurviveFocusAndCanceledLoading();
         invalidDirectionDoesNotEditThePreviousAxis();
         submissionCommitsValidPendingDraftsOnly();
         zoomedCanvasUsesFullResolutionPixels();
         denseGuidesDoNotHideLaterReadableRegions();
         elongatedImagesKeepViewportAndLineInteractionsUsable();
+        canvasBackgroundAndRulersFollowImage();
+        splitPositionBadgesFollowRulers();
+        rulerHoverPreviewsSplitLines();
+        splitGuidesKeepLogicalThicknessAndEngineDashes();
         themesHighDpiAndLanguage();
         std::cout << "Image split editor tests passed\n";
         return 0;

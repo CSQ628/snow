@@ -582,6 +582,7 @@ struct ImageSplitDocument::Impl final {
     std::optional<ImageSplitState> beforeDrag;
     bool dragVertical = true;
     int dragIndex = -1;
+    int dragStartIndex = -1;
 
     bool allows(bool vertical) const {
         return state.settings.direction == ImageSplitDirection::Grid ||
@@ -733,6 +734,7 @@ bool ImageSplitDocument::beginLineDrag(bool vertical, int index) {
     d.beforeDrag = d.state;
     d.dragVertical = vertical;
     d.dragIndex = index;
+    d.dragStartIndex = index;
     emit historyChanged();
     return true;
 }
@@ -742,22 +744,37 @@ bool ImageSplitDocument::moveDraggedLine(int coordinate) {
         return false;
     auto& lines = d.dragVertical ? d.state.verticalLines : d.state.horizontalLines;
     const int dimension = d.dragVertical ? d.image.width() : d.image.height();
-    const int minimum = d.dragIndex == 0 ? 1 : lines.at(d.dragIndex - 1) + 1;
-    const int maximum =
-        d.dragIndex + 1 == lines.size() ? dimension - 1 : lines.at(d.dragIndex + 1) - 1;
-    coordinate = std::clamp(coordinate, minimum, maximum);
-    if (lines.at(d.dragIndex) == coordinate)
+    coordinate = std::clamp(coordinate, 1, dimension - 1);
+    const int previousCoordinate = lines.at(d.dragIndex);
+    if (previousCoordinate == coordinate)
         return false;
-    // The cached layout shares these vectors. Release its previous view before mutation so each
-    // mouse move does not copy the entire axis again; the gesture's original snapshot remains
-    // intact.
+    const auto insertion = std::lower_bound(lines.cbegin(), lines.cend(), coordinate);
+    // Cuts remain unique so preview and export never contain zero-width or zero-height regions.
+    // Landing on an occupied pixel leaves the gesture active; the next move can cross that cut.
+    if (insertion != lines.cend() && *insertion == coordinate)
+        return false;
+    int index = static_cast<int>(insertion - lines.cbegin());
+    if (index > d.dragIndex)
+        --index;
+    // Keep axes sorted for hit testing and region generation, while tracking the dragged line's
+    // new index rather than treating its original neighbors as movement limits.
     if (d.dragVertical)
         d.layout.verticalLines = {};
     else
         d.layout.horizontalLines = {};
-    lines[d.dragIndex] = coordinate;
+    const bool indexChanged = index != d.dragIndex;
+    if (indexChanged) {
+        lines.removeAt(d.dragIndex);
+        lines.insert(index, coordinate);
+        d.dragIndex = index;
+    } else {
+        lines[d.dragIndex] = coordinate;
+    }
     d.state.manuallyEdited = true;
     d.synchronizeLines();
+    if (indexChanged)
+        emit lineDragIndexChanged(d.dragIndex);
+    emit lineMoved(d.dragVertical, previousCoordinate, coordinate);
     emit changed();
     return true;
 }
@@ -783,7 +800,11 @@ void ImageSplitDocument::cancelLineDrag() {
         return;
     d.state = std::move(*d.beforeDrag);
     d.beforeDrag.reset();
+    const bool indexChanged = d.dragIndex != d.dragStartIndex;
+    d.dragIndex = d.dragStartIndex;
     d.synchronizeLines();
+    if (indexChanged)
+        emit lineDragIndexChanged(d.dragIndex);
     emit changed();
     emit historyChanged();
 }

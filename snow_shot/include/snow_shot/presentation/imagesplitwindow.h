@@ -43,6 +43,7 @@ struct ImageSplitWindowServices final {
                                          const QString&, Cancellation,
                                          std::function<void(qint64, qint64)>)>
         exportBatch;
+    std::function<void(const QString&)> openDirectory;
 };
 
 class ImageSplitWindow final : public QObject {
@@ -51,6 +52,7 @@ class ImageSplitWindow final : public QObject {
     explicit ImageSplitWindow(QObject* parent = nullptr, ImageSplitWindowServices services = {});
     ~ImageSplitWindow() override;
     void presentHistory(const storage::CaptureHistoryRecord& record);
+    void presentPinnedRecord(const QString& recordId);
     void presentSource(ImageSplitSource source);
     void presentImage(QImage image, QString originalFileName = {}, QDateTime createdUtc = {});
     void reload();
@@ -84,6 +86,7 @@ class ImageSplitWindowCoordinator final : public QObject {
                                          ImageSplitWindowServices services = {});
     ~ImageSplitWindowCoordinator() override;
     void presentHistory(const storage::CaptureHistoryRecord& record);
+    void presentPinnedRecord(const QString& recordId);
     void presentSource(ImageSplitSource source);
     void shutdown();
     [[nodiscard]] QVector<ImageSplitWindow*> windows() const;

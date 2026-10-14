@@ -195,6 +195,8 @@ class ImageSplitDocument final : public QObject {
     void cancelLineDrag();
 
   signals:
+    void lineDragIndexChanged(int index);
+    void lineMoved(bool vertical, int previousCoordinate, int coordinate);
     void changed();
     void historyChanged();
 

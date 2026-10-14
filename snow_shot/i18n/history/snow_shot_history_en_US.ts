@@ -545,6 +545,10 @@
             <translation>Columns</translation>
         </message>
         <message>
+            <source>Drop one image file at a time.</source>
+            <translation>Drop one image file at a time.</translation>
+        </message>
+        <message>
             <source>Drop one image to replace the current image</source>
             <translation>Drop one image to replace the current image</translation>
         </message>
@@ -609,10 +613,6 @@
             <translation>Split direction</translation>
         </message>
         <message>
-            <source>Split lines adjusted manually</source>
-            <translation>Split lines adjusted manually</translation>
-        </message>
-        <message>
             <source>Split size unit</source>
             <translation>Split size unit</translation>
         </message>
@@ -671,8 +671,8 @@
             <translation>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom.</translation>
         </message>
         <message>
-            <source>Image split preview</source>
-            <translation>Image split preview</translation>
+            <source>Image splitting preview</source>
+            <translation>Image splitting preview</translation>
         </message>
         <message>
             <source>X: %1 px</source>
@@ -704,6 +704,10 @@
         <message>
             <source>Export could not be started. Try again.</source>
             <translation>Export could not be started. Try again.</translation>
+        </message>
+        <message>
+            <source>Image Splitting</source>
+            <translation>Image Splitting</translation>
         </message>
         <message>
             <source>Image loading could not be started. Try again.</source>
@@ -752,10 +756,6 @@
         <message>
             <source>Select Image</source>
             <translation>Select Image</translation>
-        </message>
-        <message>
-            <source>Split Image</source>
-            <translation>Split Image</translation>
         </message>
         <message>
             <source>The image and current split edits will be discarded.</source>
@@ -873,6 +873,18 @@
         <message>
             <source>Hidden</source>
             <translation>Hidden</translation>
+        </message>
+        <message>
+            <source>Image Splitting</source>
+            <translation>Image Splitting</translation>
+        </message>
+        <message>
+            <source>More</source>
+            <translation>More</translation>
+        </message>
+        <message>
+            <source>More actions</source>
+            <translation>More actions</translation>
         </message>
         <message>
             <source>No matching pinned windows</source>

@@ -931,6 +931,8 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     include/snow_shot/presentation/components/sectionheaderwidget.h
     include/snow_shot/presentation/components/confirmationskipbutton.h
     include/snow_shot/presentation/components/overlaycontrolbutton.h
+    include/snow_shot/presentation/components/canvasactiontoolbar.h
+    include/snow_shot/presentation/components/imagedropsurface.h
     include/snow_shot/presentation/components/screenshothistorypagewidget.h
     include/snow_shot/presentation/components/emptystateicon.h
     include/snow_shot/presentation/components/texttranslationsettingswidget.h
@@ -1427,6 +1429,11 @@ if(SNOW_SHOT_BUILD_TESTS)
             ENVIRONMENT "${_SNOW_SHOT_IMAGE_SPLIT_QPA_ENVIRONMENT}"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endforeach()
+    add_test(NAME snow-shot-image-split-canvas-tests
+        COMMAND snow-shot-image-split-editor-tests --canvas-only -platform offscreen)
+    set_tests_properties(snow-shot-image-split-canvas-tests PROPERTIES LABELS unit
+        ENVIRONMENT "${_SNOW_SHOT_IMAGE_SPLIT_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-image-split-icon-tests
         COMMAND snow-shot-generated-icon-pack-tests --image-splitting-only)
     add_test(NAME snow-shot-image-split-pinned-source-tests
@@ -6506,9 +6513,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         sendScreenshotScroll=snowTestSendScreenshotScroll
         sendScrollingWheelStep=snowTestSendScrollingWheelStep
         flushWindowComposition=snowTestFlushWindowComposition)
+    set(_scrolling_settings_test_sources ${_color_picker_lifecycle_sources}
+        ${SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES}
+        src/presentation/services/screenshotexportscrollingsource.cpp)
+    list(REMOVE_DUPLICATES _scrolling_settings_test_sources)
     add_executable(snow-shot-scrolling-capture-settings-tests
         tests/scrolling_capture_settings_tests.cpp
-        ${_color_picker_lifecycle_sources}
+        ${_scrolling_settings_test_sources}
         src/presentation/overlay/screenshotoverlaycoordinator.cpp
         src/presentation/overlay/screenshotoverlayuihost.cpp
         src/presentation/services/screenshotcolorpickerwindow.cpp
@@ -6516,9 +6527,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/selection/screenshotselectiontoolbarwidget.cpp
         src/presentation/selection/screenshotselectiontoolbarwidgets.h
         src/presentation/selection/screenshotselectiontoolbarwidgets.cpp)
-    target_include_directories(snow-shot-scrolling-capture-settings-tests PRIVATE include src)
+    target_include_directories(snow-shot-scrolling-capture-settings-tests PRIVATE include src
+        src/image src/presentation/services)
     target_link_libraries(snow-shot-scrolling-capture-settings-tests PRIVATE
         snow-shot-scrolling-settings-test-runtime snow_shot_diagnostics snow_shot_storage
+        snow_shot_image_split
         snow_shot_window_shortcuts snow_draw_engine_qt_canvas snow_canvas_image snow_stitch_images_c
         ant_design_qt adqt_icon_core ant_design_icons_qt Qt6::Widgets)
     snow_shot_link_macos_window_platform(snow-shot-scrolling-capture-settings-tests)
@@ -6533,7 +6546,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     snow_shot_import_offscreen_platform(snow-shot-scrolling-capture-settings-tests)
     add_test(NAME snow-shot-scrolling-capture-settings-tests
         COMMAND snow-shot-scrolling-capture-settings-tests -platform offscreen)
-    set_tests_properties(snow-shot-scrolling-capture-settings-tests PROPERTIES
+    add_test(NAME snow-shot-scrolling-image-split-tests
+        COMMAND snow-shot-scrolling-capture-settings-tests --image-split-only -platform offscreen)
+    set_tests_properties(snow-shot-scrolling-capture-settings-tests
+        snow-shot-scrolling-image-split-tests PROPERTIES
         LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

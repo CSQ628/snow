@@ -492,7 +492,7 @@ void imageStitchingIconFollowsAntDesign() {
         require(preview.save(path), "save stitching icon light/dark inspection sheet");
 }
 
-void imageSplittingIconMatchesStitching() {
+void imageSplittingIconFollowsAntDesign() {
     namespace icons = snow_shot::presentation::icons::custom;
     const auto ref = icons::outlined::ImageSplitting();
     const auto* descriptor = ref.descriptor();
@@ -500,9 +500,14 @@ void imageSplittingIconMatchesStitching() {
             "splitting icon uses the shared monochrome theme pipeline");
     const QByteArray svg(descriptor->svg.data(), static_cast<qsizetype>(descriptor->svg.size()));
     require(svg.contains("viewBox=\"0 0 1024 1024\"") && svg.contains("stroke-width=\"72\"") &&
-                svg.contains("stroke-dasharray") && svg.contains("__ADQT_SLOT_PRIMARY__") &&
-                !svg.contains("<text") && !svg.contains("<image"),
-            "splitting uses Ant Design vector geometry and dashed section guides");
+                svg.contains("__ADQT_SLOT_PRIMARY__") && !svg.contains("<text") &&
+                !svg.contains("<image"),
+            "splitting uses the Ant Design canvas, outline weight and themed vector geometry");
+    const QImage geometry = render(ref, QSize(1024, 1024)).toImage();
+    require(alphaBounds(geometry) == QRect(64, 176, 896, 672),
+            "splitting respects the 64-unit bleed and horizontal image proportions");
+    require(opaquePixelCount(geometry, QRect(448, 0, 128, 1024)) == 0,
+            "a clear central cut separates the two image panels");
     QImage preview(384, 192, QImage::Format_ARGB32_Premultiplied);
     preview.fill(Qt::transparent);
     QPainter painter(&preview);
@@ -518,12 +523,14 @@ void imageSplittingIconMatchesStitching() {
                 const QImage pixels =
                     render(icons::outlined::ImageSplitting(colors), QSize(size, size), dpr)
                         .toImage();
-                const QImage stitch =
-                    render(icons::outlined::ImageStitching(colors), QSize(size, size), dpr)
-                        .toImage();
-                require(!pixels.isNull() && alphaBounds(pixels) == alphaBounds(stitch) &&
+                const QRect bounds = alphaBounds(pixels);
+                require(!pixels.isNull() && !bounds.isEmpty() && bounds.left() > 0 &&
+                            bounds.right() < pixels.width() - 1 &&
                             containsOpaqueColor(pixels, color),
-                        "split and stitch icons share proportions and themed menu-size rendering");
+                        "splitting stays padded and themed at menu sizes and fractional DPI");
+                require(
+                    opaquePixelCount(pixels, QRect(pixels.width() / 2, 0, 1, pixels.height())) == 0,
+                    "the split remains visible at menu sizes and fractional DPI");
             }
             painter.drawPixmap(
                 column++ * 128 + 24, row * 64 + (64 - size) / 2,
@@ -592,7 +599,7 @@ void numericFormatIconsRenderAtToolbarSizes() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
-        imageSplittingIconMatchesStitching();
+        imageSplittingIconFollowsAntDesign();
         if (application.arguments().contains(QStringLiteral("--image-splitting-only"))) {
             everySnowShotEntryRenders();
             return 0;

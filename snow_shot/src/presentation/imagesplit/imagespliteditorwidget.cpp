@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "snow_shot/presentation/components/imagespliteditorwidget.h"
 
+#include "snow_shot/presentation/components/canvasactiontoolbar.h"
+#include "snow_shot/presentation/components/imagedropsurface.h"
+#include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_draw_engine_qt/snow_canvas_overlay_style.h"
+#include "antd_icons.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
@@ -18,6 +23,7 @@
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -25,6 +31,8 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPaintEvent>
+#include <QRegion>
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QUrl>
@@ -48,6 +56,10 @@ using adqt::widgets::AdSegmented;
 constexpr qreal kRulerHeight = 28;
 constexpr qreal kRulerWidth = 38;
 constexpr qreal kLineHitDistance = 6;
+constexpr qreal kGuideSpacing = 2;
+constexpr qint64 kCanvasCacheBytes = 64 * 1024 * 1024;
+// Match snow-draw-engine-editor's selection color in geometry/handles.rs.
+const QColor kSplitLineColor{0x40, 0x96, 0xff};
 
 QString editorText(const char* source) {
     return QCoreApplication::translate("ImageSplitEditorWidget", source);
@@ -80,11 +92,11 @@ QString canvasText(const char* source) {
     QT_TRANSLATE_NOOP("ImageSplitEditorWidget", "Reload"),
     QT_TRANSLATE_NOOP("ImageSplitEditorWidget", "%1 × %2 px"),
     QT_TRANSLATE_NOOP("ImageSplitEditorWidget", "Total: %1 images"),
-    QT_TRANSLATE_NOOP("ImageSplitEditorWidget", "Split lines adjusted manually"),
     QT_TRANSLATE_NOOP("ImageSplitEditorWidget", "Drop one image to replace the current image"),
+    QT_TRANSLATE_NOOP("ImageSplitEditorWidget", "Drop one image file at a time."),
 };
 [[maybe_unused]] constexpr std::array kCanvasTranslations{
-    QT_TRANSLATE_NOOP("ImageSplitPreviewCanvas", "Image split preview"),
+    QT_TRANSLATE_NOOP("ImageSplitPreviewCanvas", "Image splitting preview"),
     QT_TRANSLATE_NOOP(
         "ImageSplitPreviewCanvas",
         "Click a ruler to add a split line; drag a line to move it. Select a line and press Delete "
@@ -112,6 +124,18 @@ int roundedCoordinate(qreal coordinate) {
 } // namespace
 
 struct ImageSplitPreviewCanvas::Impl {
+    using PositionLine = std::optional<std::pair<bool, int>>;
+    struct OverlayState {
+        PositionLine selected;
+        PositionLine hovered;
+        PositionLine ruler;
+        bool operator==(const OverlayState&) const = default;
+    };
+    struct NumberBadge {
+        qint64 index;
+        QString text;
+        QRectF rect;
+    };
     ImageSplitPreviewCanvas* owner = nullptr;
     ImageSplitDocument* document = nullptr;
     qreal zoom = 1;
@@ -125,12 +149,38 @@ struct ImageSplitPreviewCanvas::Impl {
     int selectedIndex = -1;
     bool hoveredVertical = true;
     int hoveredIndex = -1;
+    std::optional<QPointF> hoverPosition;
     qint64 imageKey = 0;
     ImageSplitSettings previousSettings;
+    ImageSplitLayout previousLayout;
+    OverlayState previousOverlay;
+    QVector<NumberBadge> numberBadges;
+    QImage frame;
+    qreal frameRatio = 0;
+    QPointF frameOrigin;
+    QRegion frameDamage;
+    bool fullDamage = true;
+
+    void paint(QPainter& painter, const QRegion& damage, qreal ratio) const;
 
     QRectF viewport() const {
         return QRectF(kRulerWidth, kRulerHeight, std::max(1.0, owner->width() - kRulerWidth),
                       std::max(1.0, owner->height() - kRulerHeight));
+    }
+    QRectF imageRect() const {
+        return QRectF(offset, QSizeF(document->image().size()) * zoom);
+    }
+    QRectF visibleImageRect() const {
+        return imageRect().intersected(viewport());
+    }
+    QRectF rulerRect(bool horizontal) const {
+        const auto visible = visibleImageRect();
+        if (visible.isEmpty())
+            return {};
+        return horizontal ? QRectF(visible.left(), visible.top() - kRulerHeight, visible.width(),
+                                   kRulerHeight)
+                          : QRectF(visible.left() - kRulerWidth, visible.top(), kRulerWidth,
+                                   visible.height());
     }
     bool axisAllowed(bool vertical) const {
         const auto direction = document->settings().direction;
@@ -141,12 +191,32 @@ struct ImageSplitPreviewCanvas::Impl {
     const auto& lines(const ImageSplitLayout& layout, bool vertical) const {
         return vertical ? layout.verticalLines : layout.horizontalLines;
     }
+    std::optional<std::pair<bool, int>> rulerLineAt(QPointF point) const {
+        if (!editing || !document->layout().isValid())
+            return std::nullopt;
+        const auto pixel = owner->viewportToImage(point);
+        for (const bool vertical : {true, false}) {
+            if (!axisAllowed(vertical) || !rulerRect(vertical).contains(point))
+                continue;
+            const int coordinate = roundedCoordinate(vertical ? pixel.x() : pixel.y());
+            const int dimension = vertical ? document->image().width() : document->image().height();
+            if (coordinate > 0 && coordinate < dimension)
+                return std::pair{vertical, coordinate};
+        }
+        return std::nullopt;
+    }
+    std::optional<std::pair<bool, int>> hoveredRulerLine() const {
+        if (!hoverPosition || dragging || panning)
+            return std::nullopt;
+        // Resolve against the current transform so zoom and pan cannot leave a stale preview.
+        return rulerLineAt(*hoverPosition);
+    }
     std::pair<bool, int> hit(QPointF point) const {
         const auto layout = document->layout();
-        if (!viewport().contains(point))
+        if (!viewport().contains(point) || rulerRect(true).contains(point) ||
+            rulerRect(false).contains(point))
             return {true, -1};
-        const auto imageRect = QRectF(owner->imageToViewport({}), QSizeF(layout.size) * zoom);
-        if (!imageRect
+        if (!imageRect()
                  .adjusted(-kLineHitDistance, -kLineHitDistance, kLineHitDistance, kLineHitDistance)
                  .contains(point))
             return {true, -1};
@@ -181,6 +251,7 @@ struct ImageSplitPreviewCanvas::Impl {
             imageKey = key;
             selectedIndex = -1;
             hoveredIndex = -1;
+            hoverPosition.reset();
             owner->fitToCanvas();
         } else if (!(settings == previousSettings)) {
             selectedIndex = -1;
@@ -206,6 +277,13 @@ ImageSplitPreviewCanvas::ImageSplitPreviewCanvas(ImageSplitDocument* document, Q
     setMinimumSize(180, 160);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    connect(document, &ImageSplitDocument::lineDragIndexChanged, this, [this](int index) {
+        auto& d = *m_impl;
+        if (d.dragging) {
+            d.selectedIndex = index;
+            d.hoveredIndex = -1;
+        }
+    });
     connect(document, &ImageSplitDocument::changed, this, [this] { m_impl->refresh(); });
     connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
             [this] { update(); });
@@ -246,15 +324,15 @@ void ImageSplitPreviewCanvas::setEditingEnabled(bool enabled) {
     d.dragging = false;
     d.editing = enabled;
     d.hoveredIndex = -1;
+    d.hoverPosition.reset();
     unsetCursor();
     update();
 }
 void ImageSplitPreviewCanvas::retranslateUi() {
-    setAccessibleName(canvasText("Image split preview"));
+    setAccessibleName(canvasText("Image splitting preview"));
     setAccessibleDescription(canvasText(
         "Click a ruler to add a split line; drag a line to move it. Select a line and press Delete "
         "to remove it. Drag with the middle mouse button to pan; scroll to zoom."));
-    setToolTip(accessibleDescription());
     update();
 }
 
@@ -262,13 +340,14 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
     const auto& d = *m_impl;
     const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
     QPainter painter(this);
-    painter.fillRect(rect(), theme.colorFillSecondary);
+    painter.setRenderHint(QPainter::Antialiasing);
     const auto viewport = d.viewport();
     const auto size = d.document->image().size();
     const auto layout = d.document->layout();
+    const auto rulerLine = d.hoveredRulerLine();
     painter.save();
     painter.setClipRect(viewport);
-    const QRectF imageRect(d.offset, QSizeF(size) * d.zoom);
+    const auto imageRect = d.imageRect();
     if (!size.isEmpty()) {
         // The checker is a small logical-pixel tile, independent of image size and canvas zoom.
         QPixmap tile(20, 20);
@@ -303,6 +382,9 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
         painter.drawRect(imageRect);
         const auto drawLines = [&](bool vertical) {
             const auto& lines = d.lines(layout, vertical);
+            const int selected = d.selectedVertical == vertical ? d.selectedIndex : -1;
+            const int hovered = d.hoveredVertical == vertical ? d.hoveredIndex : -1;
+            const int preview = rulerLine && rulerLine->first == vertical ? rulerLine->second : -1;
             const qreal visibleFirst = vertical ? viewportToImage(viewport.topLeft()).x()
                                                 : viewportToImage(viewport.topLeft()).y();
             const qreal visibleLast = vertical ? viewportToImage(viewport.bottomRight()).x()
@@ -310,8 +392,12 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
             const auto drawLine = [&](int coordinate, bool highlighted) {
                 const qreal position = vertical ? imageToViewport({qreal(coordinate), 0}).x()
                                                 : imageToViewport({0, qreal(coordinate)}).y();
-                painter.setPen(QPen(highlighted ? theme.colorPrimaryHover : theme.colorPrimary,
-                                    highlighted ? 2 : 1, Qt::DashLine));
+                QPen pen(kSplitLineColor, 1.0);
+                if (highlighted)
+                    pen.setCapStyle(Qt::FlatCap);
+                else
+                    snowCanvasApplySelectionDashStyle(pen);
+                painter.setPen(pen);
                 if (vertical)
                     painter.drawLine(QPointF(position, imageRect.top()),
                                      QPointF(position, imageRect.bottom()));
@@ -321,17 +407,23 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
             };
             auto line = std::lower_bound(lines.cbegin(), lines.cend(), visibleFirst);
             while (line != lines.cend() && *line <= visibleLast) {
-                drawLine(*line, false);
+                const auto index = line - lines.cbegin();
+                if (index != selected && index != hovered && *line != preview)
+                    drawLine(*line, false);
                 // Jump over subpixel guides instead of traversing a potentially dense axis.
                 const qreal nextCoordinate = *line + std::max(1.0, 2 / d.zoom);
                 line = std::lower_bound(line + 1, lines.cend(), nextCoordinate);
             }
-            for (const int index : {d.selectedVertical == vertical ? d.selectedIndex : -1,
-                                    d.hoveredVertical == vertical ? d.hoveredIndex : -1}) {
-                if (index >= 0 && index < lines.size() && lines[index] >= visibleFirst &&
-                    lines[index] <= visibleLast)
+            const auto drawHighlighted = [&](int index) {
+                if (index >= 0 && index < lines.size() && lines[index] != preview &&
+                    lines[index] >= visibleFirst && lines[index] <= visibleLast)
                     drawLine(lines[index], true);
-            }
+            };
+            drawHighlighted(selected);
+            if (hovered != selected)
+                drawHighlighted(hovered);
+            if (preview >= 0)
+                drawLine(preview, true);
         };
         drawLines(true);
         drawLines(false);
@@ -387,52 +479,28 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
                     continue;
                 painter.setRenderHint(QPainter::Antialiasing);
                 painter.setPen(Qt::NoPen);
-                painter.setBrush(theme.colorBgElevated);
+                painter.setBrush(Qt::black);
                 painter.drawRoundedRect(badgeRect, 3, 3);
-                painter.setPen(theme.colorTextSecondary);
+                painter.setPen(Qt::white);
                 painter.drawText(badgeRect, Qt::AlignCenter, label);
             }
         }
-        const int labelIndex = d.hoveredIndex >= 0 ? d.hoveredIndex : d.selectedIndex;
-        const bool labelVertical = d.hoveredIndex >= 0 ? d.hoveredVertical : d.selectedVertical;
-        const auto& labelLines = d.lines(layout, labelVertical);
-        if (labelIndex >= 0 && labelIndex < labelLines.size()) {
-            const int coordinate = labelLines[labelIndex];
-            const auto label =
-                (labelVertical ? canvasText("X: %1 px") : canvasText("Y: %1 px")).arg(coordinate);
-            const QSizeF badge(metrics.horizontalAdvance(label) + 12, 22);
-            auto anchor = labelVertical ? imageToViewport({qreal(coordinate), 0})
-                                        : imageToViewport({0, qreal(coordinate)});
-            anchor += QPointF(6, 6);
-            anchor.setX(
-                std::clamp(anchor.x(), viewport.left() + 2,
-                           std::max(viewport.left() + 2, viewport.right() - badge.width() - 2)));
-            anchor.setY(
-                std::clamp(anchor.y(), viewport.top() + 2,
-                           std::max(viewport.top() + 2, viewport.bottom() - badge.height() - 2)));
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(theme.colorPrimary);
-            const QRectF badgeRect(anchor, badge);
-            painter.drawRoundedRect(badgeRect, 3, 3);
-            painter.setPen(theme.colorTextLightSolid);
-            painter.drawText(badgeRect, Qt::AlignCenter, label);
-        }
     }
     painter.restore();
-    painter.fillRect(QRectF(kRulerWidth, 0, width() - kRulerWidth, kRulerHeight),
-                     theme.colorBgContainer);
-    painter.fillRect(QRectF(0, kRulerHeight, kRulerWidth, height() - kRulerHeight),
-                     theme.colorBgContainer);
-    painter.fillRect(QRectF(0, 0, kRulerWidth, kRulerHeight), theme.colorBgContainer);
-    painter.setPen(theme.colorBorderSecondary);
-    painter.drawLine(QPointF(kRulerWidth, kRulerHeight), QPointF(width(), kRulerHeight));
-    painter.drawLine(QPointF(kRulerWidth, kRulerHeight), QPointF(kRulerWidth, height()));
-    if (size.isEmpty())
+    const auto visibleImageRect = d.visibleImageRect();
+    if (visibleImageRect.isEmpty())
         return;
     QFont rulerFont = font();
     rulerFont.setPixelSize(10);
     painter.setFont(rulerFont);
+    const QFontMetrics rulerMetrics(rulerFont);
     for (const bool horizontal : {true, false}) {
+        const auto ruler = d.rulerRect(horizontal);
+        painter.save();
+        painter.setClipRect(ruler);
+        painter.fillRect(ruler, theme.colorBgContainer);
+        painter.setPen(QPen(theme.colorBorderSecondary, 1.0));
+        painter.drawLine(horizontal ? ruler.bottomLeft() : ruler.topRight(), ruler.bottomRight());
         const qreal desired = 80 / d.zoom;
         const qreal magnitude = std::pow(10.0, std::floor(std::log10(std::max(1.0, desired))));
         qreal major = magnitude;
@@ -444,10 +512,10 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
         }
         major = std::max(1.0, major);
         const qreal minor = std::max(1.0, major / 5);
-        const qreal first = horizontal ? viewportToImage(viewport.topLeft()).x()
-                                       : viewportToImage(viewport.topLeft()).y();
-        const qreal last = horizontal ? viewportToImage(viewport.bottomRight()).x()
-                                      : viewportToImage(viewport.bottomRight()).y();
+        const qreal first = horizontal ? viewportToImage(visibleImageRect.topLeft()).x()
+                                       : viewportToImage(visibleImageRect.topLeft()).y();
+        const qreal last = horizontal ? viewportToImage(visibleImageRect.bottomRight()).x()
+                                      : viewportToImage(visibleImageRect.bottomRight()).y();
         const qreal dimension = horizontal ? size.width() : size.height();
         const qreal begin = std::max(0.0, std::ceil(first / minor) * minor);
         for (qreal coordinate = begin; coordinate <= std::min(last, dimension);
@@ -456,26 +524,76 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
                 imageToViewport(horizontal ? QPointF(coordinate, 0) : QPointF(0, coordinate));
             const bool majorTick =
                 std::abs(coordinate / major - std::round(coordinate / major)) < .001;
-            painter.setPen(theme.colorTextTertiary);
+            painter.setPen(QPen(theme.colorTextTertiary, 1.0));
             if (horizontal) {
-                painter.drawLine(QPointF(point.x(), kRulerHeight),
-                                 QPointF(point.x(), kRulerHeight - (majorTick ? 8 : 4)));
-                if (majorTick)
-                    painter.drawText(QRectF(point.x() - 35, 1, 70, 16), Qt::AlignCenter,
-                                     QString::number(roundedCoordinate(coordinate)));
+                painter.drawLine(QPointF(point.x(), ruler.bottom()),
+                                 QPointF(point.x(), ruler.bottom() - (majorTick ? 8 : 4)));
+                if (majorTick) {
+                    const auto label = QString::number(roundedCoordinate(coordinate));
+                    const qreal span =
+                        std::min(qreal(rulerMetrics.horizontalAdvance(label) + 6), ruler.width());
+                    const qreal left = std::clamp(point.x() - span / 2, ruler.left(),
+                                                  std::max(ruler.left(), ruler.right() - span));
+                    painter.drawText(QRectF(left, ruler.top() + 1, span, 16), Qt::AlignCenter,
+                                     label);
+                }
             } else {
-                painter.drawLine(QPointF(kRulerWidth, point.y()),
-                                 QPointF(kRulerWidth - (majorTick ? 8 : 4), point.y()));
+                painter.drawLine(QPointF(ruler.right(), point.y()),
+                                 QPointF(ruler.right() - (majorTick ? 8 : 4), point.y()));
                 if (majorTick) {
                     painter.save();
-                    painter.translate(16, point.y());
+                    const auto label = QString::number(roundedCoordinate(coordinate));
+                    const qreal span =
+                        std::min(qreal(rulerMetrics.horizontalAdvance(label) + 6), ruler.height());
+                    const qreal top = std::clamp(point.y() - span / 2, ruler.top(),
+                                                 std::max(ruler.top(), ruler.bottom() - span));
+                    painter.translate(ruler.left() + 16, top + span / 2);
                     painter.rotate(-90);
-                    painter.drawText(QRectF(-35, -8, 70, 16), Qt::AlignCenter,
-                                     QString::number(roundedCoordinate(coordinate)));
+                    painter.drawText(QRectF(-span / 2, -8, span, 16), Qt::AlignCenter, label);
                     painter.restore();
                 }
             }
         }
+        painter.restore();
+    }
+    auto positionLine = rulerLine;
+    if (!positionLine) {
+        const int labelIndex = d.hoveredIndex >= 0 ? d.hoveredIndex : d.selectedIndex;
+        const bool labelVertical = d.hoveredIndex >= 0 ? d.hoveredVertical : d.selectedVertical;
+        const auto& labelLines = d.lines(layout, labelVertical);
+        if (labelIndex >= 0 && labelIndex < labelLines.size())
+            positionLine = std::pair{labelVertical, labelLines[labelIndex]};
+    }
+    if (positionLine) {
+        const auto [labelVertical, coordinate] = *positionLine;
+        const auto ruler = d.rulerRect(labelVertical);
+        const auto point = labelVertical ? imageToViewport({qreal(coordinate), 0})
+                                         : imageToViewport({0, qreal(coordinate)});
+        const auto center = labelVertical ? QPointF(point.x(), ruler.center().y())
+                                          : QPointF(ruler.center().x(), point.y());
+        if (!ruler.contains(center))
+            return;
+        QFont positionFont = font();
+        positionFont.setPixelSize(12);
+        painter.setFont(positionFont);
+        const auto label =
+            (labelVertical ? canvasText("X: %1 px") : canvasText("Y: %1 px")).arg(coordinate);
+        const QSizeF badge(QFontMetrics(positionFont).horizontalAdvance(label) + 12, 22);
+        // Keep both axes readable horizontally. The Y badge extends across the image edge
+        // because the narrow ruler cannot contain its text; clamp to the canvas, not the ruler.
+        const qreal left = labelVertical ? center.x() - badge.width() / 2 : ruler.left();
+        const QRectF badgeRect(
+            QPointF(std::clamp(left, 0.0, std::max(0.0, width() - badge.width())),
+                    std::clamp(center.y() - badge.height() / 2, 0.0,
+                               std::max(0.0, height() - badge.height()))),
+            badge);
+        painter.save();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(theme.colorPrimary);
+        painter.drawRoundedRect(badgeRect, 3, 3);
+        painter.setPen(theme.colorTextLightSolid);
+        painter.drawText(badgeRect, Qt::AlignCenter, label);
+        painter.restore();
     }
 }
 
@@ -486,6 +604,7 @@ void ImageSplitPreviewCanvas::resizeEvent(QResizeEvent*) {
 }
 void ImageSplitPreviewCanvas::mousePressEvent(QMouseEvent* event) {
     auto& d = *m_impl;
+    d.hoverPosition = event->position();
     setFocus(Qt::MouseFocusReason);
     if (event->button() == Qt::MiddleButton) {
         d.panning = true;
@@ -498,7 +617,6 @@ void ImageSplitPreviewCanvas::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton || !d.editing || d.document->image().isNull())
         return;
     const auto point = event->position();
-    const auto pixel = viewportToImage(point);
     const auto create = [&d](bool vertical, int coordinate) {
         static_cast<void>(d.document->createLine(vertical, coordinate));
         const auto layout = d.document->layout();
@@ -510,14 +628,13 @@ void ImageSplitPreviewCanvas::mousePressEvent(QMouseEvent* event) {
             d.hoveredIndex = -1;
         }
     };
-    if (point.y() < kRulerHeight && point.x() >= kRulerWidth && d.axisAllowed(true)) {
-        create(true, roundedCoordinate(pixel.x()));
-    } else if (point.x() < kRulerWidth && point.y() >= kRulerHeight && d.axisAllowed(false)) {
-        create(false, roundedCoordinate(pixel.y()));
+    if (const auto line = d.rulerLineAt(point)) {
+        create(line->first, line->second);
     } else {
         const auto [vertical, index] = d.hit(point);
         d.selectedVertical = vertical;
         d.selectedIndex = index;
+        d.hoveredIndex = -1;
         if (index >= 0 && d.document->beginLineDrag(vertical, index)) {
             d.dragging = true;
             setCursor(vertical ? Qt::SizeHorCursor : Qt::SizeVerCursor);
@@ -528,6 +645,7 @@ void ImageSplitPreviewCanvas::mousePressEvent(QMouseEvent* event) {
 }
 void ImageSplitPreviewCanvas::mouseMoveEvent(QMouseEvent* event) {
     auto& d = *m_impl;
+    d.hoverPosition = event->position();
     if (d.panning) {
         d.offset += event->position() - d.last;
         d.last = event->position();
@@ -541,8 +659,7 @@ void ImageSplitPreviewCanvas::mouseMoveEvent(QMouseEvent* event) {
         d.hoveredIndex = index;
         if (index >= 0)
             setCursor(vertical ? Qt::SizeHorCursor : Qt::SizeVerCursor);
-        else if ((event->position().y() < kRulerHeight && d.axisAllowed(true)) ||
-                 (event->position().x() < kRulerWidth && d.axisAllowed(false)))
+        else if (d.hoveredRulerLine())
             setCursor(Qt::CrossCursor);
         else
             unsetCursor();
@@ -551,6 +668,7 @@ void ImageSplitPreviewCanvas::mouseMoveEvent(QMouseEvent* event) {
 }
 void ImageSplitPreviewCanvas::mouseReleaseEvent(QMouseEvent* event) {
     auto& d = *m_impl;
+    d.hoverPosition = event->position();
     if (event->button() == Qt::MiddleButton)
         d.panning = false;
     if (event->button() == Qt::LeftButton && d.dragging) {
@@ -562,6 +680,7 @@ void ImageSplitPreviewCanvas::mouseReleaseEvent(QMouseEvent* event) {
 }
 void ImageSplitPreviewCanvas::wheelEvent(QWheelEvent* event) {
     auto& d = *m_impl;
+    d.hoverPosition = event->position();
     if (d.document->image().isNull())
         return;
     const double steps = usesPreciseWheelDelta(*event) ? event->pixelDelta().y() / 100.0
@@ -601,6 +720,7 @@ void ImageSplitPreviewCanvas::keyPressEvent(QKeyEvent* event) {
 }
 void ImageSplitPreviewCanvas::leaveEvent(QEvent*) {
     m_impl->hoveredIndex = -1;
+    m_impl->hoverPosition.reset();
     if (!m_impl->dragging && !m_impl->panning)
         unsetCursor();
     update();
@@ -629,9 +749,7 @@ struct ImageSplitEditorWidget::Impl {
     AdInputNumber* rows = nullptr;
     AdInputNumber* columns = nullptr;
     AdInputNumber* size = nullptr;
-    QLabel* sizeLabel = nullptr;
-    QLabel* manual = nullptr;
-    QLabel* dropHint = nullptr;
+    ImageDropSurface* dropHint = nullptr;
     QWidget* description = nullptr;
     QLabel* dimensions = nullptr;
     QLabel* total = nullptr;
@@ -650,6 +768,13 @@ struct ImageSplitEditorWidget::Impl {
 
     bool busy() const {
         return loading || exporting;
+    }
+    bool acceptsImageDrop(const QMimeData* mime, Qt::DropActions dropActions) const {
+        return !busy() && dropActions.testFlag(Qt::CopyAction) && !droppedPaths(mime).isEmpty();
+    }
+    void positionDropHint() {
+        dropHint->setGeometry(canvas->geometry());
+        dropHint->raise();
     }
     QString sizeKey() const {
         return unit->currentValue() == QStringLiteral("pixels") ? QStringLiteral("pixels")
@@ -761,10 +886,10 @@ struct ImageSplitEditorWidget::Impl {
         sizeField->setItemHidden(grid || equal);
         rowsField->setItemHidden(!grid);
         columnsField->setItemHidden(!grid);
-        sizeLabel->setText(direction->currentValue() == QStringLiteral("horizontal")
-                               ? editorText("Height per Image")
-                               : editorText("Width per Image"));
-        size->setAccessibleName(sizeLabel->text());
+        sizeField->setLabel(direction->currentValue() == QStringLiteral("horizontal")
+                                ? editorText("Height per Image")
+                                : editorText("Width per Image"));
+        size->setAccessibleName(sizeField->label());
     }
     void sync() {
         syncing = true;
@@ -812,7 +937,6 @@ struct ImageSplitEditorWidget::Impl {
         dimensions->setText(
             editorText("%1 × %2 px").arg(layout.size.width()).arg(layout.size.height()));
         total->setText(editorText("Total: %1 images").arg(layout.outputCount()));
-        manual->setVisible(document->state().manuallyEdited);
         validate();
         updateActions();
     }
@@ -863,9 +987,9 @@ struct ImageSplitEditorWidget::Impl {
         QPalette palette = owner->palette();
         palette.setColor(QPalette::WindowText, theme.colorTextSecondary);
         palette.setColor(QPalette::Disabled, QPalette::WindowText, theme.colorTextDisabled);
-        for (auto* label : {manual, dimensions, total})
+        for (auto* label : {dimensions, total})
             label->setPalette(palette);
-        dropHint->setPalette(palette);
+        dropHint->refreshTheme();
         owner->update();
     }
 };
@@ -881,27 +1005,24 @@ ImageSplitEditorWidget::ImageSplitEditorWidget(ImageSplitDocument* document, QWi
     auto* outer = new QHBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(metric.marginMD);
-    auto* previewColumn = new QVBoxLayout;
-    previewColumn->setContentsMargins(0, 0, 0, 0);
-    previewColumn->setSpacing(metric.marginXS);
     d.canvas = new ImageSplitPreviewCanvas(document, this);
-    previewColumn->addWidget(d.canvas, 1);
-    auto* actions = new QHBoxLayout;
-    actions->setContentsMargins(0, 0, 0, 0);
-    actions->setSpacing(metric.marginXS);
+    outer->addWidget(d.canvas, 1);
+    auto* toolbar = new CanvasActionToolbar(d.canvas);
+    toolbar->setObjectName(QStringLiteral("imageSplitCanvasToolbar"));
+    auto* overlay = new QVBoxLayout(d.canvas);
+    overlay->setContentsMargins(16, 16, 16, 16);
+    overlay->addStretch(1);
+    overlay->addWidget(toolbar, 0, Qt::AlignHCenter);
+    namespace icons = adqt::icons::antd::outlined;
+    const std::array<adqt::icons::IconRef, 4> refs{icons::Undo(), icons::Redo(),
+                                                   icons::Fullscreen(), icons::Reload()};
     const std::array<const char*, 4> names{"imageSplitUndo", "imageSplitRedo", "imageSplitFit",
                                            "imageSplitReload"};
     for (std::size_t i = 0; i < d.actions.size(); ++i) {
-        auto* button = new AdButton(this);
-        button->setObjectName(QString::fromLatin1(names[i]));
-        button->setButtonStyle(AdButton::ButtonStyle::Text);
-        button->setFocusPolicy(Qt::StrongFocus);
-        d.actions[i] = button;
-        actions->addWidget(button);
+        if (i == 3)
+            toolbar->addSeparator();
+        d.actions[i] = toolbar->addAction(refs[i], names[i]);
     }
-    actions->addStretch(1);
-    previewColumn->addLayout(actions);
-    outer->addLayout(previewColumn, 1);
     auto* scroll = new AdScrollArea(this);
     scroll->setObjectName(QStringLiteral("imageSplitSettingsScroll"));
     scroll->setFixedWidth(340);
@@ -957,35 +1078,30 @@ ImageSplitEditorWidget::ImageSplitEditorWidget(ImageSplitDocument* document, QWi
     d.rowsField = d.form->addField({}, d.rows, QStringLiteral("rows"));
     d.columns = number("imageSplitColumns");
     d.columnsField = d.form->addField({}, d.columns, QStringLiteral("columns"));
-    auto* precise = new QWidget(d.form);
-    auto* preciseLayout = new QVBoxLayout(precise);
-    preciseLayout->setContentsMargins(0, 0, 0, 0);
-    preciseLayout->setSpacing(metric.marginXS);
-    auto* preciseHeader = new QHBoxLayout;
-    preciseHeader->setContentsMargins(0, 0, 0, 0);
-    preciseHeader->setSpacing(metric.marginXS);
-    d.sizeLabel = new QLabel(precise);
-    d.sizeLabel->setWordWrap(true);
-    preciseHeader->addWidget(d.sizeLabel, 1);
     d.unit = segmented("imageSplitUnit", {QStringLiteral("pixels"), QStringLiteral("percentage")});
     d.unit->setControlSize(AdSegmented::ControlSize::Small);
     d.unit->setDistribution(AdSegmented::Distribution::Content);
-    preciseHeader->addWidget(d.unit, 0, Qt::AlignVCenter);
-    preciseLayout->addLayout(preciseHeader);
     d.size = number("imageSplitSize");
-    d.sizeLabel->setBuddy(d.size);
-    preciseLayout->addWidget(d.size);
-    d.sizeField = d.form->addField({}, precise, QStringLiteral("size"));
-    d.manual = new QLabel(d.form);
-    d.manual->setObjectName(QStringLiteral("imageSplitManualStatus"));
-    d.manual->setWordWrap(true);
-    auto* manualField = d.form->addField({}, d.manual);
-    manualField->setNoStyle(true);
+    d.sizeField = d.form->addField({}, d.size, QStringLiteral("size"));
+    d.sizeField->setLabelAccessoryWidget(d.unit);
     // Split validation owns errors, including uncommitted drafts. Generic form validation would
     // clear them after a numeric value/hasValue signal without checking the split constraints.
     for (auto* field : d.form->items())
         field->setValidateOnChange(false);
-    d.form->layout()->setAlignment(Qt::AlignTop);
+    // Register all fields before arranging the grid; registration rebuilds the form layout.
+    auto* formLayout = static_cast<QVBoxLayout*>(d.form->layout());
+    const int gridIndex = formLayout->indexOf(d.rowsField);
+    formLayout->removeWidget(d.rowsField);
+    formLayout->removeWidget(d.columnsField);
+    auto* grid = new QGridLayout;
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setHorizontalSpacing(metric.marginLG);
+    grid->setColumnStretch(0, 1);
+    grid->setColumnStretch(1, 1);
+    grid->addWidget(d.rowsField, 0, 0, Qt::AlignTop);
+    grid->addWidget(d.columnsField, 0, 1, Qt::AlignTop);
+    formLayout->insertLayout(gridIndex, grid);
+    formLayout->setAlignment(Qt::AlignTop);
     d.description = new QWidget(this);
     d.description->setObjectName(QStringLiteral("imageSplitOutputDescription"));
     d.description->hide();
@@ -999,11 +1115,10 @@ ImageSplitEditorWidget::ImageSplitEditorWidget(ImageSplitDocument* document, QWi
     descriptionLayout->addWidget(d.dimensions);
     descriptionLayout->addWidget(d.total);
     descriptionLayout->addStretch(1);
-    d.dropHint = new QLabel(this);
+    d.dropHint = new ImageDropSurface(true, this);
     d.dropHint->setObjectName(QStringLiteral("imageSplitDropHint"));
-    d.dropHint->setWordWrap(true);
-    d.dropHint->setAlignment(Qt::AlignCenter);
-    d.dropHint->setAutoFillBackground(true);
+    d.dropHint->title->setObjectName(QStringLiteral("imageSplitDropTitle"));
+    d.dropHint->description->setObjectName(QStringLiteral("imageSplitDropDescription"));
     d.dropHint->hide();
     const auto wireNumber = [this](AdInputNumber* input, const QString& key) {
         connect(input, &AdInputNumber::textChanged, this, [this, key](const QString& value) {
@@ -1073,14 +1188,10 @@ ImageSplitEditorWidget::ImageSplitEditorWidget(ImageSplitDocument* document, QWi
     connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
             [this] { m_impl->theme(); });
     connect(&styles::ThemeManager::instance(), &styles::ThemeManager::themeChanged, this,
-            [this, outer, previewColumn, actions, descriptionLayout, preciseLayout,
-             preciseHeader](const styles::ThemeColorScheme& scheme) {
+            [this, outer, descriptionLayout, grid](const styles::ThemeColorScheme& scheme) {
                 outer->setSpacing(scheme.metricAlias.marginMD);
-                previewColumn->setSpacing(scheme.metricAlias.marginXS);
-                actions->setSpacing(scheme.metricAlias.marginXS);
                 descriptionLayout->setSpacing(scheme.metricAlias.marginSM);
-                preciseLayout->setSpacing(scheme.metricAlias.marginXS);
-                preciseHeader->setSpacing(scheme.metricAlias.marginXS);
+                grid->setHorizontalSpacing(scheme.metricAlias.marginLG);
                 m_impl->theme();
             });
     d.sync();
@@ -1140,12 +1251,14 @@ void ImageSplitEditorWidget::retranslateUi() {
     d.updateVisibility();
     const std::array<const char*, 4> actions{"Undo", "Redo", "Fit to Canvas", "Reload"};
     for (std::size_t i = 0; i < actions.size(); ++i) {
-        d.actions[i]->setText(editorText(actions[i]));
-        d.actions[i]->setAccessibleName(d.actions[i]->text());
+        const auto label = editorText(actions[i]);
+        d.actions[i]->setToolTip(label);
+        d.actions[i]->setAccessibleName(label);
     }
-    d.manual->setText(editorText("Split lines adjusted manually"));
-    d.dropHint->setText(editorText("Drop one image to replace the current image"));
-    d.dropHint->setAccessibleName(d.dropHint->text());
+    d.dropHint->title->setText(editorText("Drop one image to replace the current image"));
+    d.dropHint->description->setText(editorText("Drop one image file at a time."));
+    d.dropHint->setAccessibleName(d.dropHint->title->text());
+    d.dropHint->setAccessibleDescription(d.dropHint->description->text());
     d.canvas->retranslateUi();
     d.refresh();
 }
@@ -1155,38 +1268,48 @@ void ImageSplitEditorWidget::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
 }
 void ImageSplitEditorWidget::dragEnterEvent(QDragEnterEvent* event) {
-    if (!m_impl->busy() && !droppedPaths(event->mimeData()).isEmpty() &&
-        (event->possibleActions() & Qt::CopyAction)) {
-        event->setDropAction(Qt::CopyAction);
-        event->accept();
-        m_impl->dropHint->setGeometry(m_impl->canvas->geometry());
-        m_impl->dropHint->show();
-        m_impl->dropHint->raise();
+    if (!m_impl->acceptsImageDrop(event->mimeData(), event->possibleActions())) {
+        m_impl->dropHint->hide();
+        event->ignore();
+        return;
     }
+    m_impl->positionDropHint();
+    m_impl->dropHint->show();
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
 }
 void ImageSplitEditorWidget::dragMoveEvent(QDragMoveEvent* event) {
-    if (!m_impl->busy() && !droppedPaths(event->mimeData()).isEmpty()) {
-        event->setDropAction(Qt::CopyAction);
-        event->accept();
+    if (!m_impl->acceptsImageDrop(event->mimeData(), event->possibleActions())) {
+        m_impl->dropHint->hide();
+        event->ignore();
+        return;
     }
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
 }
-void ImageSplitEditorWidget::dragLeaveEvent(QDragLeaveEvent*) {
+void ImageSplitEditorWidget::dragLeaveEvent(QDragLeaveEvent* event) {
     m_impl->dropHint->hide();
+    event->accept();
 }
 void ImageSplitEditorWidget::dropEvent(QDropEvent* event) {
     m_impl->dropHint->hide();
-    if (m_impl->busy())
+    if (!m_impl->acceptsImageDrop(event->mimeData(), event->possibleActions())) {
+        event->ignore();
         return;
-    const auto paths = droppedPaths(event->mimeData());
-    if (!paths.isEmpty()) {
-        event->setDropAction(Qt::CopyAction);
-        event->accept();
-        emit imageFilesDropped(paths);
     }
+    const auto paths = droppedPaths(event->mimeData());
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+    emit imageFilesDropped(paths);
 }
 void ImageSplitEditorWidget::hideEvent(QHideEvent* event) {
     m_impl->dropHint->hide();
     QWidget::hideEvent(event);
+}
+void ImageSplitEditorWidget::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    layout()->activate();
+    m_impl->positionDropHint();
 }
 
 } // namespace snow_shot::presentation::components

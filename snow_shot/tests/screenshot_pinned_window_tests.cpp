@@ -20771,15 +20771,16 @@ void pinnedImageSplittingSnapshots() {
     require(menu && split && reset && menu->actions().last() == split &&
                 menu->actions().at(menu->actions().size() - 2)->isSeparator() &&
                 menu->actions().indexOf(reset) == menu->actions().size() - 3 &&
-                split->isEnabled() && split->text() == QStringLiteral("Split Image") &&
+                split->isEnabled() && split->text() == QStringLiteral("Image Splitting") &&
                 !split->icon().isNull(),
-            "Process image ends with a separator and the themed Split Image entry");
+            "Process image ends with a separator and the themed Image Splitting entry");
     class SplitTranslator final : public QTranslator {
       public:
         QString translate(const char* context, const char* source, const char*,
                           int) const override {
-            return QByteArray(context) == "ImageSplitWindow" && QByteArray(source) == "Split Image"
-                       ? QStringLiteral("Translated Split Image")
+            return QByteArray(context) == "ImageSplitWindow" &&
+                           QByteArray(source) == "Image Splitting"
+                       ? QStringLiteral("Translated Image Splitting")
                        : QString();
         }
     } translator;
@@ -20788,9 +20789,9 @@ void pinnedImageSplittingSnapshots() {
         qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
     QEvent language(QEvent::LanguageChange);
     QCoreApplication::sendEvent(&window, &language);
-    require(split->text() == QStringLiteral("Translated Split Image") &&
+    require(split->text() == QStringLiteral("Translated Image Splitting") &&
                 split->toolTip() == split->text(),
-            "pinned Split Image action uses the shared translation context at runtime");
+            "pinned Image Splitting action uses the shared translation context at runtime");
     split->trigger();
     require(requests == 1 && snapshot.source.isValid() && snapshot.outputSize == QSize(80, 120) &&
                 snapshot.originalFileName == QStringLiteral("section.reference.png") &&

@@ -905,15 +905,16 @@ void entrySplitActionUsesOnlyItsRecord() {
     auto* split = menu->findChild<QAction*>(QStringLiteral("screenshotHistoryEntrySplit"));
     auto* stitch = menu->findChild<QAction*>(QStringLiteral("screenshotHistoryEntryStitch"));
     require(split && stitch && split->isEnabled() &&
-                split->text() == QStringLiteral("Split Image") && !split->icon().isNull() &&
+                split->text() == QStringLiteral("Image Splitting") && !split->icon().isNull() &&
                 menu->actions().indexOf(split) == menu->actions().indexOf(stitch) + 1,
-            "Split Image follows Stitch Image with a themed icon");
+            "Image Splitting follows Stitch Image with a themed icon");
     class SplitTranslator final : public QTranslator {
       public:
         QString translate(const char* context, const char* source, const char*,
                           int) const override {
-            return QByteArray(context) == "ImageSplitWindow" && QByteArray(source) == "Split Image"
-                       ? QStringLiteral("Translated Split Image")
+            return QByteArray(context) == "ImageSplitWindow" &&
+                           QByteArray(source) == "Image Splitting"
+                       ? QStringLiteral("Translated Image Splitting")
                        : QString();
         }
     } translator;
@@ -922,9 +923,9 @@ void entrySplitActionUsesOnlyItsRecord() {
         qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
     QEvent language(QEvent::LanguageChange);
     QApplication::sendEvent(entry, &language);
-    require(split->text() == QStringLiteral("Translated Split Image") &&
+    require(split->text() == QStringLiteral("Translated Image Splitting") &&
                 split->toolTip() == split->text(),
-            "open history Split Image action uses the shared translation context");
+            "open history Image Splitting action uses the shared translation context");
     activateMenuAction(menu, split);
     flushEvents();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -1017,10 +1018,10 @@ void moreMenuOffersPinStitchAndDelete() {
     QAction* remove = menu->actions().at(3);
     require(pin->text() == QStringLiteral("Pin to screen") && pin->isEnabled() &&
                 stitch->text() == QStringLiteral("Stitch Image") && stitch->isEnabled() &&
-                split->text() == QStringLiteral("Split Image") && split->isEnabled() &&
+                split->text() == QStringLiteral("Image Splitting") && split->isEnabled() &&
                 remove->text() == QStringLiteral("Delete") && menu->actionDanger(remove) &&
                 menu->actionGeometry(pin).isValid(),
-            "the More menu offers Pin to screen, Stitch Image, Split Image, and danger Delete");
+            "the More menu offers Pin to screen, Stitch Image, Image Splitting, and danger Delete");
     QEvent languageChange(QEvent::LanguageChange);
     QApplication::sendEvent(pinnableEntry, &languageChange);
     flushEvents();

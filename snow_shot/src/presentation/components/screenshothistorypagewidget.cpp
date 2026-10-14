@@ -1099,7 +1099,7 @@ class HistoryEntryWidget final : public QFrame {
         }
         if (m_splitAction != nullptr) {
             const QString label = QCoreApplication::translate(
-                "ImageSplitWindow", QT_TRANSLATE_NOOP("ImageSplitWindow", "Split Image"));
+                "ImageSplitWindow", QT_TRANSLATE_NOOP("ImageSplitWindow", "Image Splitting"));
             m_splitAction->setText(label);
             m_splitAction->setToolTip(label);
         }

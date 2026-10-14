@@ -9,6 +9,7 @@
 #include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
+#include "snow_shot/storage/pinnedwindowrepository.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "icon_renderer.h"
 #include "widgets/button.h"
@@ -17,12 +18,14 @@
 
 #include <QApplication>
 #include <QCursor>
+#include <QDesktopServices>
 #include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QScreen>
 #include <QTimer>
+#include <QUrl>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -40,7 +43,7 @@ QString splitText(const char* source) {
     return QCoreApplication::translate("ImageSplitWindow", source);
 }
 [[maybe_unused]] constexpr const char* labels[] = {
-    QT_TRANSLATE_NOOP("ImageSplitWindow", "Split Image"),
+    QT_TRANSLATE_NOOP("ImageSplitWindow", "Image Splitting"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Save All"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Cancel"),
     QT_TRANSLATE_NOOP("ImageSplitWindow", "Images"),
@@ -77,6 +80,8 @@ struct LoadedImage final {
     QImage preview;
     std::shared_ptr<CollageImportReservation> reservation;
     const char* errorSource = nullptr;
+    QString originalFileName;
+    QDateTime createdUtc;
 };
 
 struct ExportProgress final {
@@ -236,13 +241,14 @@ struct ImageSplitWindow::Impl final {
         return closing || importing || exporting || choosing || confirming;
     }
     void updateActions() {
-        save->setEnabled(!unavailable() && editor->configurationValid());
+        // Busy blocks activation while retaining the primary button's loading appearance.
+        save->setEnabled(exporting || (!unavailable() && editor->configurationValid()));
         save->setBusy(exporting);
         editor->setLoading(importing || choosing || confirming);
         editor->setExportBusy(exporting);
     }
     void retranslate() {
-        modal->setWindowTitle(splitText("Split Image"));
+        modal->setWindowTitle(splitText("Image Splitting"));
         save->setText(splitText("Save All"));
         cancel->setText(splitText("Cancel"));
         save->setAccessibleName(save->text());
@@ -386,6 +392,7 @@ struct ImageSplitWindow::Impl final {
         importing = exporting = choosing = false;
         status = Status::None;
         showStatus();
+        updateActions();
         if (fileDialog)
             fileDialog->reject();
         if (confirmation)
@@ -559,6 +566,12 @@ struct ImageSplitWindow::Impl final {
                 status = result->succeeded() ? Status::Saved : Status::ExportError;
                 showStatus();
                 updateActions();
+                if (exportResult.succeeded()) {
+                    if (services.openDirectory)
+                        services.openDirectory(exportResult.directory);
+                    else
+                        QDesktopServices::openUrl(QUrl::fromLocalFile(exportResult.directory));
+                }
                 emit q.exportFinished(exportResult);
             });
         if (!job.isValid()) {
@@ -613,6 +626,70 @@ void ImageSplitWindow::presentHistory(const storage::CaptureHistoryRecord& recor
         });
     if (!d.job.isValid())
         d.finishLoading(loaded, {}, record.createdUtc, false, token,
+                        loadingFailure(loaded, ScreenshotExportFailureStage::Queue,
+                                       "Image loading could not be started. Try again."));
+}
+
+void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
+    auto& d = *m_impl;
+    if (d.unavailable())
+        return;
+    d.present();
+    d.beginLoading();
+    const auto token = d.generation;
+    auto loaded = std::make_shared<LoadedImage>();
+    d.job = ScreenshotExportCoordinator::shared().submit(
+        this, ScreenshotExportCoordinator::Priority::Background,
+        [recordId, loaded](const ScreenshotExportCancellation& cancellation) {
+            const auto cancelled = [&cancellation] {
+                return cancellation.isCancellationRequested();
+            };
+            qint64 allocatedBytes = 0;
+            const auto allocate = [loaded, cancelled, &allocatedBytes](qint64 bytes) {
+                if (cancelled())
+                    return false;
+                allocatedBytes = std::max(allocatedBytes, bytes);
+                if (!loaded->reservation)
+                    loaded->reservation = reserveCollageImport(allocatedBytes);
+                else if (!loaded->reservation->resize(allocatedBytes))
+                    loaded->reservation.reset();
+                if (!loaded->reservation)
+                    loaded->errorSource =
+                        "The image is too large or there is not enough memory to load it.";
+                return loaded->reservation != nullptr;
+            };
+            if (cancelled())
+                return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Cancelled,
+                                                           {});
+            const auto record = storage::ApplicationStorage::instance().pinnedWindows().loadRecord(
+                recordId, allocate);
+            QImage image;
+            if (record && !cancelled()) {
+                loaded->originalFileName = record->originalFileName;
+                loaded->createdUtc = record->createdUtc;
+                if (record->sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
+                    ScreenshotClipboardOriginalContent original;
+                    original.html = record->originalHtml;
+                    original.text = record->originalText;
+                    const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
+                        original, record->firstCreationTextDpi, {}, allocate);
+                    if (rendered)
+                        image = rendered->image;
+                } else {
+                    image = record->image;
+                }
+            }
+            if (loaded->errorSource)
+                return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
+                                      loaded->errorSource);
+            return prepareImage(std::move(image), loaded, cancellation);
+        },
+        [this, loaded, token](ScreenshotExportTaskResult result) {
+            m_impl->finishLoading(loaded, loaded->originalFileName, loaded->createdUtc, false,
+                                  token, std::move(result));
+        });
+    if (!d.job.isValid())
+        d.finishLoading(loaded, {}, {}, false, token,
                         loadingFailure(loaded, ScreenshotExportFailureStage::Queue,
                                        "Image loading could not be started. Try again."));
 }
@@ -820,6 +897,10 @@ void ImageSplitWindowCoordinator::presentHistory(const storage::CaptureHistoryRe
 void ImageSplitWindowCoordinator::presentSource(ImageSplitSource source) {
     if (auto* window = createWindow())
         window->presentSource(std::move(source));
+}
+void ImageSplitWindowCoordinator::presentPinnedRecord(const QString& recordId) {
+    if (auto* window = createWindow())
+        window->presentPinnedRecord(recordId);
 }
 void ImageSplitWindowCoordinator::shutdown() {
     m_shutdown = true;

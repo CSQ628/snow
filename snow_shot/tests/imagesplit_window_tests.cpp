@@ -2,10 +2,13 @@
 #include "snow_shot/presentation/imagesplitwindow.h"
 #include "snow_shot/presentation/components/imagespliteditorwidget.h"
 #include "snow_shot/presentation/languagemanager.h"
+#include "snow_shot/presentation/screenshotclipboardcontent.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/pinnedwindowrepository.h"
 #include "widgets/button.h"
 #include "widgets/input_number.h"
+#include "widgets/message.h"
 #include "widgets/modal.h"
 
 #include <QApplication>
@@ -13,12 +16,15 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileInfo>
+#include <QFile>
+#include <QUuid>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QPainter>
 #include <QTemporaryDir>
 #include <QThread>
 #include <atomic>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -57,6 +63,15 @@ adqt::widgets::AdButton* saveButton(ImageSplitWindow& window) {
         QStringLiteral("imageSplitSaveAll"));
     require(button != nullptr, "Save All is discoverable");
     return button;
+}
+adqt::widgets::AdMessageHandle* statusMessage(ImageSplitWindow& window) {
+    auto* messages = adqt::widgets::AdMessageService::instance(window.editor()->window());
+    require(messages != nullptr, "split message service belongs to its window");
+    for (auto* handle : messages->findChildren<adqt::widgets::AdMessageHandle*>()) {
+        if (handle->isOpen() && handle->key() == QStringLiteral("imageSplitStatus"))
+            return handle;
+    }
+    return nullptr;
 }
 
 void replacementAndCancellation() {
@@ -145,6 +160,100 @@ void independentHistoryAndSourceWindows() {
     require(coordinator.windows().isEmpty(), "coordinator closes all owned windows on shutdown");
 }
 
+void savedPinsOpenIndependentSplitWindows(const QString& directory) {
+    auto& repository = snow_shot::storage::ApplicationStorage::instance().pinnedWindows();
+    const auto originalCount = repository.summaries().size();
+    const auto setGeometry = [](snow_shot::storage::PinnedWindowRecord& record, QSize size) {
+        record.nativeGeometry = QRect(QPoint(), size);
+        record.canvasSourceRect = QRectF(record.nativeGeometry);
+        record.contentCanvasRect = record.canvasSourceRect;
+        record.surfaceCanvasRect = record.canvasSourceRect;
+        record.initialWindowSize = size;
+    };
+    snow_shot::storage::PinnedWindowRecord pixels;
+    pixels.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    pixels.image = image({540, 270}, Qt::cyan);
+    pixels.createdUtc = QDateTime::fromString(QStringLiteral("2026-10-14T00:00:00Z"), Qt::ISODate);
+    pixels.ignored = true;
+    pixels.canvasSession = QByteArrayLiteral("saved canvas is not a split input");
+    setGeometry(pixels, pixels.image.size());
+    require(repository.upsert(pixels).success, "save closed image pin for splitting");
+    snow_shot::storage::PinnedWindowRecord file;
+    file.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    file.sourceKind = snow_shot::storage::PinnedWindowSourceKind::ClipboardImageFile;
+    file.image = image({420, 300}, Qt::blue);
+    file.originalFilePath = QDir(directory).filePath(QStringLiteral("split-original.png"));
+    file.originalFileName = QStringLiteral("split-original.png");
+    file.hidden = true;
+    setGeometry(file, file.image.size());
+    require(file.image.save(file.originalFilePath) && repository.upsert(file).success,
+            "save hidden file pin for splitting");
+    snow_shot::storage::PinnedWindowRecord text;
+    text.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    text.sourceKind = snow_shot::storage::PinnedWindowSourceKind::ClipboardText;
+    text.originalHtml = QStringLiteral("<b>Saved text pin</b>");
+    text.originalText = QStringLiteral("Saved text pin");
+    text.firstCreationTextDpi = 1.5;
+    setGeometry(text, QSize(300, 90));
+    // Publishing a new pin reveals hidden members of its group. Hide the file fixture only after
+    // all sources exist, so the split loader receives a genuinely hidden saved record.
+    require(repository.upsert(text).success &&
+                repository.setRecordsHidden({file.id}, true).success &&
+                repository.flush().success && QFile::remove(file.originalFilePath),
+            "persist split inputs and remove the original file");
+    ScreenshotClipboardOriginalContent original;
+    original.html = text.originalHtml;
+    original.text = text.originalText;
+    const auto rendered =
+        ScreenshotClipboardContentReader::renderOriginalText(original, text.firstCreationTextDpi);
+    require(rendered.has_value(), "render saved text reference");
+
+    ImageSplitWindowCoordinator coordinator;
+    for (const auto& id : {pixels.id, file.id, text.id})
+        coordinator.presentPinnedRecord(id);
+    const auto windows = coordinator.windows();
+    require(windows.size() == 3, "every saved pin opens its own split window");
+    for (auto* window : windows)
+        loaded(*window);
+    const auto samePixels = [](const QImage& actual, const QImage& source) {
+        const QImage expected = source.convertToFormat(QImage::Format_RGBA8888);
+        return actual.size() == expected.size() && actual.format() == expected.format() &&
+               std::equal(expected.constBits(), expected.constBits() + expected.sizeInBytes(),
+                          actual.constBits());
+    };
+    require(samePixels(windows[0]->document()->image(), pixels.image) &&
+                samePixels(windows[1]->document()->image(), file.image) &&
+                samePixels(windows[2]->document()->image(), rendered->image),
+            "saved image, file, and text pins preserve full-resolution pixels");
+    require(windows[0]->imageName() == QStringLiteral("Screenshot_%1")
+                                           .arg(pixels.createdUtc.toLocalTime().toString(
+                                               QStringLiteral("yyyyMMdd-HHmmss"))) &&
+                windows[1]->imageName() == QStringLiteral("split-original"),
+            "saved split sources retain creation time and original filename");
+    windows[0]->document()->createLine(true, 100);
+    require(!windows[1]->document()->canUndo() && !windows[2]->document()->canUndo(),
+            "saved pin split edits remain independent");
+    const auto retainedPixels = repository.loadRecord(pixels.id);
+    const auto retainedFile = repository.loadRecord(file.id);
+    require(repository.summaries().size() == originalCount + 3 && retainedPixels && retainedFile &&
+                retainedPixels->ignored && retainedPixels->canvasSession == pixels.canvasSession &&
+                retainedFile->hidden,
+            "splitting preserves saved pins, their canvas data, and their lifecycle state");
+    coordinator.presentPinnedRecord(QStringLiteral("missing-split-pin"));
+    auto* missing = coordinator.windows().last();
+    waitUntil([&] { return !missing->loading(); }, "missing saved pin load completes");
+    require(missing->document()->image().isNull() && !missing->lastError().isEmpty() &&
+                missing->modal()->isOpen() && !saveButton(*missing)->isEnabled(),
+            "missing pin reports a load error without enabling export");
+    coordinator.shutdown();
+    flush();
+    require(coordinator.windows().isEmpty(), "saved pin split windows close on shutdown");
+    coordinator.presentPinnedRecord(pixels.id);
+    require(coordinator.windows().isEmpty(), "shutdown rejects new saved pin split windows");
+    require(repository.removeMany({pixels.id, file.id, text.id}).success,
+            "remove saved pin split fixtures");
+}
+
 void saveCommitsVisibleDraft() {
     std::function<void(QString)> chosen;
     int choices = 0;
@@ -183,11 +292,20 @@ void saveCommitsVisibleDraft() {
 
 void exportAndRuntimeLanguage(const QString& directory) {
     int choices = 0;
+    QStringList openedDirectories;
     QString exportDirectory = directory;
     ImageSplitWindowServices ports;
     ports.chooseDirectory = [&](QWidget*, auto complete) {
         ++choices;
         complete(exportDirectory);
+    };
+    ports.openDirectory = [&](const QString& path) {
+        require(QThread::currentThread() == qApp->thread(),
+                "export directory opens on the GUI thread");
+        require(QFileInfo::exists(QDir(path).filePath(QStringLiteral("1.png"))) &&
+                    QFileInfo::exists(QDir(path).filePath(QStringLiteral("2.png"))),
+                "export directory opens after all images are saved");
+        openedDirectories.append(path);
     };
     ImageSplitWindow window(nullptr, ports);
     window.presentImage(image({80, 60}), QStringLiteral("transparent.png"));
@@ -200,7 +318,7 @@ void exportAndRuntimeLanguage(const QString& directory) {
     });
     window.saveAll();
     window.saveAll();
-    require(choices == 1 && !saveButton(window)->isEnabled(),
+    require(choices == 1 && saveButton(window)->busy(),
             "busy export prevents duplicate submission");
     waitUntil([&] { return finished == 1; }, "batch export completes");
     require(result.succeeded() && result.savedCount == 2 &&
@@ -208,30 +326,146 @@ void exportAndRuntimeLanguage(const QString& directory) {
                 QFileInfo::exists(QDir(result.directory).filePath(QStringLiteral("2.png"))) &&
                 window.modal()->isOpen() && saveButton(window)->isEnabled(),
             "Save All writes numbered PNGs and keeps the editable window open");
+    require(openedDirectories == QStringList{result.directory} && result.directory != directory,
+            "successful export opens its generated output directory exactly once");
     window.saveAll();
     waitUntil([&] { return finished == 2; }, "repeat batch export completes");
-    require(result.directory.endsWith(QStringLiteral(" (2)")),
-            "repeat export uses a unique folder");
+    require(result.directory.endsWith(QStringLiteral(" (2)")) && openedDirectories.size() == 2 &&
+                openedDirectories.last() == result.directory,
+            "repeat export opens its new unique folder exactly once");
     exportDirectory = QDir(directory).filePath(QStringLiteral("missing-parent"));
     window.saveAll();
     waitUntil([&] { return finished == 3; }, "invalid export destination reports failure");
-    require(!result.succeeded() && !window.lastError().isEmpty(),
-            "failure preserves editable image");
+    require(!result.succeeded() && !window.lastError().isEmpty() && openedDirectories.size() == 2,
+            "failure preserves editable image without opening a directory");
     auto& languages = LanguageManager::instance();
     languages.initialize();
     require(languages.setLanguage(QStringLiteral("zh_CN")), "switch to simplified Chinese");
     flush();
     require(saveButton(window)->text() == QString::fromUtf8("全部保存") &&
-                window.modal()->windowTitle() == QString::fromUtf8("拆分图像") &&
+                window.modal()->windowTitle() == QString::fromUtf8("图片分割") &&
                 window.lastError() == QString::fromUtf8("无法创建输出文件夹。"),
             "open split window retranslates at runtime");
+    require(languages.setLanguage(QStringLiteral("zh_TW")), "switch to traditional Chinese");
+    flush();
+    require(window.modal()->windowTitle() == QString::fromUtf8("圖片分割"),
+            "traditional Chinese uses the image splitting feature name");
     require(languages.setLanguage(QStringLiteral("en_US")), "restore English");
     flush();
-    require(saveButton(window)->text() == QStringLiteral("Save All"),
+    require(saveButton(window)->text() == QStringLiteral("Save All") &&
+                window.modal()->windowTitle() == QStringLiteral("Image Splitting"),
             "English source copy restored");
     require(window.lastError() == QStringLiteral("The output folder could not be created."),
             "existing error messages retranslate at runtime");
     window.shutdown();
+}
+
+void exportFeedbackUsesLoadingButtonAndMessages() {
+    using adqt::widgets::AdMessage;
+    using adqt::widgets::AdMessageHandle;
+    std::function<void(QString)> chosen;
+    int choices = 0;
+    int finished = 0;
+    QStringList openedDirectories;
+    std::atomic_int stage = 0;
+    std::atomic_bool entered = false;
+    std::atomic_bool exited = false;
+    ImageSplitWindowServices ports;
+    ports.chooseDirectory = [&](QWidget*, auto complete) {
+        ++choices;
+        chosen = std::move(complete);
+    };
+    ports.openDirectory = [&](const QString& path) { openedDirectories.append(path); };
+    ports.exportBatch = [&](const QImage&, const ImageSplitLayout& layout, const QString& directory,
+                            const QString&, const auto& cancelled, const auto& progress) {
+        QElapsedTimer timer;
+        timer.start();
+        entered = true;
+        while (stage < 1 && !cancelled() && timer.elapsed() < 15000)
+            QThread::msleep(1);
+        progress(1, layout.outputCount());
+        while (stage < 2 && !cancelled() && timer.elapsed() < 15000)
+            QThread::msleep(1);
+        exited = true;
+        const bool success = stage == 2 && !cancelled();
+        return ImageSplitExportResult{directory,
+                                      success ? QString() : QStringLiteral("test write failure"),
+                                      success ? layout.outputCount() : 1, layout.outputCount()};
+    };
+    ImageSplitWindow window(nullptr, ports);
+    window.presentImage(image({80, 60}), QStringLiteral("feedback.png"));
+    loaded(window);
+    auto* save = saveButton(window);
+    QObject::connect(&window, &ImageSplitWindow::exportFinished, &window,
+                     [&](const auto&) { ++finished; });
+    window.saveAll();
+    require(choices == 1 && !save->busy() && !statusMessage(window),
+            "choosing the destination does not start writing feedback");
+    chosen({});
+    require(save->isEnabled() && !save->busy() && !statusMessage(window) &&
+                openedDirectories.isEmpty(),
+            "canceling the destination leaves the save action ready without opening a directory");
+
+    window.saveAll();
+    chosen(QStringLiteral("test-folder"));
+    QPointer<AdMessageHandle> message = statusMessage(window);
+    require(window.busy() && save->busy() && save->isEnabled() &&
+                save->cursor().shape() != Qt::ForbiddenCursor && message &&
+                message->type() == AdMessage::Type::Loading &&
+                message->content() == QStringLiteral("Saving images: 0 of 2"),
+            "writing starts with the loading button appearance and a loading Message");
+    waitUntil([&] { return entered.load(); }, "batch writer starts");
+    flush();
+    require(message->noticeWidget() && message->noticeWidget()->isVisible() &&
+                message->noticeWidget()->window() == window.editor()->window(),
+            "the writing prompt is visible in the split window");
+    save->click();
+    window.saveAll();
+    require(choices == 2, "loading blocks repeated save requests");
+    stage = 1;
+    waitUntil([&] { return message->content() == QStringLiteral("Saving images: 1 of 2"); },
+              "writing progress updates its Message");
+    require(statusMessage(window) == message && save->busy(),
+            "progress keeps the same Message and loading button");
+    require(openedDirectories.isEmpty(), "export does not open the directory while writing");
+    stage = 2;
+    waitUntil([&] { return finished == 1; }, "successful writing completes");
+    require(statusMessage(window) == message && message->type() == AdMessage::Type::Success &&
+                message->content() == QStringLiteral("Saved 2 images to test-folder") &&
+                !window.busy() && !save->busy() && save->isEnabled(),
+            "success updates the Message and restores the save button");
+    require(openedDirectories == QStringList{QStringLiteral("test-folder")},
+            "completed export opens the directory once");
+
+    entered = exited = false;
+    stage = 0;
+    window.saveAll();
+    chosen(QStringLiteral("test-folder"));
+    require(save->busy() && message->type() == AdMessage::Type::Loading,
+            "another export restarts loading feedback");
+    stage = 3;
+    waitUntil([&] { return finished == 2; }, "failed writing completes");
+    require(statusMessage(window) == message && message->type() == AdMessage::Type::Error &&
+                message->content() ==
+                    QStringLiteral("Saved 1 of 2 images to test-folder. test write failure") &&
+                !window.busy() && !save->busy() && save->isEnabled(),
+            "partial failure reports its result through Message and allows retry");
+    require(openedDirectories.size() == 1, "partial failure does not open the directory");
+
+    entered = exited = false;
+    stage = 0;
+    window.saveAll();
+    chosen(QStringLiteral("test-folder"));
+    waitUntil([&] { return entered.load(); }, "retry writer starts before shutdown");
+    window.shutdown();
+    require(!window.busy() && !save->busy() && !statusMessage(window),
+            "shutdown clears the loading button and writing Message");
+    waitUntil([&] { return exited.load(); }, "shutdown cancels writing");
+    waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
+              "canceled writing drains");
+    flush();
+    require(finished == 2 && !statusMessage(window) && openedDirectories.size() == 1,
+            "late canceled writing cannot reopen feedback or open a directory");
 }
 
 void renderPreview(const QString& path, bool dark, qreal dpr) {
@@ -249,7 +483,7 @@ void renderPreview(const QString& path, bool dark, qreal dpr) {
     font.setPixelSize(48);
     painter.setFont(font);
     painter.drawText(QRect(50, 50, 1100, 800), Qt::AlignCenter,
-                     QStringLiteral("Snow Shot\nSplit Image"));
+                     QStringLiteral("Snow Shot\nImage Splitting"));
     painter.end();
     ImageSplitWindow window;
     window.presentImage(source, QStringLiteral("design.png"));
@@ -471,8 +705,10 @@ int main(int argc, char** argv) {
     } else {
         replacementAndCancellation();
         independentHistoryAndSourceWindows();
+        savedPinsOpenIndependentSplitWindows(directory.path());
         saveCommitsVisibleDraft();
         exportAndRuntimeLanguage(directory.path());
+        exportFeedbackUsesLoadingButtonAndMessages();
         admissionAndLateCallbacks();
         shutdownDuringWorkers();
         canceledCloseResumesReplacement();

@@ -64,6 +64,7 @@ class ImageSplitEditorWidget final : public QWidget {
     void dragLeaveEvent(QDragLeaveEvent*) override;
     void dropEvent(QDropEvent*) override;
     void hideEvent(QHideEvent*) override;
+    void resizeEvent(QResizeEvent*) override;
 
   private:
     struct Impl;

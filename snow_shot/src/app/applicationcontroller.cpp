@@ -1656,6 +1656,10 @@ class ApplicationController::Impl {
                              [this](const QStringList& recordIds) {
                                  ensureCollageWindowCoordinator().presentPinnedRecords(recordIds);
                              });
+            QObject::connect(mainWindow, &MainWindow::pinnedWindowSplitRequested, &q,
+                             [this](const QString& recordId) {
+                                 ensureImageSplitWindowCoordinator().presentPinnedRecord(recordId);
+                             });
         }
         return *mainWindow;
     }
