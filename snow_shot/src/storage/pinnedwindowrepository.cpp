@@ -1767,6 +1767,8 @@ PinnedWindowRepository::loadPreviewSource(const QString& id,
         stored.record.id = source.id;
         stored.record.sourceKind = source.sourceKind;
         stored.record.firstCreationTextDpi = source.firstCreationTextDpi;
+        stored.record.originalFileName = source.originalFileName;
+        stored.record.createdUtc = source.createdUtc;
         if (source.sourceKind == PinnedWindowSourceKind::ClipboardText) {
             stored.record.originalHtml = source.originalHtml;
             stored.record.originalText = source.originalText;
@@ -1809,10 +1811,13 @@ PinnedWindowRepository::loadPreviewSource(const QString& id,
     }
     if (cancelled && cancelled())
         return std::nullopt;
-    return PinnedWindowPreviewSource{stored.record.sourceKind, std::move(stored.record.image),
+    return PinnedWindowPreviewSource{stored.record.sourceKind,
+                                     std::move(stored.record.image),
                                      std::move(stored.record.originalHtml),
                                      std::move(stored.record.originalText),
-                                     stored.record.firstCreationTextDpi};
+                                     stored.record.firstCreationTextDpi,
+                                     std::move(stored.record.originalFileName),
+                                     stored.record.createdUtc};
 }
 
 std::optional<quint64> PinnedWindowRepository::previewSourceRevision(const QString& id) const {

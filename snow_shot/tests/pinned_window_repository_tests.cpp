@@ -499,6 +499,8 @@ void sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads() {
                                patternedImage({64, 32}, 9));
     record.canvasSession = QByteArray(1024 * 1024, 'c');
     record.recognitionResults = QByteArray(1024 * 1024, 'r');
+    record.originalFileName = QStringLiteral("split-source.png");
+    record.createdUtc = QDateTime::fromString(QStringLiteral("2026-10-14T00:00:00Z"), Qt::ISODate);
     storage::PinnedWindowRepository repository(directory.path(), true, 30000);
     require(repository.upsert(record).success && repository.flush().success,
             "persist source-only admission fixture");
@@ -519,6 +521,9 @@ void sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads() {
     require(source && samePixels(source->image, record.image) && sourcePeak < fullPeak &&
                 sourcePeak >= 2 * record.image.sizeInBytes(),
             "source-only admission preserves pixels without budgeting discarded annotations");
+    require(source->originalFileName == record.originalFileName &&
+                source->createdUtc == record.createdUtc,
+            "source-only reads retain original naming and creation metadata");
     int calls = 0;
     require(!repository.loadPreviewSource(record.id,
                                           [&](qint64) {
