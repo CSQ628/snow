@@ -492,6 +492,71 @@ void allocationAdmissionPrecedesSourceDecode() {
             "encoded pin may be admitted while decoded raster allocation is rejected");
 }
 
+void sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads() {
+    QTemporaryDir directory;
+    auto record = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                               patternedImage({64, 32}, 9));
+    record.canvasSession = QByteArray(1024 * 1024, 'c');
+    record.recognitionResults = QByteArray(1024 * 1024, 'r');
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    require(repository.upsert(record).success && repository.flush().success,
+            "persist source-only admission fixture");
+    qint64 fullPeak = 0;
+    require(repository
+                .loadRecord(record.id,
+                            [&](qint64 bytes) {
+                                fullPeak = std::max(fullPeak, bytes);
+                                return true;
+                            })
+                .has_value(),
+            "load full admission reference");
+    qint64 sourcePeak = 0;
+    const auto source = repository.loadPreviewSource(record.id, [&](qint64 bytes) {
+        sourcePeak = std::max(sourcePeak, bytes);
+        return true;
+    });
+    require(source && samePixels(source->image, record.image) && sourcePeak < fullPeak &&
+                sourcePeak >= 2 * record.image.sizeInBytes(),
+            "source-only admission preserves pixels without budgeting discarded annotations");
+    int calls = 0;
+    require(!repository.loadPreviewSource(record.id,
+                                          [&](qint64) {
+                                              ++calls;
+                                              return false;
+                                          }) &&
+                calls == 1,
+            "source-only admission rejects before image payload decoding");
+    bool cancelled = false;
+    calls = 0;
+    require(!repository.loadPreviewSource(
+                record.id,
+                [&](qint64) {
+                    ++calls;
+                    cancelled = true;
+                    return true;
+                },
+                [&] { return cancelled; }) &&
+                calls == 1,
+            "source-only cancellation stops between admission and payload reads");
+    require(!repository.loadPreviewSource(record.id, {}, [] { return true; }),
+            "source-only cancellation can reject before acquiring a payload lease");
+
+    auto text = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), {});
+    text.sourceKind = storage::PinnedWindowSourceKind::ClipboardText;
+    text.initialWindowSize = QSize(64, 32);
+    text.originalHtml = QStringLiteral("<b>source-only text</b>");
+    text.originalText = QStringLiteral("source-only text");
+    text.firstCreationTextDpi = 2.75;
+    text.canvasSession = record.canvasSession;
+    require(repository.upsert(text).success && repository.flush().success,
+            "persist source-only text fixture");
+    const auto original = repository.loadPreviewSource(text.id, [](qint64) { return true; });
+    require(original && original->image.isNull() && original->originalHtml == text.originalHtml &&
+                original->originalText == text.originalText &&
+                original->firstCreationTextDpi == text.firstCreationTextDpi,
+            "source-only text preserves original HTML/plain text and creation DPI");
+}
+
 void preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt() {
     QTemporaryDir directory;
     require(directory.isValid(), "temporary storage directory is unavailable");
@@ -2571,6 +2636,12 @@ void closeRestoreAndRetentionRevealHiddenSiblings() {
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--source-only"))) {
+        sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads();
+        previewsReadOnlySourcePayloadAndKeepStableRevision();
+        legacyAnimatedFileSourcesAndPlaybackDefaultsRecover();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--animation-only"))) {
         animatedSourcesRoundTripWithoutRewritingFrames();
         animationAdmissionIncludesPreparedDisplayStorage();
@@ -2636,6 +2707,7 @@ int main(int argc, char* argv[]) {
     missingOptionalPayloadDoesNotHideRestorableImage();
     preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt();
     allocationAdmissionPrecedesSourceDecode();
+    sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads();
     metadataOnlyUpdatesDoNotRewriteCommittedPayloads();
     changedPayloadsRecommitAndStayLazy();
     removedRecordsPruneTheirPayloads();
