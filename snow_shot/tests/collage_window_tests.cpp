@@ -33,6 +33,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFileSystemModel>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QMimeData>
@@ -1385,6 +1386,71 @@ void droppedFilesUseCollageImporter() {
     window.shutdown();
 }
 
+void localizedFileDialogsListAllSupportedImages() {
+    resetSettings();
+    QTemporaryDir directory;
+    require(directory.isValid(), "localized file-dialog fixture directory");
+    const QString previousDirectory = QDir::currentPath();
+    require(QDir::setCurrent(directory.path()), "scope file-dialog scanning to the fixtures");
+    const auto restoreDirectory =
+        qScopeGuard([&] { static_cast<void>(QDir::setCurrent(previousDirectory)); });
+    QStringList patterns;
+    QStringList expectedFiles;
+    for (const auto& extension : ScreenshotClipboardContentReader::supportedImageFileExtensions()) {
+        patterns.append(QStringLiteral("*.") + extension);
+        expectedFiles.append(QStringLiteral("image.") + extension);
+    }
+    expectedFiles.append({QStringLiteral("uppercase.JPEG"), QStringLiteral("uppercase.AVIF"),
+                          QStringLiteral("uppercase.BMP")});
+    for (const auto& name : expectedFiles + QStringList{QStringLiteral("unsupported.txt")}) {
+        QFile file(directory.filePath(name));
+        require(file.open(QIODevice::WriteOnly) && file.write("filter fixture") > 0,
+                "write file-dialog listing fixtures");
+    }
+    for (const auto* locale : {"en_US", "zh_CN", "zh_TW"}) {
+        QTranslator translator;
+        require(translator.load(
+                    QStringLiteral(":/i18n/snow_shot_%1.qm").arg(QString::fromLatin1(locale))),
+                "file-dialog tests need the requested translation catalog");
+        QApplication::installTranslator(&translator);
+        const auto removeTranslator =
+            qScopeGuard([&] { QApplication::removeTranslator(&translator); });
+        CollageWindow window;
+        window.present();
+        const quint64 target = window.document()->append(image(), QStringLiteral("existing"));
+        for (const bool replacement : {false, true}) {
+            if (replacement)
+                window.editor()->replaceImageRequested(target);
+            else
+                button(window, "collageAddImages")->click();
+            auto* dialog = window.editor()->window()->findChild<QFileDialog*>();
+            require(dialog && dialog->fileMode() == (replacement ? QFileDialog::ExistingFile
+                                                                 : QFileDialog::ExistingFiles),
+                    "add and replace open their corresponding image-selection dialogs");
+            dialog->setOption(QFileDialog::DontUseCustomDirectoryIcons);
+            dialog->setDirectory(directory.path());
+            auto* model = dialog->findChild<QFileSystemModel*>();
+            require(model && model->nameFilters() == patterns,
+                    "Qt must parse every supported image wildcard in every collage language");
+            const auto listedFiles = [&] {
+                QStringList names;
+                const auto root = model->index(directory.path());
+                for (int row = 0; row < model->rowCount(root); ++row)
+                    names.append(model->fileName(model->index(row, 0, root)));
+                names.sort();
+                return names;
+            };
+            auto sortedFiles = expectedFiles;
+            sortedFiles.sort();
+            waitUntil([&] { return listedFiles() == sortedFiles; },
+                      "add and replace list all supported extensions and hide unsupported files");
+            dialog->reject();
+            flushEvents();
+        }
+        window.shutdown();
+    }
+}
+
 void fileImportDuplicatesAndReplacement() {
     resetSettings();
     QTemporaryDir directory;
@@ -2216,6 +2282,13 @@ int main(int argc, char* argv[]) {
     timed("Theme initialization",
           [&] { styles::ThemeManager::instance().initialize(application); });
     const auto arguments = QApplication::arguments();
+    if (arguments.contains(QStringLiteral("--file-dialog-only"))) {
+        timed("Localized file-dialog listings", localizedFileDialogsListAllSupportedImages);
+        ScreenshotExportCoordinator::shared().shutdown();
+        storage.shutdown();
+        std::cout << "Collage file-dialog tests passed\n";
+        return 0;
+    }
     if (arguments.contains(QStringLiteral("--drag-drop-only"))) {
         timed("Dropped file imports", droppedFilesUseCollageImporter);
         waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
@@ -2330,6 +2403,7 @@ int main(int argc, char* argv[]) {
     timed("Clear and initial import failures", clearAndInitialImportFailures);
     timed("Clear pending import", clearingPendingImportDiscardsStaleCompletion);
     timed("File imports and replacement", fileImportDuplicatesAndReplacement);
+    timed("Localized file-dialog listings", localizedFileDialogsListAllSupportedImages);
     timed("Dropped file imports", droppedFilesUseCollageImporter);
     timed("Owned live pin imports", livePinnedImportsPreserveOrderAndFailures);
     timed("Live pin cancellation and memory", livePinnedImportsCancelAndRespectMemoryBudget);
