@@ -5475,6 +5475,16 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_link_libraries(snow-shot-export-dialog-workflow-tests PRIVATE "-framework AppKit")
     endif()
     snow_shot_import_offscreen_platform(snow-shot-export-dialog-workflow-tests)
+    foreach(_snow_save_preview_dpr IN ITEMS 1 1.25 1.5 2)
+        set(_snow_save_preview_detail_test
+            "snow-shot-export-preview-detail-${_snow_save_preview_dpr}-tests")
+        add_test(NAME ${_snow_save_preview_detail_test}
+            COMMAND snow-shot-export-dialog-workflow-tests --canvas -platform offscreen)
+        set_tests_properties(${_snow_save_preview_detail_test} PROPERTIES
+            LABELS unit TIMEOUT 30
+            ENVIRONMENT "QT_SCALE_FACTOR=${_snow_save_preview_dpr};${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
     add_test(NAME snow-shot-pdf-dialog-tests COMMAND snow-shot-export-dialog-workflow-tests --pdf)
     set_tests_properties(snow-shot-pdf-dialog-tests PROPERTIES
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"

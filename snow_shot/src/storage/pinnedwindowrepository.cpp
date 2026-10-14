@@ -349,9 +349,12 @@ QImage decodeImage(const QString& path, const QString& suffix = QStringLiteral("
         if (bytes.size() != encodedBytes || (cancelled && cancelled()))
             return {};
         const auto size = image_codec::inspectSize(bytes, format);
+        // Admission and first-frame previews share the repository's decoded RGBA limit.
+        // Check before multiplying so oversized dimensions cannot overflow byte estimates.
+        if (size.isEmpty() || qint64(size.width()) > kMaximumImageBytes / 4 / size.height())
+            return {};
         const qint64 pixels = static_cast<qint64>(size.width()) * size.height();
-        if (size.isEmpty() || pixels > 64000000 ||
-            (allocationCheck && !allocationCheck(2 * encodedBytes + 8 * pixels)) ||
+        if ((allocationCheck && !allocationCheck(2 * encodedBytes + 8 * pixels)) ||
             (cancelled && cancelled()))
             return {};
         auto image = firstFrameOnly ? image_codec::decodeFirstFrame(bytes, format)

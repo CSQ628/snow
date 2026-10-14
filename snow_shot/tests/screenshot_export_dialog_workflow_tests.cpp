@@ -968,6 +968,97 @@ void canvasInteraction() {
     require(canvas.pan() == pan + QPointF(25, 20), "canvas dragging did not pan");
 }
 
+void canvasNativeDetailPreservesTransparency() {
+    const QSize pixels(4096, 3072);
+    const auto solidImage = [](QSize size, QColor color) {
+        QImage image(size, QImage::Format_RGBA8888);
+        image.fill(color);
+        return image;
+    };
+    const auto renderer = [solidImage](QColor color) {
+        return [solidImage, color](QRect region, const ScreenshotExportCancellation&, QString*) {
+            QSize size = region.size();
+            size.scale(1024, 1024, Qt::KeepAspectRatio);
+            return solidImage(size, color);
+        };
+    };
+    for (int alpha : {0, 127, 255}) {
+        for (bool pdf : {false, true}) {
+            ScreenshotSavePreviewCanvas reference;
+            ScreenshotSavePreviewCanvas detailed;
+            const QColor sourceColor(197, 57, 31, alpha);
+            const QColor outputColor(23, 101, 217, alpha);
+            const auto source = solidImage(QSize(256, 192), sourceColor);
+            const auto output = solidImage(source.size(), outputColor);
+            reference.setSource(source, pixels);
+            reference.setOutput(output, pixels);
+            detailed.setSource(source, pixels, renderer(sourceColor));
+            detailed.setOutput(output, pixels, renderer(outputColor));
+            for (auto* canvas : {&reference, &detailed}) {
+                canvas->resize(600, 400);
+                if (pdf)
+                    canvas->setPdfLayout(
+                        screenshot_pdf::layout(pixels, ScreenshotPdfPageSize::PortraitA4));
+                canvas->show();
+                for (int iteration = 0; iteration < 4; ++iteration) {
+                    QWheelEvent wheel(QPointF(300, 200), canvas->mapToGlobal(QPoint(300, 200)), {},
+                                      QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                                      Qt::NoScrollPhase, false);
+                    QApplication::sendEvent(canvas, &wheel);
+                }
+                child<CanvasStatusReadout>(canvas, "savePreviewZoom")->dismiss();
+            }
+            processUntil([&] { return !detailed.outputDetailImage().isNull(); });
+            const auto verify = [&] {
+                for (double split : {0.0, 0.5, 1.0}) {
+                    reference.setSplitRatio(split);
+                    detailed.setSplitRatio(split);
+                    // Native windows may receive different pointer hover events.
+                    for (auto* canvas : {&reference, &detailed}) {
+                        QEvent leave(QEvent::Leave);
+                        QApplication::sendEvent(canvas, &leave);
+                    }
+                    const QImage expected = reference.grab().toImage();
+                    const QImage actual = detailed.grab().toImage();
+                    const QString message =
+                        QStringLiteral("native detail must composite alpha once over checkerboard "
+                                       "or PDF paper (alpha %1, PDF %2, split %3, DPR %4)")
+                            .arg(alpha)
+                            .arg(pdf)
+                            .arg(split)
+                            .arg(detailed.devicePixelRatioF());
+                    require(samePixels(expected, actual), qPrintable(message));
+                }
+            };
+            verify();
+            const QRect detailRegion = detailed.outputDetailRegion();
+            const auto detailGeneration = detailed.property("detailGeneration");
+            const QPointF pan = detailed.pan();
+            require(detailRegion != QRect(QPoint{}, pixels),
+                    "zoomed transparency fixture must retain a partial native tile");
+            for (auto* canvas : {&reference, &detailed}) {
+                canvas->setSplitRatio(0.5);
+                QMouseEvent down(QEvent::MouseButtonPress, QPointF(100, 100), QPointF(100, 100),
+                                 Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QMouseEvent move(QEvent::MouseMove, QPointF(125.5, 120.25), QPointF(125.5, 120.25),
+                                 Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                QMouseEvent up(QEvent::MouseButtonRelease, QPointF(125.5, 120.25),
+                               QPointF(125.5, 120.25), Qt::LeftButton, Qt::NoButton,
+                               Qt::NoModifier);
+                QApplication::sendEvent(canvas, &down);
+                QApplication::sendEvent(canvas, &move);
+                QApplication::sendEvent(canvas, &up);
+            }
+            verify();
+            require(detailed.pan() == pan + QPointF(25.5, 20.25) &&
+                        reference.pan() == detailed.pan() &&
+                        detailed.outputDetailRegion() == detailRegion &&
+                        detailed.property("detailGeneration") == detailGeneration,
+                    "fractional panning must preserve the cached tile until replacement arrives");
+        }
+    }
+}
+
 void canvasPdfComparison() {
     ScreenshotSavePreviewCanvas canvas;
     canvas.resize(600, 400);
@@ -3196,20 +3287,28 @@ void repeatedPreviewChangesKeepLatestRequest(QWidget& owner, const QTemporaryDir
     auto* content = modal->contentWidget();
     ExportObserver observer(content);
     WorkerGate gate;
-    gate.block(&owner);
-    processUntil(
-        [&] { return gate.started->load() == std::clamp(QThread::idealThreadCount(), 1, 2); });
+    const int workerCount = std::clamp(QThread::idealThreadCount(), 1, 2);
+    gate.block(&owner, workerCount);
+    processUntil([&] { return gate.started->load() == workerCount; });
     auto* width = child<AdInputNumber>(content, "saveWidthInput");
     for (int index = 0; index < 40; ++index) {
         width->setValue(80 + index);
-        flush(); // Each edit occurs in a separate event-loop turn, as with real input.
-        require(ScreenshotExportCoordinator::shared().pendingJobCount() == 3 &&
-                    child<QLabel>(content, "saveErrorLabel")->isHidden(),
+        require(ScreenshotExportCoordinator::shared().pendingJobCount() == workerCount,
+                "a superseded queued preview must retire before the next debounce expires");
+        // Wait for each committed edit to enter the queue before superseding it, so this
+        // exercises queued cancellation independently of rapid-edit debounce coalescing.
+        processUntil([&] {
+            return ScreenshotExportCoordinator::shared().pendingJobCount() == workerCount + 1;
+        });
+        require(ScreenshotExportCoordinator::shared().pendingJobCount() == workerCount + 1 &&
+                    child<QLabel>(content, "saveErrorLabel")->isHidden() && probe->passes == 1 &&
+                    observer.encodes == 0 && observer.publications == 0,
                 "only the latest preview may occupy a queued slot");
     }
     *gate.released = true;
     processUntil([&] { return observer.publications == 1; });
-    require(observer.encodes == 1 && probe->passes == 2 && width->value() == 119,
+    require(observer.encodes == 1 && probe->passes == 2 && width->value() == 119 &&
+                observer.displayed.width() == 119,
             "superseded preview jobs must not read or encode the source");
     child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
     child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("latest-preview"));
@@ -3258,6 +3357,7 @@ int main(int argc, char* argv[]) {
                 "test storage initialization failed");
         if (app.arguments().contains(QStringLiteral("--canvas"))) {
             canvasInteraction();
+            canvasNativeDetailPreservesTransparency();
             canvasZoomHint();
             canvasOriginalSizeBaseline();
             ScreenshotExportCoordinator::shared().shutdown();
@@ -3321,6 +3421,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--optimized-pipeline"))) {
+            canvasNativeDetailPreservesTransparency();
             boundedPreviewAndNativeRegions();
             debouncedPreviewEdits(owner);
             boundedCanvasNativeDetail(owner);
@@ -3387,6 +3488,7 @@ int main(int argc, char* argv[]) {
         rememberedManualFormat(owner, temp);
         encodingAndFullResolutionDisplay();
         canvasInteraction();
+        canvasNativeDetailPreservesTransparency();
         canvasPdfComparison();
         canvasZoomHint();
         canvasWheelZoom();

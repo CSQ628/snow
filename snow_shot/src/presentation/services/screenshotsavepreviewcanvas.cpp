@@ -203,18 +203,31 @@ void ScreenshotSavePreviewCanvas::setBusy(bool busy) {
 }
 void ScreenshotSavePreviewCanvas::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), QBrush(m_checkerboard));
+    const QBrush checkerboard(m_checkerboard);
+    const auto drawBacking = [&](QRectF area, QRectF paper = {}) {
+        painter.save();
+        // Preserve the same crisp checker pixels when restoring detail at any device scale.
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        painter.fillRect(area, checkerboard);
+        if (!paper.isEmpty())
+            painter.fillRect(area.intersected(paper), Qt::white);
+        painter.restore();
+    };
+    drawBacking(rect());
     if (m_sourcePixels.isEmpty() || m_original.isNull())
         return;
     const QRectF bounds = imageBounds();
-    const auto drawDetail = [&](const Detail& detail, QSize pixels) {
+    const auto drawDetail = [&](const Detail& detail, QSize pixels, QRectF paper = {}) {
         if (detail.image.isNull() || pixels.isEmpty())
             return;
-        painter.drawImage(QRectF(bounds.x() + detail.region.x() * bounds.width() / pixels.width(),
-                                 bounds.y() + detail.region.y() * bounds.height() / pixels.height(),
-                                 detail.region.width() * bounds.width() / pixels.width(),
-                                 detail.region.height() * bounds.height() / pixels.height()),
-                          detail.image);
+        const QRectF detailBounds(bounds.x() + detail.region.x() * bounds.width() / pixels.width(),
+                                  bounds.y() +
+                                      detail.region.y() * bounds.height() / pixels.height(),
+                                  detail.region.width() * bounds.width() / pixels.width(),
+                                  detail.region.height() * bounds.height() / pixels.height());
+        // Detail replaces the preview, so restore its backing before compositing alpha once.
+        drawBacking(detailBounds, paper);
+        painter.drawImage(detailBounds, detail.image);
     };
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     const double split = m_split * width();
@@ -225,18 +238,19 @@ void ScreenshotSavePreviewCanvas::paintEvent(QPaintEvent*) {
     painter.restore();
     painter.save();
     painter.setClipRect(QRectF(split, 0, width() - split, height()));
+    QRectF pageBounds;
     if (!m_pdfLayout.pagePoints.isEmpty() && !m_pdfLayout.imagePoints.isEmpty()) {
         // Map paper into the shared image bounds; paper never owns the comparison viewport.
         const double scaleX = bounds.width() / m_pdfLayout.imagePoints.width();
         const double scaleY = bounds.height() / m_pdfLayout.imagePoints.height();
-        const QRectF pageBounds(bounds.topLeft() - QPointF(m_pdfLayout.imagePoints.x() * scaleX,
-                                                           m_pdfLayout.imagePoints.y() * scaleY),
-                                QSizeF(m_pdfLayout.pagePoints.width() * scaleX,
-                                       m_pdfLayout.pagePoints.height() * scaleY));
+        pageBounds = QRectF(bounds.topLeft() - QPointF(m_pdfLayout.imagePoints.x() * scaleX,
+                                                       m_pdfLayout.imagePoints.y() * scaleY),
+                            QSizeF(m_pdfLayout.pagePoints.width() * scaleX,
+                                   m_pdfLayout.pagePoints.height() * scaleY));
         painter.fillRect(pageBounds, Qt::white);
     }
     painter.drawImage(bounds, m_output.isNull() ? m_original : m_output);
-    drawDetail(m_outputDetail, m_outputPixels);
+    drawDetail(m_outputDetail, m_outputPixels, pageBounds);
     painter.restore();
 
     const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
