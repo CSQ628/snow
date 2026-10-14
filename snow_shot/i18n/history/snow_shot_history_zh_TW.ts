@@ -492,6 +492,289 @@
         </message>
     </context>
     <context>
+        <name>ImageSplitDocument</name>
+        <message>
+            <source>Choose a split direction.</source>
+            <translation>請選擇拆分方向。</translation>
+        </message>
+        <message>
+            <source>Choose a split type.</source>
+            <translation>請選擇拆分類型。</translation>
+        </message>
+        <message>
+            <source>Choose pixels or percentage.</source>
+            <translation>請選擇像素或百分比。</translation>
+        </message>
+        <message>
+            <source>Each image must be at least one pixel wide or high.</source>
+            <translation>每張圖像的寬度和高度必須至少為 1 像素。</translation>
+        </message>
+        <message>
+            <source>Enter a percentage from 5% to 100%.</source>
+            <translation>請輸入 5% 到 100% 的百分比。</translation>
+        </message>
+        <message>
+            <source>Enter a positive whole number.</source>
+            <translation>請輸入正整數。</translation>
+        </message>
+        <message>
+            <source>Enter at least 16 pixels.</source>
+            <translation>請輸入至少 16 像素。</translation>
+        </message>
+        <message>
+            <source>The image is unavailable.</source>
+            <translation>圖像無法使用。</translation>
+        </message>
+        <message>
+            <source>The split lines require too much memory.</source>
+            <translation>拆分線所需的記憶體過多。</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitEditorWidget</name>
+        <message>
+            <source> px</source>
+            <translation> 像素</translation>
+        </message>
+        <message>
+            <source>%1 × %2 px</source>
+            <translation>%1 × %2 像素</translation>
+        </message>
+        <message>
+            <source>Columns</source>
+            <translation>欄數</translation>
+        </message>
+        <message>
+            <source>Drop one image to replace the current image</source>
+            <translation>拖入一張圖像以取代目前圖像</translation>
+        </message>
+        <message>
+            <source>Enter a positive integer.</source>
+            <translation>請輸入正整數。</translation>
+        </message>
+        <message>
+            <source>Enter an integer of at least 16 pixels.</source>
+            <translation>請輸入至少為 16 像素的整數。</translation>
+        </message>
+        <message>
+            <source>Equal Split</source>
+            <translation>均等拆分</translation>
+        </message>
+        <message>
+            <source>Fit to Canvas</source>
+            <translation>符合畫布</translation>
+        </message>
+        <message>
+            <source>Grid</source>
+            <translation>網格</translation>
+        </message>
+        <message>
+            <source>Height per Image</source>
+            <translation>每張圖像的高度</translation>
+        </message>
+        <message>
+            <source>Horizontal</source>
+            <translation>水平</translation>
+        </message>
+        <message>
+            <source>Number of Images</source>
+            <translation>圖像數量</translation>
+        </message>
+        <message>
+            <source>Percentage</source>
+            <translation>百分比</translation>
+        </message>
+        <message>
+            <source>Pixels</source>
+            <translation>像素</translation>
+        </message>
+        <message>
+            <source>Precise Split</source>
+            <translation>精確拆分</translation>
+        </message>
+        <message>
+            <source>Redo</source>
+            <translation>重做</translation>
+        </message>
+        <message>
+            <source>Reload</source>
+            <translation>重新載入</translation>
+        </message>
+        <message>
+            <source>Rows</source>
+            <translation>列數</translation>
+        </message>
+        <message>
+            <source>Split direction</source>
+            <translation>拆分方向</translation>
+        </message>
+        <message>
+            <source>Split lines adjusted manually</source>
+            <translation>拆分線已手動調整</translation>
+        </message>
+        <message>
+            <source>Split size unit</source>
+            <translation>拆分尺寸單位</translation>
+        </message>
+        <message>
+            <source>Split type</source>
+            <translation>拆分類型</translation>
+        </message>
+        <message>
+            <source>Total: %1 images</source>
+            <translation>共 %1 張圖像</translation>
+        </message>
+        <message>
+            <source>Undo</source>
+            <translation>復原</translation>
+        </message>
+        <message>
+            <source>Vertical</source>
+            <translation>垂直</translation>
+        </message>
+        <message>
+            <source>Width per Image</source>
+            <translation>每張圖像的寬度</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitExport</name>
+        <message>
+            <source>Export was canceled.</source>
+            <translation>匯出已取消。</translation>
+        </message>
+        <message>
+            <source>Image %1 could not be saved: %2</source>
+            <translation>無法儲存第 %1 張圖像：%2</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for export.</source>
+            <translation>無法準備要匯出的圖像。</translation>
+        </message>
+        <message>
+            <source>The image or split configuration is invalid.</source>
+            <translation>圖像或拆分設定無效。</translation>
+        </message>
+        <message>
+            <source>The output folder could not be created.</source>
+            <translation>無法建立輸出資料夾。</translation>
+        </message>
+        <message>
+            <source>There is not enough memory to export the image.</source>
+            <translation>記憶體不足，無法匯出圖像。</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitPreviewCanvas</name>
+        <message>
+            <source>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom.</source>
+            <translation>點擊尺規新增拆分線，拖曳拆分線可移動位置。選取拆分線後按 Delete 刪除。按住滑鼠中鍵拖曳可平移，捲動滾輪可縮放。</translation>
+        </message>
+        <message>
+            <source>Image split preview</source>
+            <translation>圖像拆分預覽</translation>
+        </message>
+        <message>
+            <source>X: %1 px</source>
+            <translation>X：%1 像素</translation>
+        </message>
+        <message>
+            <source>Y: %1 px</source>
+            <translation>Y：%1 像素</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitWindow</name>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Discard</source>
+            <translation>捨棄</translation>
+        </message>
+        <message>
+            <source>Discard these image splits?</source>
+            <translation>捨棄目前的圖像拆分？</translation>
+        </message>
+        <message>
+            <source>Drop one image file at a time.</source>
+            <translation>請一次拖入一個圖像檔案。</translation>
+        </message>
+        <message>
+            <source>Export could not be started. Try again.</source>
+            <translation>無法開始匯出，請再試一次。</translation>
+        </message>
+        <message>
+            <source>Image loading could not be started. Try again.</source>
+            <translation>無法開始載入圖像，請再試一次。</translation>
+        </message>
+        <message>
+            <source>Image processing failed. Try again.</source>
+            <translation>圖像處理失敗，請再試一次。</translation>
+        </message>
+        <message>
+            <source>Images</source>
+            <translation>圖像</translation>
+        </message>
+        <message>
+            <source>Loading image…</source>
+            <translation>正在載入圖像…</translation>
+        </message>
+        <message>
+            <source>Replace Image</source>
+            <translation>取代圖像</translation>
+        </message>
+        <message>
+            <source>Replacing the image will discard the current edits</source>
+            <translation>取代圖像將捨棄目前的編輯</translation>
+        </message>
+        <message>
+            <source>Save All</source>
+            <translation>全部儲存</translation>
+        </message>
+        <message>
+            <source>Saved %1 images to %2</source>
+            <translation>已將 %1 張圖像儲存至 %2</translation>
+        </message>
+        <message>
+            <source>Saved %1 of %2 images to %3. %4</source>
+            <translation>已將 %2 張圖像中的 %1 張儲存至 %3。%4</translation>
+        </message>
+        <message>
+            <source>Saving images: %1 of %2</source>
+            <translation>正在儲存圖像：%1 / %2</translation>
+        </message>
+        <message>
+            <source>Select Destination Folder</source>
+            <translation>選擇目的資料夾</translation>
+        </message>
+        <message>
+            <source>Select Image</source>
+            <translation>選擇圖像</translation>
+        </message>
+        <message>
+            <source>Split Image</source>
+            <translation>拆分圖像</translation>
+        </message>
+        <message>
+            <source>The image and current split edits will be discarded.</source>
+            <translation>圖像與目前的拆分編輯將被捨棄。</translation>
+        </message>
+        <message>
+            <source>The image could not be read or is no longer available.</source>
+            <translation>無法讀取圖像，或圖像已無法使用。</translation>
+        </message>
+        <message>
+            <source>The image is too large or there is not enough memory to load it.</source>
+            <translation>圖像過大，或記憶體不足，無法載入。</translation>
+        </message>
+        <message>
+            <source>The images could not be exported. Try again.</source>
+            <translation>無法匯出圖像，請再試一次。</translation>
+        </message>
+    </context>
+    <context>
         <name>PinnedWindowManagementPageWidget</name>
         <message>
             <source>%1-%2 of %3</source>

@@ -173,6 +173,8 @@ QWidget* ContentCardWidget::createPage(
                 &ContentCardWidget::screenshotHistoryPinRequested);
         connect(historyPage, &ScreenshotHistoryPageWidget::collageRequested, this,
                 &ContentCardWidget::screenshotHistoryCollageRequested);
+        connect(historyPage, &ScreenshotHistoryPageWidget::splitRequested, this,
+                &ContentCardWidget::screenshotHistorySplitRequested);
         page = historyPage;
     } else if (definition.kind ==
                snow_shot::presentation::settings::SettingsPageKind::PinnedWindowManagement) {

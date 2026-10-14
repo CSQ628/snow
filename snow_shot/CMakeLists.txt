@@ -1245,6 +1245,20 @@ add_library(snow_shot_collage STATIC
 target_include_directories(snow_shot_collage PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
 target_link_libraries(snow_shot_collage PUBLIC snow_shot_collage_core snow_shot_settings)
 
+add_library(snow_shot_image_split_core STATIC
+    include/snow_shot/presentation/imagesplitdocument.h
+    src/presentation/imagesplit/imagesplitdocument.cpp)
+target_include_directories(snow_shot_image_split_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(snow_shot_image_split_core PUBLIC Qt6::Widgets)
+add_library(snow_shot_image_split STATIC
+    include/snow_shot/presentation/imagesplitwindow.h
+    include/snow_shot/presentation/components/imagespliteditorwidget.h
+    src/presentation/imagesplit/imagespliteditorwidget.cpp
+    src/presentation/imagesplit/imagesplitwindow.cpp
+    src/presentation/imagesplit/imagesplitexport.cpp)
+target_link_libraries(snow_shot_image_split PUBLIC snow_shot_image_split_core
+    snow_shot_collage_core snow_shot_settings)
+
 # Tests reuse the same export implementations as the application; the collage
 # library itself supplies composition and never publishes history or auto-saves.
 set(SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES
@@ -1385,6 +1399,57 @@ if(SNOW_APPS_BUILD_BENCHMARKS)
         target_link_libraries(snow-shot-collage-performance-benchmark PRIVATE psapi)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-collage-performance-benchmark)
+endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-image-split-document-tests tests/imagesplit_document_tests.cpp)
+    snow_shot_offscreen_qpa_environment(_SNOW_SHOT_IMAGE_SPLIT_QPA_ENVIRONMENT)
+    if(WIN32)
+        list(APPEND _SNOW_SHOT_IMAGE_SPLIT_QPA_ENVIRONMENT "QT_QPA_FONTDIR=$ENV{SystemRoot}/Fonts")
+    endif()
+    target_link_libraries(snow-shot-image-split-document-tests PRIVATE snow_shot_image_split_core)
+    add_test(NAME snow-shot-image-split-document-tests COMMAND snow-shot-image-split-document-tests)
+    set_tests_properties(snow-shot-image-split-document-tests PROPERTIES LABELS unit
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    foreach(_image_split_test IN ITEMS editor window export)
+        add_executable(snow-shot-image-split-${_image_split_test}-tests
+            tests/imagesplit_${_image_split_test}_tests.cpp ${SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES})
+        target_include_directories(snow-shot-image-split-${_image_split_test}-tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/image"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/services")
+        target_link_libraries(snow-shot-image-split-${_image_split_test}-tests PRIVATE
+            snow_shot_image_split snow_shot_diagnostics)
+        snow_shot_import_offscreen_platform(snow-shot-image-split-${_image_split_test}-tests)
+        snow_shot_add_translations(snow-shot-image-split-${_image_split_test}-tests)
+        add_test(NAME snow-shot-image-split-${_image_split_test}-tests
+            COMMAND snow-shot-image-split-${_image_split_test}-tests -platform offscreen)
+        set_tests_properties(snow-shot-image-split-${_image_split_test}-tests PROPERTIES LABELS unit
+            ENVIRONMENT "${_SNOW_SHOT_IMAGE_SPLIT_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+    add_test(NAME snow-shot-image-split-icon-tests
+        COMMAND snow-shot-generated-icon-pack-tests --image-splitting-only)
+    add_test(NAME snow-shot-image-split-pinned-source-tests
+        COMMAND snow-shot-pinned-window-tests --splitting-snapshot-only -platform offscreen)
+    set_tests_properties(snow-shot-image-split-icon-tests snow-shot-image-split-pinned-source-tests
+        PROPERTIES LABELS unit ENVIRONMENT "${_SNOW_SHOT_IMAGE_SPLIT_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(WIN32)
+        set_tests_properties(snow-shot-image-split-icon-tests PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QWindowsIntegrationPlugin>")
+    endif()
+endif()
+if(SNOW_APPS_BUILD_BENCHMARKS)
+    add_executable(snow-shot-image-split-performance-benchmark
+        tests/imagesplit_performance_benchmark.cpp ${SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES})
+    target_link_libraries(snow-shot-image-split-performance-benchmark PRIVATE
+        snow_shot_image_split snow_shot_diagnostics)
+    target_include_directories(snow-shot-image-split-performance-benchmark PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
+    if(WIN32)
+        target_link_libraries(snow-shot-image-split-performance-benchmark PRIVATE psapi)
+    endif()
+    snow_shot_import_offscreen_platform(snow-shot-image-split-performance-benchmark)
 endif()
 
 set(PROJECT_HEADERS
@@ -1796,6 +1861,7 @@ if(WIN32)
 endif()
 target_link_libraries(snow_shot PRIVATE
     snow_shot_collage
+    snow_shot_image_split
     snow_shot_animation_playback
     snow_shot_memory_optimization
     snow_shot_crash_bridge

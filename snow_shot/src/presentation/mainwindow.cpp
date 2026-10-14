@@ -286,6 +286,8 @@ void MainWindow::buildUi() {
             &MainWindow::screenshotHistoryPinRequested);
     connect(m_contentCard, &ContentCardWidget::screenshotHistoryCollageRequested, this,
             &MainWindow::screenshotHistoryCollageRequested);
+    connect(m_contentCard, &ContentCardWidget::screenshotHistorySplitRequested, this,
+            &MainWindow::screenshotHistorySplitRequested);
     connect(m_contentCard, &ContentCardWidget::pinnedWindowCollageRequested, this,
             &MainWindow::pinnedWindowCollageRequested);
     m_contentCard->setCurrentRoute(m_sidebar->currentRoute());

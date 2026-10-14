@@ -1548,6 +1548,11 @@ bool ScreenshotController::Impl::ensureExportFeature() {
             const QVector<ScreenshotPinnedImageSnapshot>& snapshots) {
             if (controller)
                 emit controller->imageStitchingRequested(snapshots);
+        },
+        [controller = QPointer<ScreenshotController>(&owner)](
+            const ScreenshotPinnedImageSnapshot& snapshot) {
+            if (controller)
+                emit controller->imageSplittingRequested(snapshot);
         });
     m_exportService = std::move(exportService);
     exportUiServices->setRestoreFailureHandler([this]() {

@@ -492,6 +492,289 @@
         </message>
     </context>
     <context>
+        <name>ImageSplitDocument</name>
+        <message>
+            <source>Choose a split direction.</source>
+            <translation>请选择拆分方向。</translation>
+        </message>
+        <message>
+            <source>Choose a split type.</source>
+            <translation>请选择拆分类型。</translation>
+        </message>
+        <message>
+            <source>Choose pixels or percentage.</source>
+            <translation>请选择像素或百分比。</translation>
+        </message>
+        <message>
+            <source>Each image must be at least one pixel wide or high.</source>
+            <translation>每张图像的宽度和高度必须至少为 1 像素。</translation>
+        </message>
+        <message>
+            <source>Enter a percentage from 5% to 100%.</source>
+            <translation>请输入 5% 到 100% 的百分比。</translation>
+        </message>
+        <message>
+            <source>Enter a positive whole number.</source>
+            <translation>请输入正整数。</translation>
+        </message>
+        <message>
+            <source>Enter at least 16 pixels.</source>
+            <translation>请输入至少 16 像素。</translation>
+        </message>
+        <message>
+            <source>The image is unavailable.</source>
+            <translation>图像不可用。</translation>
+        </message>
+        <message>
+            <source>The split lines require too much memory.</source>
+            <translation>拆分线所需的内存过多。</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitEditorWidget</name>
+        <message>
+            <source> px</source>
+            <translation> 像素</translation>
+        </message>
+        <message>
+            <source>%1 × %2 px</source>
+            <translation>%1 × %2 像素</translation>
+        </message>
+        <message>
+            <source>Columns</source>
+            <translation>列数</translation>
+        </message>
+        <message>
+            <source>Drop one image to replace the current image</source>
+            <translation>拖入一张图像以替换当前图像</translation>
+        </message>
+        <message>
+            <source>Enter a positive integer.</source>
+            <translation>请输入正整数。</translation>
+        </message>
+        <message>
+            <source>Enter an integer of at least 16 pixels.</source>
+            <translation>请输入至少为 16 像素的整数。</translation>
+        </message>
+        <message>
+            <source>Equal Split</source>
+            <translation>均等拆分</translation>
+        </message>
+        <message>
+            <source>Fit to Canvas</source>
+            <translation>适应画布</translation>
+        </message>
+        <message>
+            <source>Grid</source>
+            <translation>网格</translation>
+        </message>
+        <message>
+            <source>Height per Image</source>
+            <translation>每张图像的高度</translation>
+        </message>
+        <message>
+            <source>Horizontal</source>
+            <translation>水平</translation>
+        </message>
+        <message>
+            <source>Number of Images</source>
+            <translation>图像数量</translation>
+        </message>
+        <message>
+            <source>Percentage</source>
+            <translation>百分比</translation>
+        </message>
+        <message>
+            <source>Pixels</source>
+            <translation>像素</translation>
+        </message>
+        <message>
+            <source>Precise Split</source>
+            <translation>精确拆分</translation>
+        </message>
+        <message>
+            <source>Redo</source>
+            <translation>重做</translation>
+        </message>
+        <message>
+            <source>Reload</source>
+            <translation>重新加载</translation>
+        </message>
+        <message>
+            <source>Rows</source>
+            <translation>行数</translation>
+        </message>
+        <message>
+            <source>Split direction</source>
+            <translation>拆分方向</translation>
+        </message>
+        <message>
+            <source>Split lines adjusted manually</source>
+            <translation>拆分线已手动调整</translation>
+        </message>
+        <message>
+            <source>Split size unit</source>
+            <translation>拆分尺寸单位</translation>
+        </message>
+        <message>
+            <source>Split type</source>
+            <translation>拆分类型</translation>
+        </message>
+        <message>
+            <source>Total: %1 images</source>
+            <translation>共 %1 张图像</translation>
+        </message>
+        <message>
+            <source>Undo</source>
+            <translation>撤销</translation>
+        </message>
+        <message>
+            <source>Vertical</source>
+            <translation>垂直</translation>
+        </message>
+        <message>
+            <source>Width per Image</source>
+            <translation>每张图像的宽度</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitExport</name>
+        <message>
+            <source>Export was canceled.</source>
+            <translation>导出已取消。</translation>
+        </message>
+        <message>
+            <source>Image %1 could not be saved: %2</source>
+            <translation>无法保存第 %1 张图像：%2</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for export.</source>
+            <translation>无法准备要导出的图像。</translation>
+        </message>
+        <message>
+            <source>The image or split configuration is invalid.</source>
+            <translation>图像或拆分配置无效。</translation>
+        </message>
+        <message>
+            <source>The output folder could not be created.</source>
+            <translation>无法创建输出文件夹。</translation>
+        </message>
+        <message>
+            <source>There is not enough memory to export the image.</source>
+            <translation>内存不足，无法导出图像。</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitPreviewCanvas</name>
+        <message>
+            <source>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom.</source>
+            <translation>点击标尺添加拆分线，拖动拆分线可移动位置。选中拆分线后按 Delete 删除。按住鼠标中键拖动可平移，滚动滚轮可缩放。</translation>
+        </message>
+        <message>
+            <source>Image split preview</source>
+            <translation>图像拆分预览</translation>
+        </message>
+        <message>
+            <source>X: %1 px</source>
+            <translation>X：%1 像素</translation>
+        </message>
+        <message>
+            <source>Y: %1 px</source>
+            <translation>Y：%1 像素</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitWindow</name>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Discard</source>
+            <translation>放弃</translation>
+        </message>
+        <message>
+            <source>Discard these image splits?</source>
+            <translation>放弃当前图像拆分？</translation>
+        </message>
+        <message>
+            <source>Drop one image file at a time.</source>
+            <translation>请一次拖入一个图像文件。</translation>
+        </message>
+        <message>
+            <source>Export could not be started. Try again.</source>
+            <translation>无法开始导出，请重试。</translation>
+        </message>
+        <message>
+            <source>Image loading could not be started. Try again.</source>
+            <translation>无法开始加载图像，请重试。</translation>
+        </message>
+        <message>
+            <source>Image processing failed. Try again.</source>
+            <translation>图像处理失败，请重试。</translation>
+        </message>
+        <message>
+            <source>Images</source>
+            <translation>图像</translation>
+        </message>
+        <message>
+            <source>Loading image…</source>
+            <translation>正在加载图像…</translation>
+        </message>
+        <message>
+            <source>Replace Image</source>
+            <translation>替换图像</translation>
+        </message>
+        <message>
+            <source>Replacing the image will discard the current edits</source>
+            <translation>替换图像将丢弃当前编辑</translation>
+        </message>
+        <message>
+            <source>Save All</source>
+            <translation>全部保存</translation>
+        </message>
+        <message>
+            <source>Saved %1 images to %2</source>
+            <translation>已将 %1 张图像保存到 %2</translation>
+        </message>
+        <message>
+            <source>Saved %1 of %2 images to %3. %4</source>
+            <translation>已将 %2 张图像中的 %1 张保存到 %3。%4</translation>
+        </message>
+        <message>
+            <source>Saving images: %1 of %2</source>
+            <translation>正在保存图像：%1 / %2</translation>
+        </message>
+        <message>
+            <source>Select Destination Folder</source>
+            <translation>选择目标文件夹</translation>
+        </message>
+        <message>
+            <source>Select Image</source>
+            <translation>选择图像</translation>
+        </message>
+        <message>
+            <source>Split Image</source>
+            <translation>拆分图像</translation>
+        </message>
+        <message>
+            <source>The image and current split edits will be discarded.</source>
+            <translation>图像和当前拆分编辑将被丢弃。</translation>
+        </message>
+        <message>
+            <source>The image could not be read or is no longer available.</source>
+            <translation>无法读取图像，或图像已不可用。</translation>
+        </message>
+        <message>
+            <source>The image is too large or there is not enough memory to load it.</source>
+            <translation>图像过大，或内存不足，无法加载。</translation>
+        </message>
+        <message>
+            <source>The images could not be exported. Try again.</source>
+            <translation>无法导出图像，请重试。</translation>
+        </message>
+    </context>
+    <context>
         <name>PinnedWindowManagementPageWidget</name>
         <message>
             <source>%1-%2 of %3</source>
