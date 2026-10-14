@@ -598,6 +598,17 @@ void imageConversionUsesVisionAndRejectsIncompleteStreams() {
                                         ? QStringLiteral("table-cell pipes")
                                         : QStringLiteral("Escape literal &, <, and >")),
                 "conversion prompt specifies uncertainty, visible links, and format escaping");
+        require(prompt.contains(QStringLiteral("inert code content")) &&
+                    prompt.contains(QStringLiteral("do not promote a data row to a header")),
+                "conversion preserves pictured code as data and never fabricates table headers");
+        if (format == SnowShotImageConversionFormat::Markdown) {
+            require(
+                prompt.contains(QStringLiteral("tables without headers")) &&
+                    prompt.contains(QStringLiteral("Escape literal HTML outside code blocks")) &&
+                    prompt.contains(QStringLiteral("Preserve code verbatim")),
+                "Markdown uses HTML for headerless tables and escapes prose without "
+                "corrupting fenced code");
+        }
         const auto content = messages.at(1).toObject().value(QStringLiteral("content")).toArray();
         const QString url = content.at(1)
                                 .toObject()
@@ -682,6 +693,11 @@ void translationPromptPreservesEditorContract() {
          QStringLiteral("Bonjour")},
         {QStringLiteral("model-a"), QStringLiteral("auto"), QStringLiteral("en"),
          QStringLiteral("Hello")},
+        {QStringLiteral("model-a"), QStringLiteral("en"), QStringLiteral("ja"),
+         QStringLiteral("[Open file](https://example.com/Hello?q=world)\n"
+                        "<p id=\"Hello\" data-label=\"World\">Open file</p>\n"
+                        "Use `open_file` with %1 and ${path}.\n"
+                        "```python\nprint('Hello')\n```\n")},
     };
     for (const auto& input : cases) {
         QTcpServer server;
@@ -729,6 +745,11 @@ void translationPromptPreservesEditorContract() {
                     prompt.contains(QStringLiteral("Return only the translated text")) &&
                     prompt.contains(QStringLiteral("return the original text unchanged")),
                 "editor output policy must preserve structure and literals without commentary");
+        require(
+            prompt.contains(QStringLiteral("translate prose and link labels")) &&
+                prompt.contains(QStringLiteral("link destinations, and HTML attributes")) &&
+                prompt.contains(QStringLiteral("Preserve code blocks and inline code verbatim")),
+            "translation distinguishes translatable prose from markup and executable code");
         require(
             messages.at(1).toObject().value(QStringLiteral("content")).toString() == input.text,
             "OCR text, embedded instructions, whitespace, and placeholders must be sent verbatim");
@@ -1874,6 +1895,20 @@ void visionExtractionPreservesTypedOutputAndImageDetails() {
                     prompt.contains(isTable ? QStringLiteral("rowspan and colspan")
                                             : QStringLiteral("Do not solve")),
                 "extraction prompts preserve their domain and treat image instructions as data");
+        if (isTable) {
+            require(prompt.contains(QStringLiteral("do not promote a data row to a header")) &&
+                        prompt.contains(QStringLiteral("Leave empty cells empty")) &&
+                        prompt.contains(QStringLiteral("calculate missing values or totals")),
+                    "table extraction preserves headerless data and blank cells without computing "
+                    "new content");
+        } else {
+            require(
+                prompt.contains(QStringLiteral("\\text{[illegible]}")) &&
+                    prompt.contains(QStringLiteral("do not guess or repair the mathematics")) &&
+                    prompt.contains(QStringLiteral("Balance braces and close every environment")),
+                "LaTeX extraction represents uncertainty without guessing and requires "
+                "complete expression syntax");
+        }
         const auto content = messages.last().toObject().value(QStringLiteral("content")).toArray();
         const QString url = content.last()
                                 .toObject()
@@ -2377,6 +2412,7 @@ void visionLatexResponsesMustContainCompleteSource() {
     };
     const Scenario scenarios[] = {
         {QStringLiteral("\\frac{x_1}{y^2}"), true},
+        {QStringLiteral("\\frac{x}{\\text{[illegible]}} + 1"), true},
         {QStringLiteral("\\text{literal \\{ braces \\} and <table>markup</table>}"), true},
         {QStringLiteral("\\unsupportedcommand[optional]{x}"), true},
         {QStringLiteral("\\begin{aligned}a&=b\\\\c&=d\\end{aligned}"), true},
