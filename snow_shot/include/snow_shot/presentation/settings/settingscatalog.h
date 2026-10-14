@@ -166,6 +166,7 @@ enum class SettingsSwitchBinding {
     SeparateRecordingAudioTracks,
     LoopAnimatedImages,
     ScreenRecordingCaptureToolbar,
+    ScreenRecordingAutoHideToolbar,
     ScreenRecordingAutoExitAfterRecordingEnds,
     ScreenRecordingNotifyAfterExportCompletes,
     ScreenRecordingDeleteFilesOnRecordingClose,
@@ -264,6 +265,7 @@ struct SettingsColorPaletteDefinition {
 
 enum class SettingsRadioBinding {
     TrayIcon,
+    TrayDarkIcon,
 };
 
 struct SettingsRadioOptionDefinition {
@@ -279,6 +281,7 @@ struct SettingsRadioDefinition {
 
 enum class SettingsFilePathBinding {
     TrayCustomIcon,
+    TrayDarkCustomIcon,
     SkinPath,
     ToolbarSkinPath,
     TrayMenuSkinPath,

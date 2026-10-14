@@ -1361,6 +1361,10 @@
             <translation>Auto start at boot</translation>
         </message>
         <message>
+            <source>Auto-hide toolbar</source>
+            <translation>Auto-hide toolbar</translation>
+        </message>
+        <message>
             <source>Auto-recognize QR Code</source>
             <translation>Auto-recognize QR Code</translation>
         </message>
@@ -1603,6 +1607,10 @@
         <message>
             <source>Choose the action for middle-clicking while moving or annotating in a screenshot</source>
             <translation>Choose the action for middle-clicking while moving or annotating in a screenshot</translation>
+        </message>
+        <message>
+            <source>Choose the bundled icon used in dark theme, or reuse the regular icon settings</source>
+            <translation>Choose the bundled icon used in dark theme, or reuse the regular icon settings</translation>
         </message>
         <message>
             <source>Choose the bundled icon used in the system tray</source>
@@ -2021,6 +2029,14 @@
             <translation>Dark</translation>
         </message>
         <message>
+            <source>Dark theme custom icon</source>
+            <translation>Dark theme custom icon</translation>
+        </message>
+        <message>
+            <source>Dark theme icon</source>
+            <translation>Dark theme icon</translation>
+        </message>
+        <message>
             <source>Data storage</source>
             <translation>Data storage</translation>
         </message>
@@ -2261,6 +2277,10 @@
             <translation>Enter an HTTP or HTTPS address. Changes apply immediately. Clear to use the default server.</translation>
         </message>
         <message>
+            <source>Enter or browse to a PNG or ICO file for dark theme; invalid files use the selected bundled icon</source>
+            <translation>Enter or browse to a PNG or ICO file for dark theme; invalid files use the selected bundled icon</translation>
+        </message>
+        <message>
             <source>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</source>
             <translation>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</translation>
         </message>
@@ -2475,6 +2495,10 @@
         <message>
             <source>Hide or show all windows in the current group</source>
             <translation>Hide or show all windows in the current group</translation>
+        </message>
+        <message>
+            <source>Hide the toolbar near the left or right screen edge. Hover over the edge control to show it again.</source>
+            <translation>Hide the toolbar near the left or right screen edge. Hover over the edge control to show it again.</translation>
         </message>
         <message>
             <source>Hide to Top</source>
@@ -3673,6 +3697,10 @@
             <translation>Select child elements within a window while taking a screenshot</translation>
         </message>
         <message>
+            <source>Select dark theme tray icon</source>
+            <translation>Select dark theme tray icon</translation>
+        </message>
+        <message>
             <source>Select image save directory</source>
             <translation>Select image save directory</translation>
         </message>
@@ -4435,6 +4463,10 @@
         <message>
             <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>
             <translation>Use global mouse gestures, select individual window elements, and translate selected text.</translation>
+        </message>
+        <message>
+            <source>Use regular icon settings</source>
+            <translation>Use regular icon settings</translation>
         </message>
         <message>
             <source>Use system proxy</source>

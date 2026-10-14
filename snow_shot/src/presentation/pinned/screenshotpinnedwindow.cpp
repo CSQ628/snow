@@ -6485,19 +6485,22 @@ void ScreenshotPinnedWindow::quickSave() {
     if (m_closing || m_printPending || m_quickSavePending || property("saveDialogOpen").toBool())
         return;
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION ||                     \
-    SNOW_SHOT_ENABLE_QR_RECOGNITION
-    const auto textSnapshot =
+    SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    const QPointer<ScreenshotPinnedWindow> snapshotLifetime(this);
+    const auto fileSnapshot =
         m_recognitionSession != nullptr ? m_recognitionSession->fileExportSnapshot() : std::nullopt;
-    if (textSnapshot) {
+    if (!snapshotLifetime)
+        return;
+    if (fileSnapshot) {
         const snow_shot::storage::ScreenshotSettings settings;
         const auto result = ScreenshotRecognitionFileExport::quickSave(
-            *textSnapshot, settings.imageSaveDirectory(),
+            *fileSnapshot, settings.imageSaveDirectory(),
             ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat()));
         if (!result.succeeded()) {
             showPinnedRecognitionMessage(
                 this,
                 QCoreApplication::translate("ScreenshotController",
-                                            "The recognition text could not be saved: %1")
+                                            "The recognition result could not be saved: %1")
                     .arg(result.error),
                 true);
         }
@@ -7184,15 +7187,18 @@ void ScreenshotPinnedWindow::saveAsFile() {
     if (m_printPending || property("saveDialogOpen").toBool())
         return;
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION ||                     \
-    SNOW_SHOT_ENABLE_QR_RECOGNITION
-    const auto textSnapshot =
+    SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    const QPointer<ScreenshotPinnedWindow> snapshotLifetime(this);
+    const auto fileSnapshot =
         m_recognitionSession != nullptr ? m_recognitionSession->fileExportSnapshot() : std::nullopt;
-    if (textSnapshot) {
-        if (textSnapshot->source.isEmpty()) {
+    if (!snapshotLifetime)
+        return;
+    if (fileSnapshot) {
+        if (!fileSnapshot->hasContent()) {
             showPinnedRecognitionMessage(
                 this,
                 QCoreApplication::translate("ScreenshotRecognitionFileExport",
-                                            "No recognition text is available to save"),
+                                            "No recognition result is available to save"),
                 true);
             return;
         }
@@ -7202,12 +7208,12 @@ void ScreenshotPinnedWindow::saveAsFile() {
         static_cast<void>(QDir().mkpath(directory));
         const QString initialPath = QDir(directory).filePath(
             ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat()) +
-            QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(textSnapshot->kind));
+            QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(fileSnapshot->kind));
         const QPointer<ScreenshotPinnedWindow> lifetime(this);
         setProperty("saveDialogOpen", true);
         const QString selectedPath = QFileDialog::getSaveFileName(
             this, translatePinnedText("Save as file"), initialPath,
-            ScreenshotRecognitionFileExport::dialogFilter(textSnapshot->kind), nullptr,
+            ScreenshotRecognitionFileExport::dialogFilter(fileSnapshot->kind), nullptr,
             QFileDialog::DontConfirmOverwrite);
         if (!lifetime)
             return;
@@ -7215,13 +7221,13 @@ void ScreenshotPinnedWindow::saveAsFile() {
         if (m_closing || selectedPath.isEmpty())
             return;
         const QString primaryPath =
-            ScreenshotRecognitionFileExport::normalizedPath(selectedPath, textSnapshot->kind);
+            ScreenshotRecognitionFileExport::normalizedPath(selectedPath, fileSnapshot->kind);
         if (!ScreenshotRecognitionFileExport::confirmOverwrite(
                 this,
-                ScreenshotRecognitionFileExport::outputPaths(primaryPath, textSnapshot->kind)))
+                ScreenshotRecognitionFileExport::outputPaths(primaryPath, fileSnapshot->kind)))
             return;
         const auto result =
-            ScreenshotRecognitionFileExport::saveToPath(*textSnapshot, primaryPath, true);
+            ScreenshotRecognitionFileExport::saveToPath(*fileSnapshot, primaryPath, true);
         if (result.succeeded()) {
             static_cast<void>(
                 settings.setLastManualSaveDirectory(QFileInfo(result.path).absolutePath()));
@@ -7229,7 +7235,7 @@ void ScreenshotPinnedWindow::saveAsFile() {
             showPinnedRecognitionMessage(
                 this,
                 QCoreApplication::translate("ScreenshotController",
-                                            "The recognition text could not be saved: %1")
+                                            "The recognition result could not be saved: %1")
                     .arg(result.error),
                 true);
         }

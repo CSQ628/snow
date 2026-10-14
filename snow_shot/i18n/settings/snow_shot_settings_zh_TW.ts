@@ -1361,6 +1361,10 @@
             <translation>開機時自動啟動</translation>
         </message>
         <message>
+            <source>Auto-hide toolbar</source>
+            <translation>自動隱藏工具列</translation>
+        </message>
+        <message>
             <source>Auto-recognize QR Code</source>
             <translation>自動辨識 QR Code</translation>
         </message>
@@ -1603,6 +1607,10 @@
         <message>
             <source>Choose the action for middle-clicking while moving or annotating in a screenshot</source>
             <translation>選擇在截圖中移動或標註時按一下滑鼠中鍵所執行的動作</translation>
+        </message>
+        <message>
+            <source>Choose the bundled icon used in dark theme, or reuse the regular icon settings</source>
+            <translation>選擇深色主題使用的內建圖示，或沿用一般圖示設定</translation>
         </message>
         <message>
             <source>Choose the bundled icon used in the system tray</source>
@@ -2021,6 +2029,14 @@
             <translation>深色</translation>
         </message>
         <message>
+            <source>Dark theme custom icon</source>
+            <translation>深色主題自訂圖示</translation>
+        </message>
+        <message>
+            <source>Dark theme icon</source>
+            <translation>深色主題圖示</translation>
+        </message>
+        <message>
             <source>Data storage</source>
             <translation>資料儲存</translation>
         </message>
@@ -2261,6 +2277,10 @@
             <translation>輸入 HTTP 或 HTTPS 位址。變更立即生效。清空可使用預設伺服器。</translation>
         </message>
         <message>
+            <source>Enter or browse to a PNG or ICO file for dark theme; invalid files use the selected bundled icon</source>
+            <translation>輸入或瀏覽選擇深色主題使用的 PNG 或 ICO 檔案；無效檔案將使用所選內建圖示</translation>
+        </message>
+        <message>
             <source>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</source>
             <translation>輸入或瀏覽選取 PNG 或 ICO 檔案；無效檔案將使用所選的內建圖示</translation>
         </message>
@@ -2475,6 +2495,10 @@
         <message>
             <source>Hide or show all windows in the current group</source>
             <translation>隱藏或顯示目前群組中的所有視窗</translation>
+        </message>
+        <message>
+            <source>Hide the toolbar near the left or right screen edge. Hover over the edge control to show it again.</source>
+            <translation>工具列靠近螢幕左邊緣或右邊緣時自動隱藏。將滑鼠停留在邊緣控制項上可再次顯示工具列。</translation>
         </message>
         <message>
             <source>Hide to Top</source>
@@ -3673,6 +3697,10 @@
             <translation>擷取螢幕畫面時選取視窗中的子元素</translation>
         </message>
         <message>
+            <source>Select dark theme tray icon</source>
+            <translation>選擇深色主題系統匣圖示</translation>
+        </message>
+        <message>
             <source>Select image save directory</source>
             <translation>選擇影像儲存目錄</translation>
         </message>
@@ -4435,6 +4463,10 @@
         <message>
             <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>
             <translation>使用全域滑鼠手勢、選取視窗內的個別元素，以及翻譯選取的文字。</translation>
+        </message>
+        <message>
+            <source>Use regular icon settings</source>
+            <translation>沿用一般圖示設定</translation>
         </message>
         <message>
             <source>Use system proxy</source>

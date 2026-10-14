@@ -1947,6 +1947,14 @@ bool RecordingSettings::setCaptureToolbarInRecording(bool capture) const {
                             capture);
 }
 
+bool RecordingSettings::autoHideToolbar() const {
+    return cache().value(QStringLiteral("screen_recording/auto_hide_toolbar")).toBool();
+}
+
+bool RecordingSettings::setAutoHideToolbar(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/auto_hide_toolbar"), enabled);
+}
+
 bool RecordingSettings::autoExitAfterRecordingEnds() const {
     return cache()
         .value(QStringLiteral("screen_recording/auto_exit_after_recording_ends"))
@@ -2490,6 +2498,22 @@ QString TraySettings::customIcon() const {
 
 bool TraySettings::setCustomIcon(const QString& path) const {
     return cache().setValue(QStringLiteral("tray/custom_icon"), path);
+}
+
+QString TraySettings::darkIcon() const {
+    return cache().value(QStringLiteral("tray/dark_icon")).toString();
+}
+
+bool TraySettings::setDarkIcon(const QString& icon) const {
+    return cache().setValue(QStringLiteral("tray/dark_icon"), icon);
+}
+
+QString TraySettings::darkCustomIcon() const {
+    return cache().value(QStringLiteral("tray/dark_custom_icon")).toString();
+}
+
+bool TraySettings::setDarkCustomIcon(const QString& path) const {
+    return cache().setValue(QStringLiteral("tray/dark_custom_icon"), path);
 }
 
 QString TraySettings::leftClickAction() const {

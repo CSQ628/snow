@@ -527,6 +527,8 @@ class RecordingSettings final {
     bool setEncodingPreset(const QString& preset) const;
     [[nodiscard]] bool captureToolbarInRecording() const;
     bool setCaptureToolbarInRecording(bool capture) const;
+    [[nodiscard]] bool autoHideToolbar() const;
+    bool setAutoHideToolbar(bool enabled) const;
     [[nodiscard]] bool autoExitAfterRecordingEnds() const;
     bool setAutoExitAfterRecordingEnds(bool enabled) const;
     [[nodiscard]] bool notifyAfterExportCompletes() const;
@@ -657,6 +659,10 @@ class TraySettings final {
     bool setIcon(const QString& icon) const;
     [[nodiscard]] QString customIcon() const;
     bool setCustomIcon(const QString& path) const;
+    [[nodiscard]] QString darkIcon() const;
+    bool setDarkIcon(const QString& icon) const;
+    [[nodiscard]] QString darkCustomIcon() const;
+    bool setDarkCustomIcon(const QString& path) const;
     [[nodiscard]] QString leftClickAction() const;
     [[nodiscard]] QString middleClickAction() const;
     bool setMiddleClickAction(const QString& action) const;
