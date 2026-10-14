@@ -163,7 +163,7 @@ void independentHistoryAndSourceWindows() {
     require(coordinator.windows().isEmpty(), "coordinator closes all owned windows on shutdown");
 }
 
-void savedPinsOpenIndependentSplitWindows(const QString& directory) {
+void savedPinsOpenIndependentSplitWindows(const QString& directory, bool styledText) {
     auto& repository = snow_shot::storage::ApplicationStorage::instance().pinnedWindows();
     const auto originalCount = repository.summaries().size();
     const auto setGeometry = [](snow_shot::storage::PinnedWindowRecord& record, QSize size) {
@@ -197,6 +197,17 @@ void savedPinsOpenIndependentSplitWindows(const QString& directory) {
     text.originalHtml = QStringLiteral("<b>Saved text pin</b>");
     text.originalText = QStringLiteral("Saved text pin");
     text.firstCreationTextDpi = 1.5;
+    text.originalFileName = QStringLiteral("saved-text.txt");
+    text.createdUtc = pixels.createdUtc;
+    if (styledText) {
+        snow_shot::storage::PinnedTextStyle style;
+        style.fontFamily = QStringLiteral("Arial");
+        style.maximumWidth = 200;
+        style.fontSize = 24;
+        style.textColor = QColor(255, 0, 0, 128);
+        style.backgroundColor = Qt::transparent;
+        text.textStyle = style;
+    }
     setGeometry(text, QSize(300, 90));
     // Publishing a new pin reveals hidden members of its group. Hide the file fixture only after
     // all sources exist, so the split loader receives a genuinely hidden saved record.
@@ -207,9 +218,14 @@ void savedPinsOpenIndependentSplitWindows(const QString& directory) {
     ScreenshotClipboardOriginalContent original;
     original.html = text.originalHtml;
     original.text = text.originalText;
+    const auto legacyRendered =
+        ScreenshotClipboardContentReader::renderOriginalText(original, text.firstCreationTextDpi);
+    original.textStyle = text.textStyle;
     const auto rendered =
         ScreenshotClipboardContentReader::renderOriginalText(original, text.firstCreationTextDpi);
     require(rendered.has_value(), "render saved text reference");
+    require(!styledText || (legacyRendered && legacyRendered->image != rendered->image),
+            "styled split fixture must differ from legacy text rendering");
 
     ImageSplitWindowCoordinator coordinator;
     for (const auto& id : {pixels.id, file.id, text.id})
@@ -232,8 +248,9 @@ void savedPinsOpenIndependentSplitWindows(const QString& directory) {
     require(windows[0]->imageName() == QStringLiteral("Screenshot_%1")
                                            .arg(pixels.createdUtc.toLocalTime().toString(
                                                QStringLiteral("yyyyMMdd-HHmmss"))) &&
-                windows[1]->imageName() == QStringLiteral("split-original"),
-            "saved split sources retain creation time and original filename");
+                windows[1]->imageName() == QStringLiteral("split-original") &&
+                windows[2]->imageName() == QStringLiteral("saved-text"),
+            "saved split sources retain creation time and filenames alongside text styling");
     windows[0]->document()->createLine(true, 100);
     require(!windows[1]->document()->canUndo() && !windows[2]->document()->canUndo(),
             "saved pin split edits remain independent");
@@ -804,7 +821,8 @@ int main(int argc, char** argv) {
     } else {
         replacementAndCancellation();
         independentHistoryAndSourceWindows();
-        savedPinsOpenIndependentSplitWindows(directory.path());
+        savedPinsOpenIndependentSplitWindows(directory.path(), false);
+        savedPinsOpenIndependentSplitWindows(directory.path(), true);
         nativeHistoryPixelsAreShared();
         realAnimatedFilesKeepTheirInitialCanvas(directory.path());
         saveCommitsVisibleDraft();

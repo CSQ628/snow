@@ -1361,6 +1361,10 @@
             <translation>开机时自动启动</translation>
         </message>
         <message>
+            <source>Auto-hide toolbar</source>
+            <translation>自动隐藏工具栏</translation>
+        </message>
+        <message>
             <source>Auto-recognize QR Code</source>
             <translation>自动识别二维码</translation>
         </message>
@@ -1407,6 +1411,10 @@
         <message>
             <source>Background Fill</source>
             <translation>背景填充</translation>
+        </message>
+        <message>
+            <source>Background color</source>
+            <translation>背景颜色</translation>
         </message>
         <message>
             <source>Background image</source>
@@ -1601,6 +1609,10 @@
             <translation>选择在截图中移动或标注时单击鼠标中键执行的操作</translation>
         </message>
         <message>
+            <source>Choose the bundled icon used in dark theme, or reuse the regular icon settings</source>
+            <translation>选择深色主题使用的内置图标，或沿用常规图标设置</translation>
+        </message>
+        <message>
             <source>Choose the bundled icon used in the system tray</source>
             <translation>选择系统托盘使用的内置图标</translation>
         </message>
@@ -1615,6 +1627,14 @@
         <message>
             <source>Choose the compression effort used for image output and history results</source>
             <translation>选择图像输出和历史记录结果图像的压缩级别</translation>
+        </message>
+        <message>
+            <source>Choose the default font for newly pinned text</source>
+            <translation>选择新贴图文本的默认字体</translation>
+        </message>
+        <message>
+            <source>Choose the default font size for newly pinned text</source>
+            <translation>选择新贴图文本的默认字号</translation>
         </message>
         <message>
             <source>Choose the dialog used for manual image saves</source>
@@ -2009,6 +2029,14 @@
             <translation>深色</translation>
         </message>
         <message>
+            <source>Dark theme custom icon</source>
+            <translation>深色主题自定义图标</translation>
+        </message>
+        <message>
+            <source>Dark theme icon</source>
+            <translation>深色主题图标</translation>
+        </message>
+        <message>
             <source>Data storage</source>
             <translation>数据存储</translation>
         </message>
@@ -2035,6 +2063,22 @@
         <message>
             <source>Default Punctuation</source>
             <translation>默认标点</translation>
+        </message>
+        <message>
+            <source>Default text color</source>
+            <translation>默认文本颜色</translation>
+        </message>
+        <message>
+            <source>Default text font</source>
+            <translation>默认文本字体</translation>
+        </message>
+        <message>
+            <source>Default text font size</source>
+            <translation>默认文本字号</translation>
+        </message>
+        <message>
+            <source>Defaults for newly pinned text; source formatting is preserved</source>
+            <translation>设置新贴图文本的默认样式，并保留源格式</translation>
         </message>
         <message>
             <source>Delay %1s to execute</source>
@@ -2231,6 +2275,10 @@
         <message>
             <source>Enter an HTTP or HTTPS address. Changes apply immediately. Clear to use the default server.</source>
             <translation>输入 HTTP 或 HTTPS 地址。更改立即生效。清空可使用默认服务器。</translation>
+        </message>
+        <message>
+            <source>Enter or browse to a PNG or ICO file for dark theme; invalid files use the selected bundled icon</source>
+            <translation>输入或浏览选择深色主题使用的 PNG 或 ICO 文件；无效文件将使用所选内置图标</translation>
         </message>
         <message>
             <source>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</source>
@@ -2447,6 +2495,10 @@
         <message>
             <source>Hide or show all windows in the current group</source>
             <translation>隐藏或显示当前分组中的所有窗口</translation>
+        </message>
+        <message>
+            <source>Hide the toolbar near the left or right screen edge. Hover over the edge control to show it again.</source>
+            <translation>工具栏靠近屏幕左边缘或右边缘时自动隐藏。将鼠标悬停在边缘控件上可再次显示工具栏。</translation>
         </message>
         <message>
             <source>Hide to Top</source>
@@ -2681,6 +2733,10 @@
             <translation>限制长边（更快）</translation>
         </message>
         <message>
+            <source>Limit the width of pinned text, including padding</source>
+            <translation>限制贴图文本的宽度，包括内边距</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>直线</translation>
         </message>
@@ -2771,6 +2827,10 @@
         <message>
             <source>Maximum entries</source>
             <translation>最大条目数</translation>
+        </message>
+        <message>
+            <source>Maximum text width</source>
+            <translation>最大文本宽度</translation>
         </message>
         <message>
             <source>Medium</source>
@@ -3637,6 +3697,10 @@
             <translation>截图时选择窗口中的子元素</translation>
         </message>
         <message>
+            <source>Select dark theme tray icon</source>
+            <translation>选择深色主题托盘图标</translation>
+        </message>
+        <message>
             <source>Select image save directory</source>
             <translation>选择图像保存目录</translation>
         </message>
@@ -4161,6 +4225,10 @@
             <translation>文字检测处理</translation>
         </message>
         <message>
+            <source>Text Style</source>
+            <translation>文本样式</translation>
+        </message>
+        <message>
             <source>Text background</source>
             <translation>文本背景</translation>
         </message>
@@ -4397,8 +4465,20 @@
             <translation>使用全局鼠标手势、选择窗口内的单个元素，以及翻译选中的文本。</translation>
         </message>
         <message>
+            <source>Use regular icon settings</source>
+            <translation>沿用常规图标设置</translation>
+        </message>
+        <message>
             <source>Use system proxy</source>
             <translation>使用系统代理</translation>
+        </message>
+        <message>
+            <source>Use the theme background until customized. Reset Text Style to restore it.</source>
+            <translation>未自定义时使用主题背景颜色。重置文本样式可恢复主题颜色。</translation>
+        </message>
+        <message>
+            <source>Use the theme text color until customized. Reset Text Style to restore it.</source>
+            <translation>未自定义时使用主题文本颜色。重置文本样式可恢复主题颜色。</translation>
         </message>
         <message>
             <source>Use this language when local language detection matches the primary target language at the configured confidence</source>
@@ -4503,6 +4583,10 @@
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
             <translation>Zip 压缩包 (*.zip);;所有文件 (*.*)</translation>
+        </message>
+        <message>
+            <source>px</source>
+            <translation>像素</translation>
         </message>
     </context>
     <context>

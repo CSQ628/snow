@@ -693,7 +693,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("screen_recording/mouse_highlight_radius"), 41, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{8, 128, 1}},
     {QStringLiteral("screen_recording/encoder"),
-     QStringLiteral("h264_hw"),
+     QStringLiteral("h264"),
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("h264_hw"), QStringLiteral("h264"), QStringLiteral("h265")}},
@@ -712,6 +712,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("dxgi"), QStringLiteral("wgc"), QStringLiteral("gdi")}},
     {QStringLiteral("screen_recording/capture_toolbar_in_recording"), true,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screen_recording/auto_hide_toolbar"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/auto_exit_after_recording_ends"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/notify_after_export_completes"), false,
@@ -1415,6 +1416,15 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      QStringLiteral("#00000000"), ConfigurationValueKind::String},
     {QStringLiteral("screenshot_ui/show_edit_selection_toolbar"), true,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("pin_to_screen/text_maximum_width"), 1024, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{100, 2000, 1}},
+    {QStringLiteral("pin_to_screen/text_font_family"), QString(), ConfigurationValueKind::String},
+    {QStringLiteral("pin_to_screen/text_font_size"), 16, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{8, 96, 1}},
+    {QStringLiteral("pin_to_screen/text_color"), QStringLiteral("system"),
+     ConfigurationValueKind::String},
+    {QStringLiteral("pin_to_screen/text_background_color"), QStringLiteral("system"),
+     ConfigurationValueKind::String},
     {QStringLiteral("pin_to_screen/show_border_by_default"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("pin_to_screen/show_shadow_by_default"), false,
      ConfigurationValueKind::Boolean},
@@ -1475,6 +1485,14 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("default"), QStringLiteral("light"), QStringLiteral("dark"),
       QStringLiteral("snow-default"), QStringLiteral("snow-light"), QStringLiteral("snow-dark")}},
     {QStringLiteral("tray/custom_icon"), QString(), ConfigurationValueKind::String},
+    {QStringLiteral("tray/dark_icon"),
+     QStringLiteral("inherit"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("inherit"), QStringLiteral("default"), QStringLiteral("light"),
+      QStringLiteral("dark"), QStringLiteral("snow-default"), QStringLiteral("snow-light"),
+      QStringLiteral("snow-dark")}},
+    {QStringLiteral("tray/dark_custom_icon"), QString(), ConfigurationValueKind::String},
     {QStringLiteral("tray/left_click_action"),
      QStringLiteral("screenshot"),
      ConfigurationValueKind::String,
@@ -2679,6 +2697,16 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     }
     if (isGlobalMouseKey(key)) {
         return normalizeGlobalMouseCombination(value);
+    }
+    if (key == QStringLiteral("pin_to_screen/text_color") ||
+        key == QStringLiteral("pin_to_screen/text_background_color")) {
+        return value == QJsonValue(QStringLiteral("system"))
+                   ? ConfigurationNormalization{value, true, false}
+                   : normalizeRgbaColor(value);
+    }
+    if (key == QStringLiteral("pin_to_screen/text_font_family") &&
+        (!value.isString() || value.toString().size() > 1024)) {
+        return {};
     }
     if (isRgbaColorKey(key)) {
         return normalizeRgbaColor(value);

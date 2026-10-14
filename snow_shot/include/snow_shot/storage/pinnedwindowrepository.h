@@ -40,6 +40,7 @@ struct PinnedWindowPreviewSource final {
     double firstCreationTextDpi = 1.0;
     QString originalFileName{};
     QDateTime createdUtc{};
+    std::optional<PinnedTextStyle> textStyle;
 };
 
 enum class PinnedWindowOperation {

@@ -2,6 +2,7 @@
 #include "../src/app/mcp/mcppinnedstate_p.h"
 #include "cloud_upload_test_support.h"
 #include "print_diagnostics_test_support.h"
+#include "recognition_workbook_test_support.h"
 #include "../../test-support/canvas_quick_selection_test_support.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
 #include "snow_shot/presentation/crosshaircursor.h"
@@ -9851,6 +9852,37 @@ void restoredClipboardTextUsesCurrentThemeBackground() {
     }
 }
 
+void restoredClipboardTextKeepsCapturedStyle() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "styled text restore requires a screen");
+    IsolatedPinnedStorage storage;
+    ScreenshotClipboardOriginalContent original;
+    original.text = QStringLiteral("Captured text style ").repeated(20);
+    auto style = ScreenshotClipboardContentReader::capturePinnedTextStyle();
+    style.maximumWidth = 240;
+    style.fontSize = 24;
+    style.textColor = Qt::red;
+    style.backgroundColor = Qt::yellow;
+    original.textStyle = style;
+    const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(original, 1.0);
+    require(rendered.has_value(), "styled restore fixture renders");
+    auto record = savedPinnedRecord(*screen, 1.0, rendered->image.size(), 100.0, QPoint(40, 40));
+    record.sourceKind = snow_shot::storage::PinnedWindowSourceKind::ClipboardText;
+    record.image = {};
+    record.originalText = original.text;
+    record.textStyle = style;
+    const snow_shot::storage::PinToScreenSettings settings;
+    require(settings.setTextMaximumWidth(800) && settings.setTextFontSize(48) &&
+                settings.setTextColor(Qt::blue) && settings.setTextBackgroundColor(Qt::green),
+            "change global defaults before reopening styled text");
+    ScreenshotSelectionExportUiServices services;
+    auto* restored = restoreSeededPinnedWindow(services, record);
+    require(ScreenshotPinnedWindowTestAccess::originalImage(*restored) == rendered->image &&
+                restored->automationOriginalContent().textStyle == style,
+            "restored text and its subsequent persistence retain the captured style");
+    closeRestoredPinnedWindow(restored, record.id);
+}
+
 void restoredPinnedWindowIgnoresMonitorDpiChange(SnowCanvasRuntime&) {
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "a primary screen is required");
@@ -14518,6 +14550,110 @@ void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
             "rotation maps paragraph background regions together with text and native dimensions");
 }
 
+void pinnedTablesSaveExcelOffscreen() {
+    const snow_shot::storage::ScreenshotSettings settings;
+    QTemporaryDir directory;
+    require(directory.isValid() && settings.setImageSaveDirectory(directory.path()) &&
+                settings.setLastManualSaveDirectory(directory.path()) &&
+                settings.setImageFormat(QStringLiteral("pdf")) &&
+                settings.setAutoSaveFilenameFormat(QStringLiteral("TableResult")),
+            "table recognition save settings unavailable");
+    auto config = cachedOcrPinConfig(nullptr);
+    SnowShotTableResult result;
+    result.html = QStringLiteral("<table><tr><th colspan=\"2\">Header</th></tr>"
+                                 "<tr><td>001234567890123456789</td><td>Other</td></tr></table>");
+    config.recognitionResults.table = result;
+    QPointer<ScreenshotPinnedWindow> window(new ScreenshotPinnedWindow);
+    require(window->present(config), "present table recognition pin");
+    waitForUi(100);
+    auto* session = window->findChild<ScreenshotRecognitionSessionController*>();
+    require(session, "table recognition session unavailable");
+    session->activate(ScreenshotRecognitionSessionController::Mode::Table);
+    waitForUi(30);
+    auto* editor = window->findChild<ScreenshotTableEditor*>();
+    require(editor && editor->model(), "table editor unavailable");
+    editor->selectionModel()->select(editor->model()->index(1, 0),
+                                     QItemSelectionModel::ClearAndSelect);
+    editor->edit(editor->model()->index(1, 1));
+    auto* pending = editor->findChild<QPlainTextEdit*>(QStringLiteral("snowShotTableCellEditor"));
+    require(pending, "open a table edit before quick save");
+    pending->setPlainText(QStringLiteral("  edited\nvalue  "));
+    ScreenshotPinnedWindowTestAccess::quickSave(*window);
+    const auto quickSheet = recognition_workbook_test::sheet(
+        recognition_workbook_test::parts(directory.filePath(QStringLiteral("TableResult.xlsx"))));
+    require(quickSheet.dimension == QStringLiteral("A1:B2") &&
+                quickSheet.cells.value(QStringLiteral("A2")) ==
+                    QStringLiteral("001234567890123456789") &&
+                quickSheet.cells.value(QStringLiteral("B2")) ==
+                    QStringLiteral("  edited\nvalue  ") &&
+                quickSheet.merges == QStringList{QStringLiteral("A1:B1")} &&
+                QDir(directory.path()).entryList(QDir::Files) ==
+                    QStringList{QStringLiteral("TableResult.xlsx")},
+            "pinned quick save commits pending edits and exports the complete Excel table");
+    ScreenshotPinnedWindowTestAccess::quickSave(*window);
+    require(QFileInfo::exists(directory.filePath(QStringLiteral("TableResult_1.xlsx"))),
+            "pinned workbook quick save preserves existing files");
+    const bool native = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+    const auto restoreNative =
+        qScopeGuard([native] { QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, native); });
+    for (const auto* preference : {"system", "snow_shot"}) {
+        require(settings.setSaveAsFileDialog(QString::fromLatin1(preference)),
+                "set save dialog preference");
+        const QString chosen =
+            directory.filePath(QString::fromLatin1(preference) + QStringLiteral(".png"));
+        bool inspected = false;
+        QTimer accept;
+        accept.setInterval(10);
+        QObject::connect(&accept, &QTimer::timeout, window, [&] {
+            for (auto* widget : QApplication::topLevelWidgets()) {
+                if (auto* dialog = qobject_cast<QFileDialog*>(widget)) {
+                    inspected = dialog->nameFilters() ==
+                                    QStringList{QStringLiteral("Excel workbook (*.xlsx)")} &&
+                                dialog->selectedFiles().value(0).endsWith(QStringLiteral(".xlsx"));
+                    dialog->selectFile(chosen);
+                    QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+                }
+            }
+        });
+        accept.start();
+        ScreenshotPinnedWindowTestAccess::saveAsFile(*window);
+        accept.stop();
+        const QString path =
+            directory.filePath(QString::fromLatin1(preference) + QStringLiteral(".xlsx"));
+        require(
+            inspected &&
+                recognition_workbook_test::sheet(recognition_workbook_test::parts(path)).cells ==
+                    quickSheet.cells &&
+                settings.lastManualSaveDirectory() == directory.path() &&
+                !QFileInfo::exists(chosen),
+            "pinned Save As always uses Excel format and preserves manual save settings");
+    }
+    QTimer cancel;
+    cancel.setInterval(10);
+    QObject::connect(&cancel, &QTimer::timeout, window, [] {
+        for (auto* widget : QApplication::topLevelWidgets())
+            if (auto* dialog = qobject_cast<QFileDialog*>(widget))
+                dialog->reject();
+    });
+    cancel.start();
+    ScreenshotPinnedWindowTestAccess::saveAsFile(*window);
+    cancel.stop();
+    require(session->active() && QDir(directory.path()).entryList(QDir::Files).size() == 4,
+            "canceling Save As leaves the editable table and existing files intact");
+    session->invalidate();
+    QImage unavailableImage(32, 32, QImage::Format_ARGB32);
+    unavailableImage.fill(Qt::white);
+    session->setTarget(
+        {QStringLiteral("unavailable-table"), unavailableImage, QRectF(0, 0, 32, 32)});
+    session->activate(ScreenshotRecognitionSessionController::Mode::Table);
+    ScreenshotPinnedWindowTestAccess::quickSave(*window);
+    require(QDir(directory.path()).entryList(QDir::Files).size() == 4,
+            "an unavailable table must not quick save a screenshot");
+    window->close();
+    require(processUntilDeleted(window, 2000), "close table pin");
+}
+
 void pinnedTextRecognitionSavesSourceFilesOffscreen() {
     using Format = SnowShotImageConversionFormat;
     const snow_shot::storage::ScreenshotSettings settings;
@@ -16182,8 +16318,10 @@ void pinnedSharedImageExportOffscreen() {
                             normalized(QImage(temporaryPath)) == normalized(rendered),
                         "file copy retains the rendered viewport in a temporary directory");
                 QApplication::clipboard()->clear();
-                wait([&] { return !QFileInfo::exists(temporaryPath); },
-                     "replacing the clipboard cleans up its temporary image file");
+                require(QFileInfo::exists(temporaryPath),
+                        "replacing the clipboard must preserve the exported image file");
+                require(QDir(QFileInfo(temporaryPath).path()).removeRecursively(),
+                        "clipboard file fixture cleanup failed");
                 require(QFileInfo::exists(path) == autoSave,
                         "clipboard cleanup must preserve any automatic save");
             } else {
@@ -24756,6 +24894,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--recognition-save-only"))) {
+            pinnedTablesSaveExcelOffscreen();
             pinnedTextRecognitionSavesSourceFilesOffscreen();
             pinnedRecognitionSaveSnapshotsAndRoutesOffscreen();
             return 0;
@@ -24877,6 +25016,7 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--restored-text-theme-only"))) {
             restoredClipboardTextUsesCurrentThemeBackground();
+            restoredClipboardTextKeepsCapturedStyle();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--early-ocr-snapshot-only"))) {

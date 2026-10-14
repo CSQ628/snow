@@ -103,6 +103,8 @@ const QString kPinLockedShadowColorKey = QStringLiteral("pin_to_screen/locked_sh
 const QString kTrayEnabledKey = QStringLiteral("tray/enabled");
 const QString kTrayIconKey = QStringLiteral("tray/icon");
 const QString kTrayCustomIconKey = QStringLiteral("tray/custom_icon");
+const QString kTrayDarkIconKey = QStringLiteral("tray/dark_icon");
+const QString kTrayDarkCustomIconKey = QStringLiteral("tray/dark_custom_icon");
 const QString kTrayLeftClickActionKey = QStringLiteral("tray/left_click_action");
 const QString kTrayMiddleClickActionKey = QStringLiteral("tray/middle_click_action");
 const QString kTrayMenuOptionsKey = QStringLiteral("tray/menu_options");
@@ -519,6 +521,9 @@ class ApplicationController::Impl {
         applyRuntimeConfiguration(configuration.value(kTrayEnabledKey), kTrayEnabledKey);
         applyRuntimeConfiguration(configuration.value(kTrayIconKey), kTrayIconKey);
         applyRuntimeConfiguration(configuration.value(kTrayCustomIconKey), kTrayCustomIconKey);
+        applyRuntimeConfiguration(configuration.value(kTrayDarkIconKey), kTrayDarkIconKey);
+        applyRuntimeConfiguration(configuration.value(kTrayDarkCustomIconKey),
+                                  kTrayDarkCustomIconKey);
         applyRuntimeConfiguration(configuration.value(kTrayLeftClickActionKey),
                                   kTrayLeftClickActionKey);
         applyRuntimeConfiguration(configuration.value(kTrayMiddleClickActionKey),
@@ -1284,14 +1289,13 @@ class ApplicationController::Impl {
                         return result;
                     result.image = record->image;
                     result.originalContent = {record->originalHtml, record->originalText,
-                                              record->originalFilePath};
+                                              record->originalFilePath, record->textStyle};
                     result.recognitionResults =
                         liveRecognition.value_or(ScreenshotPinnedWindow::decodeRecognitionSnapshot(
                             record->recognitionResults));
                     if (record->sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
                         const auto content = ScreenshotClipboardContentReader::renderOriginalText(
-                            {record->originalHtml, record->originalText, {}},
-                            record->firstCreationTextDpi, {}, budget);
+                            result.originalContent, record->firstCreationTextDpi, {}, budget);
                         if (content)
                             result.image = content->image;
                     }
@@ -1573,6 +1577,10 @@ class ApplicationController::Impl {
             systemTray.setIconSelection(value.toString(QStringLiteral("default")));
         } else if (key == kTrayCustomIconKey) {
             systemTray.setCustomIconPath(value.toString());
+        } else if (key == kTrayDarkIconKey) {
+            systemTray.setDarkIconSelection(value.toString(QStringLiteral("inherit")));
+        } else if (key == kTrayDarkCustomIconKey) {
+            systemTray.setDarkCustomIconPath(value.toString());
         } else if (key == kTrayLeftClickActionKey) {
             systemTray.setLeftClickAction(value.toString(QStringLiteral("screenshot")));
         } else if (key == kTrayMiddleClickActionKey) {
