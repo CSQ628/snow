@@ -900,6 +900,10 @@
             <translation>后处理效果</translation>
         </message>
         <message>
+            <source>Pressure-sensitive brush</source>
+            <translation>压感画笔</translation>
+        </message>
+        <message>
             <source>Print</source>
             <translation>打印</translation>
         </message>
@@ -982,6 +986,10 @@
         <message>
             <source>Redo</source>
             <translation>重做</translation>
+        </message>
+        <message>
+            <source>Regular brush</source>
+            <translation>普通画笔</translation>
         </message>
         <message>
             <source>Reset</source>

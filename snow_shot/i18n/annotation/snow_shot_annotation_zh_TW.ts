@@ -900,6 +900,10 @@
             <translation>後製效果</translation>
         </message>
         <message>
+            <source>Pressure-sensitive brush</source>
+            <translation>壓感筆刷</translation>
+        </message>
+        <message>
             <source>Print</source>
             <translation>列印</translation>
         </message>
@@ -982,6 +986,10 @@
         <message>
             <source>Redo</source>
             <translation>重做</translation>
+        </message>
+        <message>
+            <source>Regular brush</source>
+            <translation>一般筆刷</translation>
         </message>
         <message>
             <source>Reset</source>
