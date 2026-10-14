@@ -168,6 +168,7 @@ impl StreamingFreeDrawBuilder {
         let changed = self.append_position(point, shift);
         if !changed
             && pressure_changed
+            && !self.shift_active
             && self
                 .committed_vertices
                 .last()
@@ -271,31 +272,21 @@ impl StreamingFreeDrawBuilder {
             self.request_preview();
             return true;
         }
-        let Some(endpoint) = self.committed_vertices.last_mut() else {
+        let Some(&endpoint) = self.committed_vertices.last() else {
             return false;
         };
-        if distance(*endpoint, point) < self.point_filter.sample_spacing() {
-            return false;
-        }
-        *endpoint = point;
+        // Shift changes the centerline, not the scalar capture. Rebuild the complete
+        // active profile even when sub-spacing movement leaves its endpoint unchanged.
         let begin = self.committed_distances[self.committed_distances.len() - 2];
         *self.committed_distances.last_mut().unwrap() = self.pressure_capture.distance;
-        let anchor_pressure = self
-            .pressure_segments
-            .last()
-            .and_then(|p| p.first())
-            .map_or(0.5, |k| k.pressure);
-        *self.pressure_segments.last_mut().unwrap() = vec![
-            PressureKnot {
-                t: 0.0,
-                pressure: anchor_pressure,
-            },
-            PressureKnot {
-                t: 1.0,
-                pressure: self.pressure_capture.pressure,
-            },
-        ];
+        *self.pressure_segments.last_mut().unwrap() = self
+            .pressure_capture
+            .profile(begin, self.pressure_capture.distance);
         self.pressure_capture.discard_before(begin);
+        if distance(endpoint, point) < self.point_filter.sample_spacing() {
+            return false;
+        }
+        *self.committed_vertices.last_mut().unwrap() = point;
         self.advance_revision();
         self.request_preview();
         true
@@ -1087,6 +1078,133 @@ fn distance(left: Point<f64>, right: Point<f64>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pressure_shift_stroke_preserves_moving_and_stationary_peaks() {
+        for mode in [BrushMode::Regular, BrushMode::PressureSensitive] {
+            let mut style = crate::defaults::editor_style_defaults().free_draw;
+            style.brush_mode = mode;
+            let mut builder = StreamingFreeDrawBuilder::new(Point::default(), 1.0, style);
+            for (index, (x, pressure)) in [(20.0, 0.2), (60.0, 0.9), (60.0, 0.2), (140.0, 0.2)]
+                .into_iter()
+                .enumerate()
+            {
+                builder.append_input(
+                    Point::new(x, 0.0),
+                    true,
+                    Some(pressure),
+                    100 + index as u64 * 8,
+                );
+            }
+            let preview = builder.preview().unwrap();
+            let (data, _) = builder.finish().unwrap();
+            assert_eq!(data.vertices.len(), 2);
+            assert_eq!(data.segment_modes, [PathSegmentMode::Straight]);
+            assert!(
+                data.pressure_segments[0]
+                    .iter()
+                    .any(|knot| knot.pressure == 0.9)
+            );
+            assert!(snow_draw_engine_core::pressure_at(&data.pressure_segments[0], 1.0) < 0.3);
+            if mode == BrushMode::PressureSensitive {
+                let pressure = data.pressure_geometry(2, &data.path_geometry(2)).unwrap();
+                assert_eq!(
+                    preview
+                        .pressure_geometry
+                        .as_ref()
+                        .unwrap()
+                        .flattened_commands(),
+                    pressure.flattened_commands()
+                );
+                assert!(snow_draw_engine_document::free_draw_hit_test(
+                    &data,
+                    Point::new(
+                        60.0,
+                        snow_draw_engine_core::pressure_radius(style.stroke_width, 0.8)
+                    ),
+                    0.0
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn pressure_shift_sub_spacing_input_updates_preview_and_committed_profile() {
+        let mut style = crate::defaults::editor_style_defaults().free_draw;
+        style.brush_mode = BrushMode::PressureSensitive;
+        style.stroke_width = 16.0;
+        let mut builder = StreamingFreeDrawBuilder::new(Point::default(), 1.0, style);
+        builder.append_input(Point::new(20.0, 0.0), true, Some(0.2), 100);
+        builder.append_input(Point::new(20.1, 0.0), true, Some(0.9), 108);
+        assert!(
+            builder
+                .preview()
+                .unwrap()
+                .pressure_geometry
+                .as_ref()
+                .unwrap()
+                .canvas_bounds[3]
+                >= snow_draw_engine_core::pressure_radius(style.stroke_width, 0.9)
+        );
+        builder.append_input(Point::new(20.1, 0.0), true, Some(0.2), 116);
+        builder.append_input(Point::new(40.0, 0.0), true, Some(0.2), 124);
+        let (data, _) = builder.finish().unwrap();
+        assert!(
+            data.pressure_segments[0]
+                .iter()
+                .any(|knot| knot.pressure == 0.9)
+        );
+    }
+
+    #[test]
+    fn pressure_shift_continuation_keeps_historical_profiles_and_new_peaks() {
+        let mut style = crate::defaults::editor_style_defaults().free_draw;
+        style.brush_mode = BrushMode::PressureSensitive;
+        let mut original = StreamingFreeDrawBuilder::new(Point::default(), 1.0, style);
+        original.append_input(Point::new(40.0, 0.0), true, Some(0.2), 100);
+        original.append_input(Point::new(100.0, 0.0), true, Some(0.4), 108);
+        let (data, _) = original.finish().unwrap();
+        for at_start in [false, true] {
+            let mut builder = StreamingFreeDrawBuilder::continue_from(&data, at_start, 1.0);
+            let endpoint = builder.last_point();
+            let direction = if at_start { -1.0 } else { 1.0 };
+            for (index, (offset, pressure)) in [(20.0, 0.2), (60.0, 0.9), (100.0, 0.2)]
+                .into_iter()
+                .enumerate()
+            {
+                builder.append_input(
+                    Point::new(endpoint.x + direction * offset, endpoint.y),
+                    true,
+                    Some(pressure),
+                    200 + index as u64 * 8,
+                );
+            }
+            let preview = builder.preview().unwrap();
+            let (continued, _) = builder.finish().unwrap();
+            let historical = usize::from(at_start);
+            let added = usize::from(!at_start);
+            assert_eq!(
+                continued.pressure_segments[historical],
+                data.pressure_segments[0]
+            );
+            assert!(
+                continued.pressure_segments[added]
+                    .iter()
+                    .any(|knot| knot.pressure == 0.9)
+            );
+            let pressure = continued
+                .pressure_geometry(2, &continued.path_geometry(2))
+                .unwrap();
+            assert_eq!(
+                preview
+                    .pressure_geometry
+                    .as_ref()
+                    .unwrap()
+                    .flattened_commands(),
+                pressure.flattened_commands()
+            );
+        }
+    }
 
     #[test]
     fn pressure_deferred_moves_rebuild_preview_once_at_editor_flush() {

@@ -63,6 +63,59 @@ void stationaryPressurePeakSurvivesPositionSimplification() {
             "stationary pressure peaks must survive a simplified straight centerline");
 }
 
+void stationaryDotsRetainPressurePeaksForEveryPattern() {
+    for (const auto style :
+         {SNOW_STROKE_STYLE_SOLID, SNOW_STROKE_STYLE_DASHED, SNOW_STROKE_STYLE_DOTTED}) {
+        Engine engine(SNOW_BRUSH_MODE_PRESSURE_SENSITIVE, 16, style);
+        engine.begin({40, 100}, 0.2);
+        engine.move({40, 100}, 0.9);
+        engine.move({40, 100}, 0.2);
+        engine.sync();
+        const auto preview = render(engine.cache);
+        engine.finish();
+        for (const qreal dpr : {1.0, 1.5, 2.0}) {
+            const auto image = render(engine.cache, dpr);
+            require(columnCoverage(image, qRound(40 * dpr)) > 19.0,
+                    "stationary pressure peaks retain their painted width for every pattern");
+            require(qAlpha(image.pixel(qRound(40 * dpr), qRound(109 * dpr))) > 200 &&
+                        qAlpha(image.pixel(qRound(40 * dpr), qRound(112 * dpr))) == 0,
+                    "stationary peak coverage paints the peak without exceeding its radius");
+        }
+        require(preview == render(engine.cache),
+                "stationary patterned pressure dots retain identical preview and committed ink");
+    }
+}
+
+void batchedShiftStrokeRetainsItsPressureHistory() {
+    Engine engine;
+    auto press = pointer(SNOW_POINTER_EVENT_DOWN, {20, 100}, 0.2, 100);
+    press.pointer.modifiers.shift = 1;
+    engine.dispatch(press);
+    std::vector<SnowInputEvent> events;
+    const struct {
+        double x;
+        double pressure;
+    } samples[] = {{60, 0.9}, {60, 0.2}, {100, 0.2}, {200, 0.2}};
+    for (const auto& sample : samples) {
+        auto event = pointer(SNOW_POINTER_EVENT_MOVE, {sample.x, 100}, sample.pressure,
+                             108 + static_cast<std::uint64_t>(events.size()) * 8);
+        event.pointer.modifiers.shift = 1;
+        events.push_back(event);
+    }
+    engine.batch(events);
+    engine.sync();
+    const auto preview = render(engine.cache);
+    engine.finish();
+    for (const qreal dpr : {1.0, 1.5, 2.0}) {
+        const auto image = render(engine.cache, dpr);
+        require(columnCoverage(image, qRound(60 * dpr)) > 19.0 &&
+                    columnCoverage(image, qRound(170 * dpr)) < 12.0,
+                "a batched Shift stroke retains earlier pressure peaks and a thin final tail");
+    }
+    require(preview == render(engine.cache),
+            "Shift pressure history renders identically before and after finalization");
+}
+
 SnowCanvasSceneItem syntheticCrossing() {
     SnowCanvasSceneItem item;
     item.kind = SNOW_SCENE_DISPLAY_ITEM_ARROW;
@@ -300,6 +353,8 @@ int main(int argc, char** argv) {
     QGuiApplication application(argc, argv);
     nominalAndVariableWidthsMatchTheWidthEditor();
     stationaryPressurePeakSurvivesPositionSimplification();
+    stationaryDotsRetainPressurePeaksForEveryPattern();
+    batchedShiftStrokeRetainsItsPressureHistory();
     chunkSeamsAndCrossingsApplyOpacityOnce();
     strokePatternsKeepTheGlobalPhase();
     fractionalCamerasPreservePartialRepaintEdges();

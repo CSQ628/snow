@@ -121,32 +121,11 @@ pub fn pressure_path_geometry(
             }
             let profile = profiles.get(index - 1).map_or(&[][..], Vec::as_slice);
             let samples = segment_samples(current, command, profile, width);
-            match style {
-                StrokeStyle::Solid => ribbon(&mut group, &samples, width),
-                StrokeStyle::Dashed => {
-                    for run in dash_runs(&samples, width, cumulative_length) {
-                        ribbon(&mut group, &run, width);
-                    }
-                }
-                StrokeStyle::Dotted => {
-                    for (point, pressure) in dot_samples(&samples, width, cumulative_length) {
-                        circle(&mut group, point, pressure_radius(width, pressure));
-                    }
-                }
-            }
-            cumulative_length += sample_length(&samples);
-            // Duplicate-t knots encode a stationary pressure peak. It paints once and does
-            // not require a positional vertex or retain an unbounded stream of held events.
-            for knots in profile.windows(2).filter(|knots| knots[0].t == knots[1].t) {
-                let point = evaluate_segment(current, command, knots[0].t);
-                if style == StrokeStyle::Solid {
-                    circle(
-                        &mut group,
-                        point,
-                        pressure_radius(width, knots[0].pressure.max(knots[1].pressure)),
-                    );
-                }
-            }
+            visit_segment_coverage(&samples, width, style, cumulative_length, |primitive| {
+                primitive.append_to(&mut group, width);
+                false
+            });
+            cumulative_length += samples.length;
             current = command_end(command);
             segment_count += 1;
             if segment_count.is_multiple_of(PRESSURE_SEGMENTS_PER_CHUNK) {
@@ -227,38 +206,127 @@ pub fn pressure_segment_hit_test_styled(
         return (false, 0.0);
     }
     let samples = segment_samples(start, command, profile, width);
-    let length = sample_length(&samples);
-    let mut hit = false;
-    if candidate && width > 0.0 {
-        match style {
-            StrokeStyle::Solid => {}
-            StrokeStyle::Dashed => {
-                hit = dash_runs(&samples, width, start_length)
-                    .iter()
-                    .any(|run| ribbon_contains(run, width, point, tolerance));
-            }
-            StrokeStyle::Dotted => {
-                hit = dot_samples(&samples, width, start_length)
-                    .iter()
-                    .any(|(p, pressure)| {
-                        (point.x - p.x).hypot(point.y - p.y)
-                            <= pressure_radius(width, *pressure) + tolerance
-                    });
+    let hit = candidate
+        && visit_segment_coverage(&samples, width, style, start_length, |primitive| {
+            primitive.contains(width, point, tolerance)
+        });
+    (hit, samples.length)
+}
+
+type PressureSample = (Point<f64>, f64);
+
+struct StationaryPeak {
+    sample: PressureSample,
+    distance: f64,
+}
+
+struct SegmentSamples {
+    points: Vec<PressureSample>,
+    stationary_peaks: Vec<StationaryPeak>,
+    length: f64,
+}
+
+enum StrokePrimitive<'a> {
+    Ribbon(&'a [PressureSample]),
+    Disk(PressureSample),
+}
+
+impl StrokePrimitive<'_> {
+    fn append_to(&self, commands: &mut Vec<PathCommand>, width: f64) {
+        match self {
+            Self::Ribbon(samples) => ribbon(commands, samples, width),
+            Self::Disk((point, pressure)) => {
+                circle(commands, *point, pressure_radius(width, *pressure))
             }
         }
     }
-    if candidate && style == StrokeStyle::Solid {
-        hit |= ribbon_contains(&samples, width, point, tolerance);
-        hit |= profile
-            .windows(2)
-            .filter(|knots| knots[0].t == knots[1].t)
-            .any(|knots| {
-                let p = evaluate_segment(start, command, knots[0].t);
-                (point.x - p.x).hypot(point.y - p.y)
-                    <= pressure_radius(width, knots[0].pressure.max(knots[1].pressure)) + tolerance
-            });
+
+    fn contains(&self, width: f64, point: Point<f64>, tolerance: f64) -> bool {
+        match self {
+            Self::Ribbon(samples) => ribbon_contains(samples, width, point, tolerance),
+            Self::Disk((center, pressure)) => {
+                (point.x - center.x).hypot(point.y - center.y)
+                    <= pressure_radius(width, *pressure) + tolerance
+            }
+        }
     }
-    (hit, length)
+}
+
+#[derive(Clone, Copy)]
+enum StrokePattern {
+    Solid,
+    Dashed { period: f64, on: f64 },
+    Dotted { period: f64 },
+}
+
+impl StrokePattern {
+    fn new(style: StrokeStyle, width: f64) -> Self {
+        match style {
+            StrokeStyle::Solid => Self::Solid,
+            StrokeStyle::Dashed => Self::Dashed {
+                period: width * 4.4,
+                on: width * 2.0,
+            },
+            StrokeStyle::Dotted => Self::Dotted {
+                period: width * 2.0,
+            },
+        }
+    }
+
+    fn paints_at(self, distance: f64) -> bool {
+        match self {
+            Self::Solid => true,
+            Self::Dashed { period, on } => {
+                let phase = distance.rem_euclid(period);
+                phase <= on + 1e-9 || period - phase <= 1e-9
+            }
+            Self::Dotted { period } => {
+                let phase = distance.rem_euclid(period);
+                phase.min(period - phase) <= 1e-9
+            }
+        }
+    }
+}
+
+/// Both contour generation and hit testing consume the same painted primitives.
+/// Duplicate-t peaks paint once at their sampled arc-length phase, never in a pattern gap.
+fn visit_segment_coverage(
+    samples: &SegmentSamples,
+    width: f64,
+    style: StrokeStyle,
+    start_length: f64,
+    mut visit: impl FnMut(StrokePrimitive<'_>) -> bool,
+) -> bool {
+    // Solid centerlines retain hit-test tolerance even at zero width. Patterned
+    // strokes need a positive period before dash or dot traversal can proceed.
+    if width <= 0.0 && style != StrokeStyle::Solid {
+        return false;
+    }
+    let pattern = StrokePattern::new(style, width);
+    match pattern {
+        StrokePattern::Solid => {
+            if visit(StrokePrimitive::Ribbon(&samples.points)) {
+                return true;
+            }
+        }
+        StrokePattern::Dashed { period, on } => {
+            for run in dash_runs(&samples.points, period, on, start_length) {
+                if visit(StrokePrimitive::Ribbon(&run)) {
+                    return true;
+                }
+            }
+        }
+        StrokePattern::Dotted { period } => {
+            for sample in dot_samples(&samples.points, period, start_length) {
+                if visit(StrokePrimitive::Disk(sample)) {
+                    return true;
+                }
+            }
+        }
+    }
+    samples.stationary_peaks.iter().any(|peak| {
+        pattern.paints_at(start_length + peak.distance) && visit(StrokePrimitive::Disk(peak.sample))
+    })
 }
 
 fn capsule_hit(
@@ -322,7 +390,7 @@ fn segment_samples(
     command: PathCommand,
     profile: &[PressureKnot],
     width: f64,
-) -> Vec<(Point<f64>, f64)> {
+) -> SegmentSamples {
     let mut knots = vec![0.0, 1.0];
     knots.extend(profile.iter().map(|knot| knot.t));
     knots.sort_unstable_by(f64::total_cmp);
@@ -331,9 +399,35 @@ fn segment_samples(
     for pair in knots.windows(2) {
         flatten_interval(start, command, profile, width, pair[0], pair[1], 0, &mut ts);
     }
-    ts.into_iter()
-        .map(|t| (evaluate_segment(start, command, t), pressure_at(profile, t)))
-        .collect()
+    let mut result = SegmentSamples {
+        points: Vec::with_capacity(ts.len()),
+        stationary_peaks: Vec::new(),
+        length: 0.0,
+    };
+    let mut peaks = profile
+        .chunk_by(|a, b| a.t == b.t)
+        .filter(|knots| knots.len() > 1)
+        .peekable();
+    for t in ts {
+        let point = evaluate_segment(start, command, t);
+        if let Some((previous, _)) = result.points.last() {
+            result.length += (point.x - previous.x).hypot(point.y - previous.y);
+        }
+        result.points.push((point, pressure_at(profile, t)));
+        if peaks.peek().is_some_and(|knots| knots[0].t == t) {
+            let pressure = peaks
+                .next()
+                .unwrap()
+                .iter()
+                .map(|knot| knot.pressure)
+                .fold(0.0, f64::max);
+            result.stationary_peaks.push(StationaryPeak {
+                sample: (point, pressure),
+                distance: result.length,
+            });
+        }
+    }
+    result
 }
 
 // Recursive bounds carry the original curve, pressure profile, and parameter interval.
@@ -466,13 +560,6 @@ fn ribbon(out: &mut Vec<PathCommand>, samples: &[(Point<f64>, f64)], width: f64)
     circle(out, last.0, pressure_radius(width, last.1));
 }
 
-fn sample_length(samples: &[(Point<f64>, f64)]) -> f64 {
-    samples
-        .windows(2)
-        .map(|pair| (pair[1].0.x - pair[0].0.x).hypot(pair[1].0.y - pair[0].0.y))
-        .sum()
-}
-
 fn interpolate_sample(a: (Point<f64>, f64), b: (Point<f64>, f64), t: f64) -> (Point<f64>, f64) {
     (
         Point::new(a.0.x + (b.0.x - a.0.x) * t, a.0.y + (b.0.y - a.0.y) * t),
@@ -484,15 +571,11 @@ fn interpolate_sample(a: (Point<f64>, f64), b: (Point<f64>, f64), t: f64) -> (Po
 /// curve/radius subdivision must never create thousands of overlapping cap disks.
 fn dash_runs(
     samples: &[(Point<f64>, f64)],
-    width: f64,
+    period: f64,
+    on: f64,
     start_length: f64,
 ) -> Vec<Vec<(Point<f64>, f64)>> {
     let mut runs = Vec::new();
-    if width <= 0.0 {
-        return runs;
-    }
-    let period = width * 4.4;
-    let on = width * 2.0;
     let mut cumulative = start_length;
     let mut active_cycle = None;
     for pair in samples.windows(2) {
@@ -535,14 +618,10 @@ fn dash_runs(
 
 fn dot_samples(
     samples: &[(Point<f64>, f64)],
-    width: f64,
+    period: f64,
     start_length: f64,
 ) -> Vec<(Point<f64>, f64)> {
     let mut dots = Vec::new();
-    if width <= 0.0 {
-        return dots;
-    }
-    let period = width * 2.0;
     let mut at = (start_length / period).ceil() * period;
     let mut cumulative = start_length;
     for pair in samples.windows(2) {
@@ -588,6 +667,268 @@ fn circle(out: &mut Vec<PathCommand>, center: Point<f64>, radius: f64) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    fn stationary_profile(t: f64) -> Vec<PressureKnot> {
+        vec![
+            PressureKnot {
+                t: 0.0,
+                pressure: 0.2,
+            },
+            PressureKnot { t, pressure: 0.2 },
+            PressureKnot { t, pressure: 0.9 },
+            PressureKnot { t, pressure: 0.2 },
+            PressureKnot {
+                t: 1.0,
+                pressure: 0.2,
+            },
+        ]
+    }
+
+    #[test]
+    fn pressure_stationary_dot_keeps_peak_for_every_stroke_pattern() {
+        let start = Point::new(40.0, 100.0);
+        let command = PathCommand::LineTo {
+            point: [40.001, 100.0],
+        };
+        let centerline = PathGeometry::from_commands(
+            1,
+            vec![
+                PathCommand::MoveTo {
+                    point: [start.x, start.y],
+                },
+                command,
+            ],
+            false,
+        );
+        let profile = stationary_profile(0.0);
+        for style in [StrokeStyle::Solid, StrokeStyle::Dashed, StrokeStyle::Dotted] {
+            let geometry = pressure_path_geometry(
+                1,
+                &centerline,
+                std::slice::from_ref(&profile),
+                16.0,
+                style,
+                None,
+                0,
+            );
+            assert!(
+                geometry.canvas_bounds[3] >= start.y + pressure_radius(16.0, 0.9),
+                "{style:?}"
+            );
+            assert!(
+                pressure_segment_hit_test_styled(
+                    start,
+                    command,
+                    &profile,
+                    16.0,
+                    Point::new(start.x, start.y + 9.0),
+                    0.0,
+                    style,
+                    0.0
+                )
+                .0,
+                "{style:?}"
+            );
+            assert!(
+                !pressure_segment_hit_test_styled(
+                    start,
+                    command,
+                    &profile,
+                    16.0,
+                    Point::new(start.x, start.y + 12.0),
+                    0.0,
+                    style,
+                    0.0
+                )
+                .0,
+                "{style:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pressure_stationary_pattern_peaks_respect_global_phase_and_gaps() {
+        let start = Point::default();
+        let command = PathCommand::LineTo {
+            point: [160.0, 0.0],
+        };
+        let centerline = PathGeometry::from_commands(
+            1,
+            vec![PathCommand::MoveTo { point: [0.0, 0.0] }, command],
+            false,
+        );
+        for (style, x, painted) in [
+            (StrokeStyle::Dashed, 16.0, true),
+            (StrokeStyle::Dashed, 48.0, false),
+            (StrokeStyle::Dotted, 32.0, true),
+            (StrokeStyle::Dotted, 16.0, false),
+        ] {
+            let profile = stationary_profile(x / 160.0);
+            let geometry = pressure_path_geometry(
+                1,
+                &centerline,
+                std::slice::from_ref(&profile),
+                16.0,
+                style,
+                None,
+                0,
+            );
+            assert_eq!(geometry.canvas_bounds[3] > 9.0, painted, "{style:?}, x={x}");
+            let query = Point::new(x, 9.0);
+            assert_eq!(
+                pressure_segment_hit_test_styled(
+                    start, command, &profile, 16.0, query, 0.0, style, 0.0
+                )
+                .0,
+                painted,
+                "{style:?}, x={x}"
+            );
+            // Starting this same segment at a different phase reverses peak eligibility.
+            let offset = if style == StrokeStyle::Dashed {
+                35.2
+            } else {
+                16.0
+            };
+            assert_eq!(
+                pressure_segment_hit_test_styled(
+                    start, command, &profile, 16.0, query, 0.0, style, offset
+                )
+                .0,
+                !painted,
+                "offset {style:?}, x={x}"
+            );
+        }
+    }
+
+    #[test]
+    fn pressure_stationary_pattern_peaks_use_curve_arc_length() {
+        // x(t) = 160t^3: the midpoint parameter is at x=20, not half the path length.
+        let command = PathCommand::CubicTo {
+            control_1: [0.0, 0.0],
+            control_2: [0.0, 0.0],
+            end: [160.0, 0.0],
+        };
+        let profile = stationary_profile(0.5);
+        let centerline = PathGeometry::from_commands(
+            1,
+            vec![PathCommand::MoveTo { point: [0.0, 0.0] }, command],
+            false,
+        );
+        let geometry = pressure_path_geometry(
+            1,
+            &centerline,
+            std::slice::from_ref(&profile),
+            10.0,
+            StrokeStyle::Dotted,
+            None,
+            0,
+        );
+        assert!(geometry.canvas_bounds[3] > 6.0);
+        assert!(
+            pressure_segment_hit_test_styled(
+                Point::default(),
+                command,
+                &profile,
+                10.0,
+                Point::new(20.0, 6.0),
+                0.0,
+                StrokeStyle::Dotted,
+                0.0,
+            )
+            .0
+        );
+        assert!(
+            !pressure_segment_hit_test_styled(
+                Point::default(),
+                command,
+                &profile,
+                10.0,
+                Point::new(20.0, 6.0),
+                0.0,
+                StrokeStyle::Dotted,
+                10.0,
+            )
+            .0
+        );
+    }
+
+    #[test]
+    fn pressure_stationary_pattern_peaks_match_incremental_chunk_rebuilds() {
+        for style in [StrokeStyle::Solid, StrokeStyle::Dashed, StrokeStyle::Dotted] {
+            let step = if style == StrokeStyle::Dashed {
+                35.2
+            } else {
+                32.0
+            };
+            let commands = std::iter::once(PathCommand::MoveTo { point: [0.0, 0.0] })
+                .chain((1..=5).map(|i| PathCommand::LineTo {
+                    point: [f64::from(i) * step, 0.0],
+                }))
+                .collect();
+            let centerline = PathGeometry::from_commands(1, commands, false);
+            let mut profiles = vec![
+                vec![
+                    PressureKnot {
+                        t: 0.0,
+                        pressure: 0.2
+                    },
+                    PressureKnot {
+                        t: 1.0,
+                        pressure: 0.2
+                    }
+                ];
+                5
+            ];
+            let before = pressure_path_geometry(1, &centerline, &profiles, 16.0, style, None, 0);
+            profiles[4] = stationary_profile(0.0);
+            let tail =
+                pressure_path_geometry(2, &centerline, &profiles, 16.0, style, Some(&before), 4);
+            let full = pressure_path_geometry(2, &centerline, &profiles, 16.0, style, None, 0);
+            assert_eq!(tail.flattened_commands(), full.flattened_commands());
+            assert!(Arc::ptr_eq(
+                &before.chunks[0].commands,
+                &tail.chunks[0].commands
+            ));
+            assert!(tail.canvas_bounds[3] > 9.0, "{style:?}");
+            assert!(
+                pressure_segment_hit_test_styled(
+                    Point::new(step * 4.0, 0.0),
+                    PathCommand::LineTo {
+                        point: [step * 5.0, 0.0]
+                    },
+                    &profiles[4],
+                    16.0,
+                    Point::new(step * 4.0, 9.0),
+                    0.0,
+                    style,
+                    step * 4.0,
+                )
+                .0,
+                "{style:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pressure_zero_width_preserves_solid_hit_tolerance_and_skips_patterns() {
+        for style in [StrokeStyle::Solid, StrokeStyle::Dashed, StrokeStyle::Dotted] {
+            assert_eq!(
+                pressure_segment_hit_test_styled(
+                    Point::default(),
+                    PathCommand::LineTo { point: [10.0, 0.0] },
+                    &[],
+                    0.0,
+                    Point::new(5.0, 1.0),
+                    2.0,
+                    style,
+                    0.0,
+                )
+                .0,
+                style == StrokeStyle::Solid,
+            );
+        }
+    }
+
     #[test]
     fn pressure_dashes_cap_runs_instead_of_every_sample() {
         let path = PathGeometry::from_commands(
