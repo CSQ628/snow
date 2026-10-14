@@ -792,6 +792,10 @@
             <translation>滑鼠醒目提示預覽</translation>
         </message>
         <message>
+            <source>Mouse highlight radius</source>
+            <translation>滑鼠高亮半徑</translation>
+        </message>
+        <message>
             <source>Mouse trail color</source>
             <translation>滑鼠軌跡顏色</translation>
         </message>
@@ -904,6 +908,10 @@
             <translation>後製效果</translation>
         </message>
         <message>
+            <source>Pressure-sensitive brush</source>
+            <translation>壓感筆刷</translation>
+        </message>
+        <message>
             <source>Print</source>
             <translation>列印</translation>
         </message>
@@ -986,6 +994,10 @@
         <message>
             <source>Redo</source>
             <translation>重做</translation>
+        </message>
+        <message>
+            <source>Regular brush</source>
+            <translation>一般筆刷</translation>
         </message>
         <message>
             <source>Reset</source>
