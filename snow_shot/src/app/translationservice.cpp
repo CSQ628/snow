@@ -297,15 +297,7 @@ void TranslationJob::retry() {
                          m_state == State::Invalidated;
     if (!m_fixedPreferences)
         m_preferences = m_service->preferences();
-    if (!m_languageDetectionAttempted) {
-        QStringList sources;
-        sources.reserve(m_units.size());
-        for (const auto& unit : m_units)
-            sources.append(unit.sourceText);
-        m_languageDetectionAttempted = true;
-        m_detectedLanguage = m_service->m_languageDetector(sources.join(u'\n'));
-    }
-    m_effectiveTargetLanguage = resolveTranslationTarget(m_preferences, m_detectedLanguage);
+    bool hasPendingUnits = false;
     for (auto& unit : m_units) {
         if (changed) {
             unit.text.clear();
@@ -315,7 +307,21 @@ void TranslationJob::retry() {
             unit.state = State::Completed;
         else if (unit.state != State::Completed)
             unit.state = State::Idle;
+        hasPendingUnits |= unit.state == State::Idle;
     }
+    // Detect lazily so unchanged targets and empty jobs avoid joining and analyzing text.
+    // A later retry can enable routing; its first detection still includes every original unit.
+    if (hasPendingUnits && !m_languageDetectionAttempted &&
+        !m_preferences.secondaryTargetLanguage.isEmpty() &&
+        m_preferences.secondaryTargetLanguage != m_preferences.targetLanguage) {
+        QStringList sources;
+        sources.reserve(m_units.size());
+        for (const auto& unit : m_units)
+            sources.append(unit.sourceText);
+        m_languageDetectionAttempted = true;
+        m_detectedLanguage = m_service->m_languageDetector(sources.join(u'\n'));
+    }
+    m_effectiveTargetLanguage = resolveTranslationTarget(m_preferences, m_detectedLanguage);
     m_state = State::WaitingForModels;
     const QPointer<TranslationJob> guard(this);
     emit stateChanged();

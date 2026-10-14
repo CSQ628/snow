@@ -133,6 +133,77 @@ void secondaryTargetsPersistAndReachEveryUnit(const QString& directory) {
             "secondary preference survives storage reload");
 }
 
+void detectionIsDeferredUntilRoutingNeedsIt(const QString& directory) {
+    Server server;
+    SnowShotApiClient client(server.url());
+    ConfigurationStore settings(directory + QStringLiteral("/lazy-detection.json"), true, true,
+                                60000);
+    const QStringList texts{QStringLiteral("Bonjour"),
+                            QStringLiteral("The remaining source text is written in English.")};
+    int detectionCalls = 0;
+    auto& service = TranslationService::forClient(
+        client, settings, QLocale::English, [&](const QString& input) {
+            ++detectionCalls;
+            require(input == texts.join(u'\n'), "deferred detection keeps the complete input");
+            return std::optional<DetectedTranslationLanguage>{{QStringLiteral("eng"), 0.8}};
+        });
+    auto preferences = service.preferences();
+    preferences.modelId = QStringLiteral("general");
+    preferences.targetLanguage = QStringLiteral("en");
+    preferences.secondaryTargetLanguage = QStringLiteral("en");
+    require(service.savePreferences(preferences), "configure identical translation targets");
+    QObject owner;
+    auto* job = service.createJob(texts, &owner);
+    const auto verifyTarget = [&](int count, const QString& target) {
+        waitUntil([&] { return server.streams.size() == count; }, "send lazy-routing units");
+        for (qsizetype index = count - texts.size(); index < count; ++index) {
+            const auto prompt = server.streams[index]
+                                    .body.value(QStringLiteral("messages"))
+                                    .toArray()
+                                    .first()
+                                    .toObject()
+                                    .value(QStringLiteral("content"))
+                                    .toString();
+            require(prompt.contains(QStringLiteral("Target language: %1\n").arg(target)),
+                    "lazy routing sends the concrete target to every unit");
+        }
+    };
+    job->start();
+    verifyTarget(2, QStringLiteral("en"));
+    require(detectionCalls == 0, "identical targets need no language detection");
+    job->cancel();
+    preferences.secondaryTargetLanguage = QStringLiteral("fr");
+    require(service.savePreferences(preferences), "enable target switching before retry");
+    job->retry();
+    verifyTarget(4, QStringLiteral("fr"));
+    require(detectionCalls == 1, "routing first detects when a retry enables switching");
+    job->cancel();
+    preferences.secondaryTargetLanguage = QStringLiteral("en");
+    require(service.savePreferences(preferences), "disable target switching before retry");
+    job->retry();
+    verifyTarget(6, QStringLiteral("en"));
+    job->cancel();
+    preferences.secondaryTargetLanguage = QStringLiteral("fr");
+    require(service.savePreferences(preferences), "re-enable target switching before retry");
+    job->retry();
+    verifyTarget(8, QStringLiteral("fr"));
+    require(detectionCalls == 1, "re-enabled routing reuses the original detection");
+    job->cancel();
+
+    preferences.secondaryTargetLanguage.clear();
+    auto* fixed = service.createJob(texts, preferences, &owner);
+    fixed->start();
+    verifyTarget(10, QStringLiteral("en"));
+    require(detectionCalls == 1, "an absent secondary target needs no detection");
+    fixed->cancel();
+    auto* empty = service.createJob({QString(), QStringLiteral("\t\n")}, &owner);
+    empty->start();
+    empty->retry();
+    require(empty->state() == TranslationJob::State::Completed && detectionCalls == 1 &&
+                server.streams.size() == 10,
+            "empty jobs complete without detection or provider requests");
+}
+
 void completeInputRoutingReachesEveryProviderAndRetries(const QString& directory) {
     const QStringList texts{QStringLiteral("Bonjour"),
                             QStringLiteral("The rest of the complete input is written in English, "
@@ -734,6 +805,7 @@ int main(int argc, char** argv) {
         return 0;
     discoverySharesRequestsAndCancellation(directory.path());
     secondaryTargetsPersistAndReachEveryUnit(directory.path());
+    detectionIsDeferredUntilRoutingNeedsIt(directory.path());
     completeInputRoutingReachesEveryProviderAndRetries(directory.path());
     failedUnitRetryKeepsCompletedInputContext(directory.path());
     customModelsStayAvailableAndInvalidateTogether(directory.path());

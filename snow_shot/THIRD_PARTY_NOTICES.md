@@ -109,6 +109,9 @@ one call and exposes the detected ISO 639-3 language and raw confidence.
 The upstream MIT license and provenance are preserved under
 `licenses/cargo/whatlang-0.18.0/` because the published crate omits its license text.
 The release collector includes its resolved dependency notices.
+macOS installation collects each Rust target's normal and build dependency
+notices using the same target, features, and default-feature policy as compilation.
+Full and Mini collect their own graphs, including the OCR and MCP sidecars.
 Full includes selected-text acquisition and language detection in its unified
 Rust FFI archive; Mini's archive enables neither dependency.
 
