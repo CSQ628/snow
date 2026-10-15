@@ -111,7 +111,8 @@ void contracts(QApplication& app) {
                 "Ziyue Lite is selectable and uses an application ID and masked secret");
         if (preview >= 0 && preview + 1 < app.arguments().size()) {
             QDir output(app.arguments()[preview + 1]);
-            require(modal->grab().save(output.filePath(QStringLiteral("youdao-lite-editor.png"))),
+            require(body->window()->grab().save(
+                        output.filePath(QStringLiteral("youdao-lite-editor.png"))),
                     "save Ziyue Lite configuration preview");
         }
         provider->setCurrentValue(QStringLiteral("baidu"));

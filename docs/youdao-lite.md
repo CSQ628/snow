@@ -42,8 +42,8 @@ Build and run only the affected targets, using a configured preset with tests
 enabled:
 
 ```powershell
-cmake --build --preset build-windows-msvc-debug --target snow-shot-youdao-lite-protocol-tests snow-shot-text-translation-tests snow-shot-text-translation-settings-tests
-ctest --preset test-windows-msvc-debug -R '^snow-shot-(youdao-lite-protocol|text-translation|text-translation-settings)-tests$'
+cmake --build --preset build-windows-msvc-debug --target snow-shot-youdao-lite-protocol-tests snow-shot-text-translation-tests snow-shot-text-translation-settings-tests snow-shot-api-client-tests
+ctest --preset test-windows-msvc-debug -R '^snow-shot-(youdao-lite-protocol|text-translation|text-translation-settings|api-client|api-client-lifetime)-tests$'
 python snow_shot/tests/translation_catalog_tests.py
 ```
 
