@@ -191,11 +191,16 @@ void youdaoLiteStreaming() {
     text.clear();
     const auto index = server.requests.size();
     const int beforeCancellation = completed;
+    bool cancellationDelta = false;
     SnowShotApiClient::RequestToken token = 0;
     token = client.streamTranslation(
         {value.selectionId(), QStringLiteral("en"), QStringLiteral("zh-Hans"),
          QStringLiteral("Cancel me")},
-        &receiver, [&](const QString&) { client.cancel(token); },
+        &receiver,
+        [&](const QString&) {
+            cancellationDelta = true;
+            client.cancel(token);
+        },
         [&](const auto& response) {
             result = response;
             ++completed;
@@ -206,11 +211,13 @@ void youdaoLiteStreaming() {
     server.stream(
         index,
         "data: {\"code\":\"0\",\"successful\":true,\"data\":{\"transIncre\":\"partial\"}}\n\n");
-    waitUntil([&] { return completed == beforeCancellation + 1; },
-              "delta callback can cancel Lite stream");
+    waitUntil(
+        [&] { return cancellationDelta && SnowShotApiClientTestAccess::requests(client) == 0; },
+        "delta callback can cancel Lite stream");
+    flushEvents();
     require(
-        result.cancelled && SnowShotApiClientTestAccess::requests(client) == 0,
-        "reentrant cancellation releases Lite capacity without accessing deleted request state");
+        completed == beforeCancellation && SnowShotApiClientTestAccess::requests(client) == 0,
+        "reentrant cancellation releases Lite capacity and preserves the silent-cancel contract");
 
     const auto boundaryIndex = server.requests.size();
     const int beforeBoundary = completed;
