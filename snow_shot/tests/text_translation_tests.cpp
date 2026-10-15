@@ -224,6 +224,21 @@ void youdaoLiteStreaming() {
     waitUntil([&] { return completed == beforeBoundary + 1; },
               "Unicode boundary request completes");
     require(result.succeeded(), "input limit counts Unicode code points, not UTF-16 units");
+
+    text.clear();
+    const auto burstIndex = server.requests.size();
+    const int beforeBurst = completed;
+    require(submit() != 0, "burst Lite request accepted");
+    waitUntil([&] { return server.requests.size() == burstIndex + 1; },
+              "burst Lite request arrives");
+    const QByteArray frame =
+        "data: {\"code\":\"0\",\"successful\":true,\"data\":{\"transIncre\":\"x\"}}\n\n";
+    server.stream(burstIndex, frame.repeated(257), true);
+    waitUntil([&] { return completed == beforeBurst + 1; },
+              "batched Lite parser drains after HTTP EOF");
+    require(result.succeeded() && text == QString(257, u'x') &&
+                SnowShotApiClientTestAccess::requests(client) == 0,
+            "reply survives queued parser batches and final delta delivery after EOF");
 }
 void persistence() {
     QTemporaryDir directory;

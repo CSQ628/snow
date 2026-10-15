@@ -1953,6 +1953,7 @@ void SnowShotApiClient::finishTranslation(RequestToken token, SnowShotTranslatio
     const QPointer<QNetworkReply> reply = request->reply;
     const bool translation = request->textTranslation;
     const bool custom = request->custom;
+    const bool lite = request->youdaoLite;
     m_customChatQueue.removeAll(token);
     delete request;
     if (translation)
@@ -1964,6 +1965,8 @@ void SnowShotApiClient::finishTranslation(RequestToken token, SnowShotTranslatio
     if (reply != nullptr && reply->isRunning()) {
         reply->abort();
     }
+    if (lite && reply != nullptr)
+        reply->deleteLater();
     if (receiver != nullptr && completion) {
         completion(std::move(result));
     }
@@ -2119,18 +2122,20 @@ void SnowShotApiClient::startTextTranslation(RequestToken token) {
         finishTranslation(token, result);
     });
     timeout->start(kTranslationTimeoutMs);
-    connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
     if (lite) {
         reply->setReadBufferSize(64 * 1024);
         connect(reply, &QIODevice::readyRead, this, [this, token] { drainChatStream(token); });
-        connect(reply, &QNetworkReply::finished, this, [this, token] {
+        connect(reply, &QNetworkReply::finished, this, [this, token, reply] {
             if (auto* pending = m_requests.value(token)) {
                 pending->streamFinished = true;
                 drainChatStream(token);
+            } else {
+                reply->deleteLater();
             }
         });
         return;
     }
+    connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
     auto* response = new snow_shot::network::BoundedNetworkResponse(reply, kMaximumResponseBytes);
     connect(
         reply, &QNetworkReply::finished, this, [this, token, response, provider = config.provider] {
