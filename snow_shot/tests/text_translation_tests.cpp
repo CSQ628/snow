@@ -140,7 +140,7 @@ void youdaoLiteStreaming() {
         QByteArrayLiteral("data: {\"code\":\"0\",\"successful\":true,\"data\":{\"transIncre\":\"") +
         QString::fromUcs4(U"\u4F60\U0001F600").toUtf8() + "\"}}\r\n\r\n";
     // Split in the middle of a UTF-8 code point, not merely between JSON events.
-    const auto split = first.indexOf(char(0xF0)) + 2;
+    const auto split = first.indexOf(QByteArray::fromHex("f0")) + 2;
     server.stream(0, first.left(split));
     flushEvents();
     require(text.isEmpty() && completed == 0, "incomplete UTF-8 frame is buffered");
