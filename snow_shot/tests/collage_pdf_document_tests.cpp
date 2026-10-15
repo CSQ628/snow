@@ -444,6 +444,57 @@ void imageSizePersistence() {
     require(CollageSettingsStore(reopened).readPdf() == settings,
             "the image-size preference survives reopening its disk-backed configuration");
 }
+
+void inactiveDraftPersistence() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "create an inactive-draft configuration fixture");
+    const QString path = temporary.filePath(QStringLiteral("configuration.json"));
+    storage::ConfigurationStore configuration(path, true, true, 60000);
+    CollageSettingsStore store(configuration);
+    const auto previous = store.readPdf();
+    auto draft = previous;
+    draft.paperSize = CollagePdfPaperSize::ImageSize;
+    draft.exportMode = CollagePdfExportMode::PerPage;
+    draft.customWidthMm = std::numeric_limits<qreal>::quiet_NaN();
+    draft.customHeightMm = 0;
+    draft.marginTopMm = draft.marginBottomMm = draft.marginLeftMm = draft.marginRightMm = -1;
+    const QStringList fields{QStringLiteral("paper_size"), QStringLiteral("custom_width_mm"),
+                             QStringLiteral("custom_height_mm"), QStringLiteral("margin_mm"),
+                             QStringLiteral("export_mode")};
+    require(validateCollagePdfSettings(draft).isEmpty() && !store.writePdf(fields, draft) &&
+                store.readPdf() == previous,
+            "page validity never permits an invalid hidden draft or a partial configuration write");
+    const auto ready = CollageSettingsStore::persistablePdfFields(fields, draft);
+    require(ready == QStringList{QStringLiteral("paper_size"), QStringLiteral("export_mode")} &&
+                store.writePdf(ready, draft),
+            "independent valid preferences can persist while invalid fields remain pending");
+    auto expected = previous;
+    expected.paperSize = CollagePdfPaperSize::ImageSize;
+    expected.exportMode = CollagePdfExportMode::PerPage;
+    require(store.readPdf() == expected && std::isnan(draft.customWidthMm) &&
+                draft.marginTopMm == -1,
+            "saving eligible fields preserves both previous hidden preferences and raw drafts");
+    draft.customWidthMm = 180.5;
+    draft.customHeightMm = 260.25;
+    draft.marginTopMm = draft.marginBottomMm = draft.marginLeftMm = draft.marginRightMm = 12.5;
+    require(CollageSettingsStore::persistablePdfFields(fields, draft) == fields &&
+                store.writePdf(fields, draft) && store.readPdf() == draft,
+            "corrected dimensions and uniform margins become eligible together");
+    draft.marginLeftMm = 13;
+    require(!CollageSettingsStore::persistablePdfFields({QStringLiteral("margin_mm")}, draft)
+                    .contains(QStringLiteral("margin_mm")) &&
+                !store.writePdf(QStringLiteral("margin_mm"), draft),
+            "the uniform alias cannot silently persist an unequal margin tuple");
+    draft.orientation = static_cast<CollagePdfOrientation>(-1);
+    require(CollageSettingsStore::persistablePdfFields({QStringLiteral("orientation")}, draft)
+                    .isEmpty() &&
+                !store.writePdf(QStringLiteral("orientation"), draft),
+            "hidden invalid orientations cannot be serialized as a different valid preference");
+    require(configuration.flushNow().success, "persist eligible PDF preferences to disk");
+    storage::ConfigurationStore reopened(path, true, true, 60000);
+    require(CollageSettingsStore(reopened).readPdf() == store.readPdf(),
+            "only admitted PDF preferences survive a fresh configuration read");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -456,6 +507,7 @@ int main(int argc, char** argv) {
         fieldValidationAndLastValidState();
         settingsPersistence();
         imageSizePersistence();
+        inactiveDraftPersistence();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

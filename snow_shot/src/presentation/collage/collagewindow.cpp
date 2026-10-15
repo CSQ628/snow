@@ -12,7 +12,6 @@
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/storage/applicationstorage.h"
-#include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
 #include "snow_shot/storage/pinnedwindowrepository.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
@@ -296,20 +295,8 @@ struct CollageWindow::Impl {
             const auto settings = document->pdfSettings();
             if (!validateCollagePdfSettings(settings).isEmpty())
                 return;
-            QStringList persistable;
-            for (const auto& field : pendingPdfSettingFields) {
-                if (field == QStringLiteral("custom_width_mm") &&
-                    !storage::ConfigurationSchema::normalize(QStringLiteral("collage/pdf_") + field,
-                                                             settings.customWidthMm)
-                         .valid)
-                    continue;
-                if (field == QStringLiteral("custom_height_mm") &&
-                    !storage::ConfigurationSchema::normalize(QStringLiteral("collage/pdf_") + field,
-                                                             settings.customHeightMm)
-                         .valid)
-                    continue;
-                persistable.append(field);
-            }
+            const auto persistable = CollageSettingsStore::persistablePdfFields(
+                pendingPdfSettingFields.values(), settings);
             if (persistable.isEmpty())
                 return;
             if (!CollageSettingsStore(configuration).writePdf(persistable, settings))

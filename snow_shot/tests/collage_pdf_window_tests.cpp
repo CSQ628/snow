@@ -17,6 +17,8 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
+#include <QLabel>
+#include <QLocale>
 #include <QTemporaryDir>
 #include <QThread>
 #include <atomic>
@@ -369,6 +371,118 @@ void uniformMarginReachesPdfExport() {
         "PDF export receives the same shared margin on all four sides and closes after success");
 }
 
+void imageSizeRemembersPreferencesWithInactiveDrafts() {
+    auto& configuration = storage::ApplicationStorage::instance().configuration();
+    CollageSettingsStore store(configuration);
+    const QStringList fields{QStringLiteral("paper_size"),      QStringLiteral("orientation"),
+                             QStringLiteral("custom_width_mm"), QStringLiteral("custom_height_mm"),
+                             QStringLiteral("margin_mm"),       QStringLiteral("export_mode")};
+    CollagePdfSettings baseline;
+    baseline.marginTopMm = baseline.marginBottomMm = baseline.marginLeftMm =
+        baseline.marginRightMm = 16.75;
+    for (const auto& draft : {QStringLiteral(""), QStringLiteral("unfinished"),
+                              QStringLiteral("-0.5"), QStringLiteral("400")}) {
+        require(store.writePdf(fields, baseline), "reset the PDF preferences for each draft");
+        CollageWindow window;
+        prepare(window);
+        auto* paper = control<AdSelect>(window, "collagePdfPaperSize");
+        auto* margin = control<AdLineEdit>(window, "collagePdfMargin");
+        auto* width = control<AdLineEdit>(window, "collagePdfCustomWidth");
+        auto* mode = control<AdSegmented>(window, "collagePdfExportMode");
+        width->setText(QStringLiteral("unfinished"));
+        margin->setText(draft);
+        paper->setCurrentValue(static_cast<int>(CollagePdfPaperSize::ImageSize));
+        mode->setCurrentValue(static_cast<int>(CollagePdfExportMode::PerPage));
+        require(control<AdButton>(window, "collageSave")->isEnabled() && margin->text() == draft &&
+                    width->text() == QStringLiteral("unfinished") && status(window).isEmpty(),
+                "inactive drafts neither block Image Size export nor produce persistence errors");
+        {
+            CollageWindow reopened;
+            const auto settings = reopened.document()->pdfSettings();
+            require(settings.paperSize == CollagePdfPaperSize::ImageSize &&
+                        settings.exportMode == CollagePdfExportMode::PerPage &&
+                        settings.customWidthMm == baseline.customWidthMm &&
+                        uniformMargins(settings, draft == QStringLiteral("400") ? 400 : 16.75),
+                    "Image Size and export mode persist while invalid hidden fields retain their "
+                    "previous stored values");
+            reopened.shutdown();
+        }
+        paper->setCurrentValue(static_cast<int>(CollagePdfPaperSize::A4));
+        require(!control<AdButton>(window, "collageSave")->isEnabled() && margin->text() == draft,
+                "returning to paper sizing restores validation of the untouched margin draft");
+        mode->setCurrentValue(static_cast<int>(CollagePdfExportMode::Combined));
+        margin->setText(QStringLiteral("11.625"));
+        require(store.readPdf().paperSize == CollagePdfPaperSize::A4 &&
+                    store.readPdf().exportMode == CollagePdfExportMode::Combined &&
+                    uniformMargins(store.readPdf(), 11.625) &&
+                    width->text() == QStringLiteral("unfinished"),
+                "correcting the margin persists deferred active edits without losing another "
+                "inactive draft");
+        window.shutdown();
+    }
+}
+
+void imageSizeFooterTracksSelectedPage() {
+    CollageWindow window;
+    window.present();
+    window.editor()->setLocale(QLocale::c());
+    auto& document = *window.document();
+    QImage tall({960, 1920}, QImage::Format_RGB32);
+    tall.fill(Qt::red);
+    QImage wide({192, 96}, QImage::Format_RGB32);
+    wide.fill(Qt::blue);
+    const auto first = document.append(tall, QStringLiteral("tall.png"));
+    const auto second = document.append(wide, QStringLiteral("wide.png"));
+    require(first && second, "image-sized footer sources import");
+    document.setOutputType(CollageOutputType::PdfDocument);
+    CollagePdfSettings settings;
+    settings.paperSize = CollagePdfPaperSize::ImageSize;
+    document.setPdfSettings(settings);
+    auto* dimensions = control<QLabel>(window, "collageOutputDimensions");
+    auto* total = control<QLabel>(window, "collageImageTotal");
+    require(dimensions->isVisible() && dimensions->text() == QStringLiteral("254 × 508 mm") &&
+                total->text() == QStringLiteral("Total: 2 pages"),
+            "Image Size describes the selected original at 96 DPI instead of a placeholder");
+    document.select(second);
+    require(dimensions->text() == QStringLiteral("50.8 × 25.4 mm"),
+            "selecting another page updates its physical dimensions immediately");
+    require(
+        document.rotate(second, true) && dimensions->text() == QStringLiteral("25.4 × 50.8 mm") &&
+            document.moveItem(second, 0) && dimensions->text() == QStringLiteral("25.4 × 50.8 mm"),
+        "image-sized dimensions follow transforms and preserve the selected page on reorder");
+    document.select(0);
+    require(dimensions->isHidden() && dimensions->text().isEmpty() &&
+                total->text() == QStringLiteral("Total: 2 pages"),
+            "image-sized output hides dimensions when no page is selected");
+    document.select(first);
+    require(dimensions->text() == QStringLiteral("254 × 508 mm") && document.remove(first) &&
+                dimensions->text() == QStringLiteral("25.4 × 50.8 mm"),
+            "removing the selected page describes its surviving selected neighbor");
+    settings.paperSize = CollagePdfPaperSize::A4;
+    settings.orientation = CollagePdfOrientation::Landscape;
+    document.setPdfSettings(settings);
+    document.select(0);
+    require(dimensions->isVisible() && dimensions->text() == QStringLiteral("297 × 210 mm"),
+            "standard paper describes the document independently of page selection");
+    settings.marginTopMm = 300;
+    document.setPdfSettings(settings);
+    require(dimensions->text() == QStringLiteral("297 × 210 mm"),
+            "invalid paper drafts keep the dimensions of the last valid preview");
+    document.setOutputType(CollageOutputType::StaticImage);
+    require(dimensions->text().endsWith(QStringLiteral(" px")),
+            "returning to static output restores pixel dimensions");
+    document.setOutputType(CollageOutputType::PdfDocument);
+    require(dimensions->text() == QStringLiteral("297 × 210 mm"),
+            "returning to PDF restores physical dimensions");
+    settings.paperSize = CollagePdfPaperSize::ImageSize;
+    document.setPdfSettings(settings);
+    document.clear();
+    require(dimensions->isHidden() && dimensions->text().isEmpty() &&
+                total->text() == QStringLiteral("Total: 0 pages"),
+            "an empty image-sized document never displays fictional page dimensions");
+    window.shutdown();
+}
+
 void nativeDestinationDialog() {
     CollageWindow window;
     prepare(window);
@@ -411,6 +525,8 @@ int main(int argc, char* argv[]) {
         cancellationWaitsForCleanup();
         partialFailureReportsAndRetryCloses();
         invalidSettingsAndPreferencePersistence();
+        imageSizeRemembersPreferencesWithInactiveDrafts();
+        imageSizeFooterTracksSelectedPage();
         uniformMarginReachesPdfExport();
         nativeDestinationDialog();
         waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },

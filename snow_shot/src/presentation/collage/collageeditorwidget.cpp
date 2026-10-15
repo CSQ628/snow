@@ -1485,6 +1485,27 @@ struct CollageEditorWidget::Impl {
             canvas->fitToCanvas();
         emit owner->settingsEdited(field);
     }
+    void refreshPdfDescription() {
+        const auto settings = document->lastValidPdfSettings();
+        QSize pixels(1, 1);
+        if (settings.paperSize == CollagePdfPaperSize::ImageSize) {
+            const auto& items = document->items();
+            const auto selected =
+                std::find_if(items.cbegin(), items.cend(), [this](const auto& item) {
+                    return item.id == document->selectedId();
+                });
+            pixels = selected == items.cend() ? QSize{} : transformedSize(*selected);
+        }
+        const auto page = calculateCollagePdfPageLayout(pixels, settings);
+        dimensions->setText(
+            page.isValid()
+                ? text("%1 × %2 mm")
+                      .arg(owner->locale().toString(page.pageMillimeters.width(), 'g', 6))
+                      .arg(owner->locale().toString(page.pageMillimeters.height(), 'g', 6))
+                : QString{});
+        dimensions->setVisible(page.isValid());
+        total->setText(text("Total: %1 pages").arg(document->items().size()));
+    }
     void refresh(bool force = false) {
         syncing = true;
         const bool pdf = document->outputType() == CollageOutputType::PdfDocument;
@@ -1501,14 +1522,7 @@ struct CollageEditorWidget::Impl {
             thumbnailRow->hide();
             emptyState->hide();
             dropHint->hide();
-            const auto page =
-                calculateCollagePdfPageLayout({1, 1}, document->lastValidPdfSettings());
-            dimensions->setText(
-                text("%1 × %2 mm")
-                    .arg(owner->locale().toString(page.pageMillimeters.width(), 'g', 6))
-                    .arg(owner->locale().toString(page.pageMillimeters.height(), 'g', 6)));
-            dimensions->show();
-            total->setText(text("Total: %1 pages").arg(document->items().size()));
+            refreshPdfDescription();
             syncing = false;
             enabled();
             return;
@@ -1979,6 +1993,8 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     });
     connect(document, &CollageDocument::changed, this, [this] { m_impl->refresh(); });
     connect(document, &CollageDocument::selectionChanged, this, [this] {
+        if (m_impl->document->outputType() == CollageOutputType::PdfDocument)
+            m_impl->refreshPdfDescription();
         const auto selected = m_impl->document->selectedId();
         if (auto* thumbnail = m_impl->thumbnailById.value(m_impl->selectedThumbnail))
             thumbnail->update();

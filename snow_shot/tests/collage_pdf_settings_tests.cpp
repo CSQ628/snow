@@ -427,14 +427,16 @@ void sidebarModesAndSelectedTransforms() {
             "PDF transform controls edit shared transformations without replacing originals or "
             "static settings");
     editor.setExportBusy(true);
-    require(!toolbar->isVisible(), "export hides the selected-page floating toolbar");
+    require(toolbar->isVisible() &&
+                control<AdButton>(editor, "collagePdfPreviewImage")->isEnabled(),
+            "export keeps the selected-page toolbar available for original-image preview");
     for (const auto* name : transforms)
         require(!control<AdButton>(editor, name)->isEnabled(),
                 "export locks selected-page transformations");
     require(!output->isEnabled() && !control<AdLineEdit>(editor, "collagePdfMargin")->isEnabled(),
             "export locks both output mode and PDF form edits");
     editor.setExportBusy(false);
-    require(toolbar->isVisible(), "the selected-page toolbar returns after export");
+    require(toolbar->isVisible(), "the selected-page toolbar remains available after export");
     document.select(0);
     require(!toolbar->isVisible(), "the selected-page toolbar hides when selection is cleared");
     for (const auto* name : transforms)
