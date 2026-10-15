@@ -92,7 +92,139 @@ class HttpServer : public QObject {
             QByteArray::number(bytes.size()) + "\r\n\r\n" + bytes);
         socket->disconnectFromHost();
     }
+    void stream(qsizetype index, const QByteArray& bytes, bool finish = false) {
+        auto socket = requests[index].socket;
+        require(socket && socket->state() == QAbstractSocket::ConnectedState,
+                "stream socket connected");
+        if (!socket->property("streaming").toBool()) {
+            socket->setProperty("streaming", true);
+            socket->write(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");
+        }
+        socket->write(bytes);
+        socket->flush();
+        if (finish)
+            socket->disconnectFromHost();
+    }
 };
+
+void youdaoLiteStreaming() {
+    HttpServer server;
+    SnowShotApiClient client(QString{});
+    auto value = config(server.url(), QStringLiteral("youdao-lite"));
+    value.concurrency = 1;
+    client.setTextTranslationConfigurations({value});
+    QObject receiver;
+    QString text;
+    int completed = 0;
+    SnowShotTranslationResult result;
+    auto submit = [&](const QString& input = QStringLiteral("Hello + &")) {
+        return client.streamTranslation(
+            {value.selectionId(), QStringLiteral("auto"), QStringLiteral("zh-Hans"), input},
+            &receiver, [&](const QString& delta) { text += delta; },
+            [&](const auto& response) {
+                result = response;
+                ++completed;
+            });
+    };
+    require(submit() != 0, "Lite request accepted");
+    waitUntil([&] { return server.requests.size() == 1; }, "Lite request arrives");
+    const auto& request = server.requests.first();
+    const QUrlQuery form(QString::fromUtf8(request.body));
+    require(request.headers.contains("text/event-stream") &&
+                form.queryItemValue(QStringLiteral("handleOption")) == QStringLiteral("3") &&
+                form.queryItemValue(QStringLiteral("i"), QUrl::FullyDecoded) ==
+                    QStringLiteral("Hello + &"),
+            "native Lite request rather than NMT or OpenAI protocol");
+    const QByteArray first =
+        QByteArrayLiteral("data: {\"code\":\"0\",\"successful\":true,\"data\":{\"transIncre\":\"") +
+        QString::fromUcs4(U"\u4F60\U0001F600").toUtf8() + "\"}}\r\n\r\n";
+    // Split in the middle of a UTF-8 code point, not merely between JSON events.
+    const auto split = first.indexOf(char(0xF0)) + 2;
+    server.stream(0, first.left(split));
+    flushEvents();
+    require(text.isEmpty() && completed == 0, "incomplete UTF-8 frame is buffered");
+    server.stream(0, first.mid(split));
+    waitUntil([&] { return !text.isEmpty(); }, "Lite delta delivered before HTTP EOF");
+    require(completed == 0 && text == QString::fromUcs4(U"\u4F60\U0001F600"),
+            "first delta streams without waiting for completion");
+    server.stream(0,
+                  ": heartbeat\n\ndata: "
+                  "{\"code\":\"0\",\"successful\":true,\"data\":{\"transIncre\":\"!\"}}\n\n",
+                  true);
+    waitUntil([&] { return completed == 1; }, "clean native EOF completes");
+    require(result.succeeded() && text.endsWith(u'!') &&
+                SnowShotApiClientTestAccess::requests(client) == 0,
+            "Lite does not require an OpenAI DONE sentinel and frees its queue slot");
+
+    const QList<QByteArray> failures{
+        "data: {\"code\":\"202\",\"message\":\"fixture-secret\"}\n\n",
+        "data: {\"code\":\"411\"}\n\n",
+        "data: {\"code\":\"0\",\"successful\":true,\"data\":{\"transIncre\":42}}\n\n",
+        "data: invalid\n\n",
+        "data: [DONE]\n\n",
+        "data: {\"code\":\"0\"}",
+        "{\"code\":\"202\",\"message\":\"fixture-secret\"}",
+        ""};
+    for (const auto& failure : failures) {
+        text.clear();
+        const int before = completed;
+        const auto index = server.requests.size();
+        require(submit() != 0, "next Lite request accepted");
+        waitUntil([&] { return server.requests.size() == index + 1; }, "Lite failure arrives");
+        server.stream(index, failure, true);
+        waitUntil([&] { return completed == before + 1; }, "Lite failure completes");
+        require(!result.succeeded() && text.isEmpty() &&
+                    !result.error.contains(QStringLiteral("fixture-secret")) &&
+                    SnowShotApiClientTestAccess::requests(client) == 0,
+                "native failures release capacity without publishing text or secrets");
+        if (failure.contains("411"))
+            require(result.httpStatus == 429, "Lite throttle maps to HTTP 429");
+    }
+    const auto sent = server.requests.size();
+    const int before = completed;
+    require(submit(QString(5001, u'a')) != 0, "oversized input completes asynchronously");
+    waitUntil([&] { return completed == before + 1; }, "Lite input limit reported");
+    require(!result.succeeded() && server.requests.size() == sent,
+            "over 5000 Unicode code points are rejected before sending");
+
+    text.clear();
+    const auto index = server.requests.size();
+    const int beforeCancellation = completed;
+    SnowShotApiClient::RequestToken token = 0;
+    token = client.streamTranslation(
+        {value.selectionId(), QStringLiteral("en"), QStringLiteral("zh-Hans"),
+         QStringLiteral("Cancel me")},
+        &receiver, [&](const QString&) { client.cancel(token); },
+        [&](const auto& response) {
+            result = response;
+            ++completed;
+        });
+    require(token != 0, "cancelable Lite request accepted");
+    waitUntil([&] { return server.requests.size() == index + 1; },
+              "cancelable Lite request arrives");
+    server.stream(
+        index,
+        "data: {\"code\":\"0\",\"successful\":true,\"data\":{\"transIncre\":\"partial\"}}\n\n");
+    waitUntil([&] { return completed == beforeCancellation + 1; },
+              "delta callback can cancel Lite stream");
+    require(
+        result.cancelled && SnowShotApiClientTestAccess::requests(client) == 0,
+        "reentrant cancellation releases Lite capacity without accessing deleted request state");
+
+    const auto boundaryIndex = server.requests.size();
+    const int beforeBoundary = completed;
+    require(submit(QString::fromUcs4(U"\U0001F600").repeated(5000)) != 0,
+            "5000 supplementary code points are accepted");
+    waitUntil([&] { return server.requests.size() == boundaryIndex + 1; },
+              "Unicode boundary request sent");
+    server.stream(boundaryIndex,
+                  "data: {\"code\":\"0\",\"successful\":true,\"data\":{\"transIncre\":\"ok\"}}\n\n",
+                  true);
+    waitUntil([&] { return completed == beforeBoundary + 1; },
+              "Unicode boundary request completes");
+    require(result.succeeded(), "input limit counts Unicode code points, not UTF-16 units");
+}
 void persistence() {
     QTemporaryDir directory;
     auto value = config(QStringLiteral("http://localhost/custom/?a=1%2B2"));
@@ -523,6 +655,7 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     persistence();
     protocols();
+    youdaoLiteStreaming();
     providerFailures();
     queueAndJobs();
     unavailableCatalog();

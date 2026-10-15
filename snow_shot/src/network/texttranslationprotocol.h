@@ -7,6 +7,22 @@
 #include <optional>
 
 namespace snow_shot::text_translation {
+inline bool isYoudaoLite(const QString& provider) {
+    return provider == QStringLiteral("youdao-lite");
+}
+
+// Only expose short numeric provider codes, never arbitrary response text or credentials.
+inline QString youdaoCode(const QJsonObject& object) {
+    const auto value = object.value(QStringLiteral("code"));
+    const QString code = value.isString() ? value.toString() : QString();
+    if (code.isEmpty() || code.size() > 16)
+        return {};
+    for (const auto character : code)
+        if (character < u'0' || character > u'9')
+            return {};
+    return code;
+}
+
 inline std::optional<QString> language(const QString& provider, const QString& code, bool target) {
     const QStringList codes{
         QStringLiteral("auto"),   QStringLiteral("ar"), QStringLiteral("de"),
@@ -58,10 +74,12 @@ inline QByteArray body(const TextTranslationConfiguration& config,
             object.insert(QStringLiteral("source_lang"), *source);
         return QJsonDocument(object).toJson(QJsonDocument::Compact);
     }
-    QList<QPair<QString, QString>> fields{{QStringLiteral("q"), request.text},
-                                          {QStringLiteral("from"), *source},
-                                          {QStringLiteral("to"), *target},
-                                          {QStringLiteral("salt"), salt}};
+    const bool lite = isYoudaoLite(config.provider);
+    QList<QPair<QString, QString>> fields{
+        {lite ? QStringLiteral("i") : QStringLiteral("q"), request.text},
+        {QStringLiteral("from"), *source},
+        {QStringLiteral("to"), *target},
+        {QStringLiteral("salt"), salt}};
     if (config.provider == QStringLiteral("baidu")) {
         fields.append({QStringLiteral("appid"), config.applicationId});
         fields.append(
@@ -79,7 +97,12 @@ inline QByteArray body(const TextTranslationConfiguration& config,
         fields.append({QStringLiteral("appKey"), config.applicationId});
         fields.append({QStringLiteral("signType"), QStringLiteral("v3")});
         fields.append({QStringLiteral("curtime"), timestamp});
-        fields.append({QStringLiteral("strict"), QStringLiteral("true")});
+        if (lite) {
+            fields.append({QStringLiteral("handleOption"), QStringLiteral("3")});
+            fields.append({QStringLiteral("streamType"), QStringLiteral("increment")});
+        } else {
+            fields.append({QStringLiteral("strict"), QStringLiteral("true")});
+        }
         fields.append({QStringLiteral("sign"),
                        QString::fromLatin1(
                            digest(config.applicationId + input + salt + timestamp + config.apiKey,
@@ -100,6 +123,27 @@ struct Response {
     bool valid = false;
     bool throttled = false;
 };
+
+inline Response parseYoudaoLiteEvent(const QJsonObject& object) {
+    Response result;
+    const auto code = youdaoCode(object);
+    if (code.isEmpty())
+        return result;
+    if (code != QStringLiteral("0")) {
+        result.code = code;
+        result.throttled = code == QStringLiteral("411") || code == QStringLiteral("412") ||
+                           code == QStringLiteral("429");
+        return result;
+    }
+    const auto content =
+        object.value(QStringLiteral("data")).toObject().value(QStringLiteral("transIncre"));
+    if (!object.value(QStringLiteral("successful")).toBool() || !content.isString())
+        return result;
+    result.text = content.toString();
+    result.valid = true;
+    return result;
+}
+
 inline Response parse(const QString& provider, const QByteArray& bytes) {
     Response result;
     const auto document = QJsonDocument::fromJson(bytes);

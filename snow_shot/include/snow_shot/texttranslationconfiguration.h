@@ -74,7 +74,8 @@ inline TextTranslationConfigurations textTranslationConfigurationsFromJson(const
             concurrency};
         const bool providerValid = value.provider == QStringLiteral("deepl") ||
                                    value.provider == QStringLiteral("baidu") ||
-                                   value.provider == QStringLiteral("youdao");
+                                   value.provider == QStringLiteral("youdao") ||
+                                   value.provider == QStringLiteral("youdao-lite");
         if (!typesValid || !providerValid || QUuid(value.id).isNull() ||
             QUuid(value.id).toString(QUuid::WithoutBraces) != value.id || value.name.isEmpty() ||
             !validTranslationEndpoint(value.endpoint) || concurrency < 1 || concurrency > 16 ||

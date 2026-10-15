@@ -104,6 +104,18 @@ void contracts(QApplication& app) {
         provider->setCurrentValue(QStringLiteral("baidu"));
         settle();
         require(applicationId->isVisible(), "Baidu shows application ID");
+        provider->setCurrentValue(QStringLiteral("youdao-lite"));
+        settle();
+        require(provider->currentValue().toString() == QStringLiteral("youdao-lite") &&
+                    applicationId->isVisible() && !secret->textVisible(),
+                "Ziyue Lite is selectable and uses an application ID and masked secret");
+        if (preview >= 0 && preview + 1 < app.arguments().size()) {
+            QDir output(app.arguments()[preview + 1]);
+            require(modal->grab().save(output.filePath(QStringLiteral("youdao-lite-editor.png"))),
+                    "save Ziyue Lite configuration preview");
+        }
+        provider->setCurrentValue(QStringLiteral("baidu"));
+        settle();
         name->setText(QStringLiteral("My translator"));
         url->setText(QStringLiteral("http://localhost:7777/custom?route=1"));
         secret->setText(QStringLiteral("secret"));

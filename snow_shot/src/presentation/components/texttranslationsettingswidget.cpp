@@ -169,10 +169,12 @@ void TextTranslationSettingsWidget::rebuild(bool force) {
         layout->setContentsMargins(12, 8, 12, 8);
         layout->setSpacing(4);
         layout->addWidget(new ConfigurationNameLabel(model.name, row));
-        auto* tag = new AdTag(model.provider == QStringLiteral("deepl")   ? tr("DeepL")
-                              : model.provider == QStringLiteral("baidu") ? tr("Baidu")
-                                                                          : tr("Youdao"),
-                              row);
+        auto* tag =
+            new AdTag(model.provider == QStringLiteral("deepl")         ? tr("DeepL")
+                      : model.provider == QStringLiteral("baidu")       ? tr("Baidu")
+                      : model.provider == QStringLiteral("youdao-lite") ? tr("Youdao Ziyue Lite")
+                                                                        : tr("Youdao"),
+                      row);
         layout->addWidget(tag);
         layout->addStretch(1);
         const QStringList labels{tr("Edit"), tr("Delete"), tr("Copy")};
@@ -511,8 +513,8 @@ void TextTranslationSettingsWidget::translateModal() {
         const QSignalBlocker blocker(m_provider);
         QVector<AdComboBox::Option> options;
         const QStringList ids{QStringLiteral("deepl"), QStringLiteral("baidu"),
-                              QStringLiteral("youdao")};
-        const QStringList names{tr("DeepL"), tr("Baidu"), tr("Youdao")};
+                              QStringLiteral("youdao"), QStringLiteral("youdao-lite")};
+        const QStringList names{tr("DeepL"), tr("Baidu"), tr("Youdao"), tr("Youdao Ziyue Lite")};
         for (int i = 0; i < ids.size(); ++i) {
             AdComboBox::Option option;
             option.value = ids[i];

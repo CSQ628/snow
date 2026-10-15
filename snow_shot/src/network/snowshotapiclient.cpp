@@ -529,6 +529,7 @@ struct SnowShotApiClient::Request {
     QByteArray pendingBody;
     bool custom = false;
     bool textTranslation = false;
+    bool youdaoLite = false;
     SnowShotTranslationRequest translationInput;
     QString format;
 };
@@ -1628,6 +1629,12 @@ void SnowShotApiClient::drainChatStream(RequestToken token) {
             }
         }
         if (data == "[DONE]") {
+            if (current->youdaoLite) {
+                SnowShotTranslationResult result;
+                result.error = tr("Invalid translation stream response");
+                finishTranslation(token, std::move(result));
+                return;
+            }
             if (current->absoluteDeadline && current->streamDone) {
                 SnowShotTranslationResult result;
                 result.error = tr("Invalid model stream response");
@@ -1649,13 +1656,22 @@ void SnowShotApiClient::drainChatStream(RequestToken token) {
         if (eventName == "error" || object.value(QStringLiteral("error")).isObject()) {
             current->streamFailed = true;
             SnowShotTranslationResult result;
-            result.error = problemDetail(object);
+            result.error = current->youdaoLite ? tr("Translation failed") : problemDetail(object);
             if (result.error.isEmpty()) {
                 result.error = current->absoluteDeadline ? tr("Image recognition failed")
                                : current->imageResponse  ? tr("Image conversion failed")
                                                          : tr("Translation failed");
             }
-            result.code = object.value(QStringLiteral("code")).toVariant().toString();
+            result.code = current->youdaoLite
+                              ? snow_shot::text_translation::youdaoCode(object)
+                              : object.value(QStringLiteral("code")).toVariant().toString();
+            if (current->youdaoLite) {
+                result.httpStatus =
+                    current->reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                if (result.code == QStringLiteral("411") || result.code == QStringLiteral("412") ||
+                    result.code == QStringLiteral("429"))
+                    result.httpStatus = 429;
+            }
             finishTranslation(token, std::move(result));
             return;
         }
@@ -1670,7 +1686,29 @@ void SnowShotApiClient::drainChatStream(RequestToken token) {
             return;
         }
         QString content;
-        for (const QJsonValue& choice : object.value(QStringLiteral("choices")).toArray()) {
+        if (current->youdaoLite) {
+            const auto parsed = snow_shot::text_translation::parseYoudaoLiteEvent(object);
+            if (!parsed.valid) {
+                SnowShotTranslationResult result;
+                result.code = parsed.code;
+                result.httpStatus =
+                    parsed.throttled
+                        ? 429
+                        : current->reply->attribute(QNetworkRequest::HttpStatusCodeAttribute)
+                              .toInt();
+                result.error = parsed.code.isEmpty()
+                                   ? tr("Invalid translation stream response")
+                                   : tr("Translation service request failed (HTTP %1, code %2).")
+                                         .arg(result.httpStatus)
+                                         .arg(result.code);
+                finishTranslation(token, std::move(result));
+                return;
+            }
+            content = parsed.text;
+        }
+        for (const QJsonValue& choice : current->youdaoLite
+                                            ? QJsonArray{}
+                                            : object.value(QStringLiteral("choices")).toArray()) {
             const QString reason =
                 choice.toObject().value(QStringLiteral("finish_reason")).toString();
             if (current->imageResponse && !reason.isEmpty() && reason != QStringLiteral("stop")) {
@@ -1731,6 +1769,26 @@ void SnowShotApiClient::completeChatStream(RequestToken token) {
     auto* reply = current->reply.data();
     SnowShotTranslationResult result;
     result.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (current->youdaoLite) {
+        result.code = snow_shot::text_translation::youdaoCode(
+            QJsonDocument::fromJson(current->streamBuffer).object());
+        if (result.code == QStringLiteral("0"))
+            result.code.clear();
+        if (result.code == QStringLiteral("411") || result.code == QStringLiteral("412") ||
+            result.code == QStringLiteral("429"))
+            result.httpStatus = 429;
+        if (reply->error() != QNetworkReply::NoError || result.httpStatus >= 400 ||
+            !result.code.isEmpty()) {
+            result.error = tr("Translation service request failed (HTTP %1, code %2).")
+                               .arg(result.httpStatus)
+                               .arg(result.code.isEmpty() ? QStringLiteral("-") : result.code);
+        } else if (!current->hasContent || !current->streamBuffer.trimmed().isEmpty()) {
+            // Unlike chat completions, this API ends with a clean HTTP EOF, not [DONE].
+            result.error = tr("Invalid translation stream response");
+        }
+        finishTranslation(token, std::move(result));
+        return;
+    }
     if (reply->error() != QNetworkReply::NoError) {
         QJsonObject problem = QJsonDocument::fromJson(current->streamBuffer).object();
         if (problem.value(QStringLiteral("error")).isObject())
@@ -2017,6 +2075,13 @@ void SnowShotApiClient::startTextTranslation(RequestToken token) {
         return;
     }
     const auto config = *configuration;
+    const bool lite = snow_shot::text_translation::isYoudaoLite(config.provider);
+    if (lite && state->translationInput.text.toStdU32String().size() > 5000) {
+        SnowShotTranslationResult result;
+        result.error = tr("The text is too large to translate.");
+        finishTranslation(token, std::move(result));
+        return;
+    }
     const QByteArray body = snow_shot::text_translation::body(
         config, state->translationInput, QUuid::createUuid().toString(QUuid::WithoutBraces),
         QString::number(QDateTime::currentSecsSinceEpoch()));
@@ -2038,13 +2103,13 @@ void SnowShotApiClient::startTextTranslation(RequestToken token) {
                       config.provider == QStringLiteral("deepl")
                           ? QStringLiteral("application/json")
                           : QStringLiteral("application/x-www-form-urlencoded"));
-    request.setRawHeader("Accept", "application/json");
+    request.setRawHeader("Accept", lite ? "text/event-stream" : "application/json");
     if (config.provider == QStringLiteral("deepl") && !config.apiKey.isEmpty())
         request.setRawHeader("Authorization", "DeepL-Auth-Key " + config.apiKey.toUtf8());
     state->transport.start();
     auto* reply = networkAccessManager()->post(request, body);
     state->retainReply(reply);
-    auto* response = new snow_shot::network::BoundedNetworkResponse(reply, kMaximumResponseBytes);
+    state->youdaoLite = lite;
     auto* timeout = new QTimer(this);
     timeout->setSingleShot(true);
     state->timeout = timeout;
@@ -2055,6 +2120,18 @@ void SnowShotApiClient::startTextTranslation(RequestToken token) {
     });
     timeout->start(kTranslationTimeoutMs);
     connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
+    if (lite) {
+        reply->setReadBufferSize(64 * 1024);
+        connect(reply, &QIODevice::readyRead, this, [this, token] { drainChatStream(token); });
+        connect(reply, &QNetworkReply::finished, this, [this, token] {
+            if (auto* pending = m_requests.value(token)) {
+                pending->streamFinished = true;
+                drainChatStream(token);
+            }
+        });
+        return;
+    }
+    auto* response = new snow_shot::network::BoundedNetworkResponse(reply, kMaximumResponseBytes);
     connect(
         reply, &QNetworkReply::finished, this, [this, token, response, provider = config.provider] {
             auto* pending = m_requests.value(token);

@@ -2510,6 +2510,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-text-translation-tests COMMAND snow-shot-text-translation-tests)
     set_tests_properties(snow-shot-text-translation-tests PROPERTIES LABELS "unit" TIMEOUT 60)
 
+    add_executable(snow-shot-youdao-lite-protocol-tests tests/youdao_lite_protocol_tests.cpp)
+    target_link_libraries(snow-shot-youdao-lite-protocol-tests PRIVATE Qt6::Core Qt6::Gui Qt6::Network)
+    target_include_directories(snow-shot-youdao-lite-protocol-tests PRIVATE include)
+    add_test(NAME snow-shot-youdao-lite-protocol-tests COMMAND snow-shot-youdao-lite-protocol-tests)
+    set_tests_properties(snow-shot-youdao-lite-protocol-tests PROPERTIES LABELS "unit" TIMEOUT 30)
+
     add_executable(snow-shot-custom-ai-models-tests tests/custom_ai_models_tests.cpp
         src/presentation/services/screenshotclipboardservice.cpp)
     target_link_libraries(snow-shot-custom-ai-models-tests PRIVATE snow_shot_settings ant_design_qt Qt6::Widgets Qt6::Network)

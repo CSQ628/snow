@@ -5234,6 +5234,10 @@ Unavailable: %2</source>
             <source>Youdao</source>
             <translation>有道</translation>
         </message>
+        <message>
+            <source>Youdao Ziyue Lite</source>
+            <translation>有道子曰 Lite</translation>
+        </message>
     </context>
     <context>
         <name>snow_shot::presentation::GlobalMouseManager</name>
