@@ -4180,11 +4180,12 @@ bool ScreenshotToolPalette::handleToolbarWheel(QWheelEvent* event) {
         m_backgroundOpacityEditor->isVisible() &&
         m_backgroundOpacityEditor->rect().contains(
             m_backgroundOpacityEditor->mapFromGlobal(event->globalPosition().toPoint()))) {
-        const int percent = std::clamp(m_backgroundOpacityPercent + direction, 0, 100);
+        const int opacityDelta = direction * 10;
+        const int percent = std::clamp(m_backgroundOpacityPercent + opacityDelta, 0, 100);
         if (percent != m_backgroundOpacityPercent) {
             setSelectionBackgroundOpacityState(percent, m_backgroundOpacityAvailable);
         }
-        emit selectionBackgroundOpacityWheelAdjusted(direction);
+        emit selectionBackgroundOpacityWheelAdjusted(opacityDelta);
         event->accept();
         return true;
     }
@@ -4193,8 +4194,8 @@ bool ScreenshotToolPalette::handleToolbarWheel(QWheelEvent* event) {
         m_layoutSpacingEditor->rect().contains(
             m_layoutSpacingEditor->mapFromGlobal(event->globalPosition().toPoint()))) {
         auto options = m_layoutCompaction;
-        options.spacing =
-            std::clamp(options.spacing + direction, 0, ScreenshotLayoutCompaction::maximumSpacing);
+        options.spacing = std::clamp(options.spacing + direction * 5, 0,
+                                     ScreenshotLayoutCompaction::maximumSpacing);
         if (options != m_layoutCompaction) {
             setLayoutCompactionState(options, m_layoutCompactionAvailable,
                                      m_layoutCompactionCanvasUsesPoints);
@@ -9029,8 +9030,8 @@ void ScreenshotToolPalette::createMoveActionFamily() {
     addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
     m_layoutSpacingEditor = createScreenshotToolPaletteIconNumericValueButton(
         m_moveActionControls, QT_TR_NOOP("Layout spacing (scroll to adjust; click to reset to 0)"),
-        custom_outlined_icons::LayoutSpacing(), m_layoutCompaction.spacing,
-        QStringLiteral("1000dp"), actionButtonMetrics(m_physicalScale));
+        custom_outlined_icons::LayoutSpacing(), m_layoutCompaction.spacing, QStringLiteral("100dp"),
+        actionButtonMetrics(m_physicalScale));
     m_layoutSpacingEditor->setObjectName(QStringLiteral("screenshotLayoutSpacingEditor"));
     configureScreenshotToolPaletteScrollingIntervalEditor(m_layoutSpacingEditor,
                                                           actionButtonMetrics(m_physicalScale));

@@ -165,23 +165,47 @@ void opacityWheelSharesTheEffectFrame() {
                           Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
         require(palette->handleToolbarWheel(&event), "palette must consume opacity wheel");
     };
-    for (int i = 0; i < 105; ++i)
+    wheel(1);
+    require(p.selection.backgroundOpacityPercent() == 10 && p.stateNotifications == 0,
+            "one opacity notch must apply ten percentage points before presentation");
+    for (int i = 0; i < 14; ++i)
         wheel(1);
     for (int i = 0; i < 7; ++i)
         wheel(-1);
     fixture.workflow->adjustSelectionEffectsFromWheel(4, 3);
-    require(p.selection.backgroundOpacityPercent() == 93 && p.selection.cornerRadius() == 4 &&
+    require(p.selection.backgroundOpacityPercent() == 30 && p.selection.cornerRadius() == 4 &&
                 p.selection.shadowWidth() == 3 && p.stateNotifications == 0,
-            "all effect values must update before any shared preview frame");
+            "ten-point opacity wheels must clamp individually and update before the shared frame");
     p.flushFrame();
     require(p.stateNotifications == 1, "mixed effect wheels must share one semantic frame");
     p.resetCounters();
-    for (int i = 0; i < 100; ++i)
+    for (int i = 0; i < 15; ++i)
         wheel(-1);
     wheel(1);
     p.flushFrame();
-    require(p.selection.backgroundOpacityPercent() == 1 && p.stateNotifications == 1,
+    require(p.selection.backgroundOpacityPercent() == 10 && p.stateNotifications == 1,
             "opacity must reverse at zero and deliver the final partial burst");
+
+    p.selection.setBackgroundOpacityPercent(95);
+    p.services->updateOverlayState();
+    p.flushFrame();
+    p.resetCounters();
+    wheel(1);
+    require(p.selection.backgroundOpacityPercent() == 100 && p.stateNotifications == 0,
+            "a partial opacity step must clamp the model at 100 before presentation");
+    p.flushFrame();
+    require(p.stateNotifications == 1, "a clamped opacity change must publish once");
+    p.resetCounters();
+    wheel(1);
+    p.flushFrame();
+    require(p.selection.backgroundOpacityPercent() == 100 && p.stateNotifications == 0 &&
+                !p.services->frameSchedulerForTesting().active(),
+            "opacity wheel input at the limit must not schedule a redundant preview frame");
+    wheel(-1);
+    require(p.selection.backgroundOpacityPercent() == 90 && p.stateNotifications == 0,
+            "opacity must reverse from the maximum by ten points immediately");
+    p.flushFrame();
+    require(p.stateNotifications == 1, "reversing opacity must publish one preview frame");
 }
 
 void wheelMovesEveryEdgeByOneUnitAndSynchronizesToolbars() {
