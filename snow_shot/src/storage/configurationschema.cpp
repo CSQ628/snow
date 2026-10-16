@@ -1577,6 +1577,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("window"), QStringLiteral("window_sub_element")}},
+    {QStringLiteral("screenshot_selection/background_opacity_percent"), 0,
+     ConfigurationValueKind::Integer, ConfigurationIntegerRange{0, 100, 1}},
     {QStringLiteral("screenshot_selection/layout_compaction_enabled"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot_selection/layout_compaction_spacing"), 0,
