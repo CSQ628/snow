@@ -151,7 +151,9 @@ struct FrameSample {
     double eventProcessingMs = 0;
     std::size_t regionMaskBuilds = 0;
     std::size_t regionShadowBuilds = 0;
+    std::size_t regionStripBuilds = 0;
     std::size_t regionScratchPeakBytes = 0;
+    std::size_t regionCacheRetainedBytes = 0;
     snow_canvas_renderer::FilterRenderDiagnostics filter;
 };
 
@@ -242,7 +244,13 @@ FrameSample measureFrame(BenchmarkFixture& fixture, const std::function<void()>&
         static_cast<double>(elapsedNanoseconds - mutationNs) / 1'000'000.0,
         shadowDiagnostics.regionMaskBuilds,
         shadowDiagnostics.regionShadowBuilds,
+#if !defined(SNOW_SHOT_SELECTION_RENDER_BASELINE)
+        shadowDiagnostics.regionStripBuilds,
+#else
+        0,
+#endif
         shadowDiagnostics.regionScratchPeakBytes,
+        shadowDiagnostics.regionCacheRetainedBytes,
         snow_canvas_renderer::filterRenderDiagnosticsForCurrentThread(),
     };
 }
@@ -301,6 +309,8 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     std::size_t shadowTransientAllocations = 0;
     std::size_t selectionDamagePathFallbacks = 0;
     std::size_t regionMaskBuilds = 0, regionShadowBuilds = 0, regionScratchPeakBytes = 0;
+    std::size_t regionStripBuilds = 0;
+    std::size_t regionCacheRetainedBytes = 0;
     snow_canvas_renderer::FilterRenderDiagnostics filterTotals;
     std::size_t peakFilterDispatchCount = 0;
     for (const FrameSample& sample : result.samples) {
@@ -309,7 +319,10 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
         geometryBuilds += sample.geometryBuilds;
         regionMaskBuilds += sample.regionMaskBuilds;
         regionShadowBuilds += sample.regionShadowBuilds;
+        regionStripBuilds += sample.regionStripBuilds;
         regionScratchPeakBytes = std::max(regionScratchPeakBytes, sample.regionScratchPeakBytes);
+        regionCacheRetainedBytes =
+            std::max(regionCacheRetainedBytes, sample.regionCacheRetainedBytes);
         milliseconds.push_back(sample.milliseconds);
         mutationMs.push_back(sample.mutationMs);
         eventProcessingMs.push_back(sample.eventProcessingMs);
@@ -357,7 +370,9 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
                   static_cast<qint64>(selectionDamagePathFallbacks));
     object.insert(QStringLiteral("regionMaskBuilds"), qint64(regionMaskBuilds));
     object.insert(QStringLiteral("regionShadowBuilds"), qint64(regionShadowBuilds));
+    object.insert(QStringLiteral("regionStripBuilds"), qint64(regionStripBuilds));
     object.insert(QStringLiteral("regionScratchPeakBytes"), qint64(regionScratchPeakBytes));
+    object.insert(QStringLiteral("regionCacheRetainedBytes"), qint64(regionCacheRetainedBytes));
     object.insert(QStringLiteral("filterEffectDispatchCount"),
                   static_cast<qint64>(filterTotals.effectDispatchCount));
     object.insert(QStringLiteral("meanFilterEffectDispatchCount"),
@@ -635,6 +650,10 @@ int main(int argc, char** argv) {
         QStringLiteral("shadow-width-sweep"),
         QStringLiteral("rounded-shadow-toggle"),
         QStringLiteral("background-opacity-sweep"),
+        QStringLiteral("compound-shadow-width-sweep"),
+        QStringLiteral("compound-shadow-color-sweep"),
+        QStringLiteral("compound-corner-radius-sweep"),
+        QStringLiteral("compound-unchanged-repaint"),
         QStringLiteral("cursor-and-monitor-guide-lines"),
         QStringLiteral("cursor-guide-horizontal-move"),
         QStringLiteral("cursor-guide-vertical-move"),
@@ -1090,7 +1109,7 @@ int main(int argc, char** argv) {
         renderer.setSelection(baseSelection, false, 18, (index & 1) ? 10 : 0, shadowColor);
         renderer.setSelectionToolbarHovered(true);
     });
-    run(QStringLiteral("background-opacity-sweep"), [&](int index) {
+    const auto compoundEffectState = [&]() {
         ScreenshotSelectionVisualState state;
         state.bounds = QRectF(-surfaceSize.width() / 2.0 + 20, -surfaceSize.height() / 2.0 + 20,
                               surfaceSize.width() - 40, surfaceSize.height() - 40);
@@ -1103,8 +1122,36 @@ int main(int argc, char** argv) {
         state.shadowColor = shadowColor;
         state.toolbarHovered = true;
         state.handlesVisible = false;
+        state.backgroundOpacityPercent = 50;
+        return state;
+    };
+    run(QStringLiteral("background-opacity-sweep"), [&](int index) {
+        auto state = compoundEffectState();
         state.backgroundOpacityPercent = index % 101;
         renderer.applySelectionState(state);
+    });
+    run(QStringLiteral("compound-shadow-width-sweep"), [&](int index) {
+        static constexpr std::array<int, 8> widths = {1, 4, 16, 32, 64, 32, 16, 4};
+        auto state = compoundEffectState();
+        state.shadowWidth = widths[static_cast<std::size_t>(index) % widths.size()];
+        renderer.applySelectionState(state);
+    });
+    run(QStringLiteral("compound-shadow-color-sweep"), [&](int index) {
+        auto state = compoundEffectState();
+        state.shadowColor = QColor::fromHsv((index * 13) % 360, 150, 140, 100 + index % 156);
+        renderer.applySelectionState(state);
+    });
+    run(QStringLiteral("compound-corner-radius-sweep"), [&](int index) {
+        static constexpr std::array<int, 8> radii = {0, 4, 12, 18, 32, 18, 12, 4};
+        auto state = compoundEffectState();
+        state.cornerRadius = radii[static_cast<std::size_t>(index) % radii.size()];
+        renderer.applySelectionState(state);
+    });
+    run(QStringLiteral("compound-unchanged-repaint"), [&](int) {
+        renderer.applySelectionState(compoundEffectState());
+        // Force a complete exposure so cached coverage and shadows are actually
+        // sampled again, even though applying the same state requests no damage.
+        canvas.update();
     });
 
     const QPointF guideLineCenter(surfaceSize.width() / 2.0, surfaceSize.height() / 2.0);
