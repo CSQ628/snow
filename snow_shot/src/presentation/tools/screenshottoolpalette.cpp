@@ -4183,8 +4183,8 @@ bool ScreenshotToolPalette::handleToolbarWheel(QWheelEvent* event) {
         const int percent = std::clamp(m_backgroundOpacityPercent + direction, 0, 100);
         if (percent != m_backgroundOpacityPercent) {
             setSelectionBackgroundOpacityState(percent, m_backgroundOpacityAvailable);
-            emit selectionBackgroundOpacityChanged(percent);
         }
+        emit selectionBackgroundOpacityWheelAdjusted(direction);
         event->accept();
         return true;
     }

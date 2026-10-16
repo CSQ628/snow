@@ -144,6 +144,9 @@ struct FrameSample {
     std::size_t shadowRetainedBytes = 0;
     std::size_t shadowTransientAllocations = 0;
     std::size_t selectionDamagePathFallbacks = 0;
+    std::size_t backgroundTileBuilds = 0;
+    std::size_t previewMaskBuilds = 0;
+    std::size_t geometryBuilds = 0;
     double mutationMs = 0;
     double eventProcessingMs = 0;
     std::size_t regionMaskBuilds = 0;
@@ -226,6 +229,15 @@ FrameSample measureFrame(BenchmarkFixture& fixture, const std::function<void()>&
         shadowDiagnostics.retainedBytes,
         shadowDiagnostics.selectionSizedTransientAllocations,
         selectionDiagnostics.pathFallbacks,
+#if !defined(SNOW_SHOT_SELECTION_RENDER_BASELINE)
+        selectionDiagnostics.backgroundTileBuilds,
+        selectionDiagnostics.previewMaskBuilds,
+        selectionDiagnostics.geometryBuilds,
+#else
+        0,
+        0,
+        0,
+#endif
         static_cast<double>(mutationNs) / 1'000'000.0,
         static_cast<double>(elapsedNanoseconds - mutationNs) / 1'000'000.0,
         shadowDiagnostics.regionMaskBuilds,
@@ -282,6 +294,7 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     paintedRegionRatios.reserve(result.samples.size());
     paintedBoundingRectRatios.reserve(result.samples.size());
     selectionDamageRatios.reserve(result.samples.size());
+    std::size_t backgroundTiles = 0, previewMasks = 0, geometryBuilds = 0;
     std::size_t shadowHits = 0;
     std::size_t shadowBuilds = 0;
     std::size_t shadowRetainedBytes = 0;
@@ -291,6 +304,9 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     snow_canvas_renderer::FilterRenderDiagnostics filterTotals;
     std::size_t peakFilterDispatchCount = 0;
     for (const FrameSample& sample : result.samples) {
+        backgroundTiles += sample.backgroundTileBuilds;
+        previewMasks += sample.previewMaskBuilds;
+        geometryBuilds += sample.geometryBuilds;
         regionMaskBuilds += sample.regionMaskBuilds;
         regionShadowBuilds += sample.regionShadowBuilds;
         regionScratchPeakBytes = std::max(regionScratchPeakBytes, sample.regionScratchPeakBytes);
@@ -329,6 +345,9 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     object.insert(QStringLiteral("meanPaintedBoundingRectRatio"), mean(paintedBoundingRectRatios));
     object.insert(QStringLiteral("meanSelectionDamageRegionRatio"), mean(selectionDamageRatios));
     object.insert(QStringLiteral("meanPaintRegionRatio"), mean(paintedRegionRatios));
+    object.insert(QStringLiteral("backgroundTileBuilds"), static_cast<qint64>(backgroundTiles));
+    object.insert(QStringLiteral("previewMaskBuilds"), static_cast<qint64>(previewMasks));
+    object.insert(QStringLiteral("geometryBuilds"), static_cast<qint64>(geometryBuilds));
     object.insert(QStringLiteral("shadowCacheHits"), static_cast<qint64>(shadowHits));
     object.insert(QStringLiteral("shadowCacheBuilds"), static_cast<qint64>(shadowBuilds));
     object.insert(QStringLiteral("shadowRetainedBytes"), static_cast<qint64>(shadowRetainedBytes));
@@ -782,9 +801,10 @@ int main(int argc, char** argv) {
             QImage image(pixels, QImage::Format_ARGB32_Premultiplied);
             image.fill(QColor(37 + overlay, 83, 129));
             layers.append({std::move(image), bounds, bounds});
-            canvases[overlay] = std::make_unique<SnowCanvasWidget>(fixture.runtime);
-            canvases[overlay]->resize(surfaceSize);
-            renderers[overlay] = std::make_unique<ScreenshotCanvasRenderer>(*canvases[overlay]);
+            const auto index = static_cast<std::size_t>(overlay);
+            canvases[index] = std::make_unique<SnowCanvasWidget>(fixture.runtime);
+            canvases[index]->resize(surfaceSize);
+            renderers[index] = std::make_unique<ScreenshotCanvasRenderer>(*canvases[index]);
         }
         ScenarioResult result;
         result.name = name;

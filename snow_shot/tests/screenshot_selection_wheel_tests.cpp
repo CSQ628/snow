@@ -1,7 +1,9 @@
 #include "screenshot_selection_presentation_fixture.h"
 #include "snow_shot/presentation/screenshotoverlayinputhandler.h"
 #include "snow_shot/presentation/screenshotselectioneditworkflow.h"
+#include "snow_shot/presentation/screenshottoolpalette.h"
 
+#include <QLabel>
 #include <QPainterPath>
 #include <QWheelEvent>
 
@@ -31,6 +33,9 @@ struct WheelFixture {
             ++updates;
             presentation.services->updateOverlayState();
         };
+        ui.requestSelectionEffectPresentation = [this] {
+            presentation.services->requestSelectionEffectPresentation();
+        };
         ui.showSelectionToolbar = [this] { presentation.services->showSelectionToolbar(); };
         ui.moveToolbar = [this] {
             ++toolbarMoves;
@@ -41,6 +46,14 @@ struct WheelFixture {
                                                    presentation.displays, presentation.geometry,
                                                    presentation.interaction, presentation.selection,
                                                    std::move(ui)});
+        presentation.commands.adjustSelectionEffects = [this](int radius, int shadow) {
+            workflow->adjustSelectionEffectsFromWheel(radius, shadow);
+        };
+        presentation.commands.adjustBackgroundOpacity = [this](int delta) {
+            if (presentation.selection.setBackgroundOpacityPercent(
+                    presentation.selection.backgroundOpacityPercent() + delta))
+                presentation.services->requestSelectionEffectPresentation();
+        };
         ScreenshotOverlayInputActions actions;
         actions.adjustSelectionFromToolbar = [this](int minDx, int minDy, int maxDx, int maxDy) {
             workflow->adjustSelectionFromToolbar(minDx, minDy, maxDx, maxDy);
@@ -76,6 +89,100 @@ struct WheelFixture {
         return presentation.selection.normalizedSelection();
     }
 };
+
+void effectWheelBurstsPreserveDeltasAndCoalesceFrames() {
+    WheelFixture fixture;
+    auto& p = fixture.presentation;
+    fixture.workflow->setSelectionCornerRadiusFromToolbar(250);
+    fixture.workflow->setSelectionShadowWidthFromToolbar(63);
+    p.resetCounters();
+    auto* toolbar = p.coordinator.selectionToolbar();
+    const auto wheel = [&](const char* source, int direction) {
+        QLabel* target = nullptr;
+        for (auto* label : toolbar->findChildren<QLabel*>()) {
+            if (label->property("selectionToolbarTranslationSource").toString() ==
+                    QLatin1String(source) &&
+                label->property("selectionToolbarField").isValid())
+                target = label;
+        }
+        require(target != nullptr, "effect wheel label must exist");
+        QWheelEvent event(target->rect().center(), target->mapToGlobal(target->rect().center()), {},
+                          QPoint(0, direction * 120), Qt::NoButton, Qt::NoModifier,
+                          Qt::NoScrollPhase, false);
+        QApplication::sendEvent(target, &event);
+        require(event.isAccepted(), "effect label must accept wheel input");
+    };
+    for (int i = 0; i < 10; ++i)
+        wheel("Corner radius", 1);
+    for (int i = 0; i < 7; ++i)
+        wheel("Corner radius", -1);
+    for (int i = 0; i < 5; ++i)
+        wheel("Shadow width", 1);
+    for (int i = 0; i < 3; ++i)
+        wheel("Shadow width", -1);
+    require(
+        p.selection.cornerRadius() == 249 && p.selection.shadowWidth() == 61,
+        "wheel deltas must clamp individually and reverse immediately without toolbar feedback");
+    auto* renderer = p.overlay.screenshotRendererForTesting();
+    require(p.stateNotifications == 0 && renderer->selectionCornerRadius() == 250 &&
+                renderer->selectionShadowWidth() == 63 &&
+                p.services->frameSchedulerForTesting().active(),
+            "wheel bursts must defer presentation to one pending frame");
+    p.flushFrame();
+    require(p.stateNotifications == 1 && renderer->selectionCornerRadius() == 249 &&
+                renderer->selectionShadowWidth() == 61 &&
+                !p.services->frameSchedulerForTesting().active(),
+            "one frame must publish the latest effects and leave no idle polling");
+    p.resetCounters();
+    wheel("Corner radius", 1);
+    fixture.workflow->setSelectionShadowWidthFromToolbar(12);
+    require(p.stateNotifications == 1 && renderer->selectionCornerRadius() == 250 &&
+                renderer->selectionShadowWidth() == 12,
+            "ordinary commands must flush pending wheel edits synchronously");
+    p.flushFrame();
+    require(p.stateNotifications == 1, "superseded wheel frames must not publish twice");
+    wheel("Corner radius", 1);
+    p.services->resetPresentation();
+    p.resetCounters();
+    p.flushFrame();
+    require(p.stateNotifications == 0 && !p.services->frameSchedulerForTesting().active(),
+            "capture teardown must discard pending wheel presentation");
+}
+
+void opacityWheelSharesTheEffectFrame() {
+    WheelFixture fixture;
+    auto& p = fixture.presentation;
+    auto* toolbar = p.coordinator.toolbar();
+    auto* palette = toolbar->findChild<ScreenshotToolPalette*>();
+    require(palette != nullptr, "main toolbar must own the real palette");
+    auto* editor =
+        palette->findChild<QWidget*>(QStringLiteral("screenshotSelectionBackgroundOpacityEditor"));
+    require(editor && editor->isEnabled() && editor->isVisible(), "opacity wheel editor is ready");
+    p.resetCounters();
+    const auto wheel = [&](int delta) {
+        const QPoint point = editor->rect().center();
+        QWheelEvent event(point, editor->mapToGlobal(point), {}, QPoint(0, delta * 120),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        require(palette->handleToolbarWheel(&event), "palette must consume opacity wheel");
+    };
+    for (int i = 0; i < 105; ++i)
+        wheel(1);
+    for (int i = 0; i < 7; ++i)
+        wheel(-1);
+    fixture.workflow->adjustSelectionEffectsFromWheel(4, 3);
+    require(p.selection.backgroundOpacityPercent() == 93 && p.selection.cornerRadius() == 4 &&
+                p.selection.shadowWidth() == 3 && p.stateNotifications == 0,
+            "all effect values must update before any shared preview frame");
+    p.flushFrame();
+    require(p.stateNotifications == 1, "mixed effect wheels must share one semantic frame");
+    p.resetCounters();
+    for (int i = 0; i < 100; ++i)
+        wheel(-1);
+    wheel(1);
+    p.flushFrame();
+    require(p.selection.backgroundOpacityPercent() == 1 && p.stateNotifications == 1,
+            "opacity must reverse at zero and deliver the final partial burst");
+}
 
 void wheelMovesEveryEdgeByOneUnitAndSynchronizesToolbars() {
     WheelFixture fixture;
@@ -208,6 +315,8 @@ int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
     application.setQuitOnLastWindowClosed(false);
     selection_presentation_test::IsolatedStorage storage;
+    effectWheelBurstsPreserveDeltasAndCoalesceFrames();
+    opacityWheelSharesTheEffectFrame();
     wheelMovesEveryEdgeByOneUnitAndSynchronizesToolbars();
     centeredWheelStopsAtCanvasAndMinimumSize();
     preciseWheelAccumulatesAndResetsWithInputOwnership();

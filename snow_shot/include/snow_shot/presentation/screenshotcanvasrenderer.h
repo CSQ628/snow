@@ -7,6 +7,7 @@
 #include "snow_shot/presentation/screenshotselectioneffectgeometry.h"
 
 #include <QColor>
+#include <QCache>
 #include <QImage>
 #include <QMetaObject>
 #include <QPoint>
@@ -92,6 +93,9 @@ QRegion planScreenshotGuideLineDamage(const QRect& viewportRect,
 struct ScreenshotSelectionRenderDiagnostics {
     std::size_t requestedDamagePixels = 0;
     std::size_t pathFallbacks = 0;
+    std::size_t backgroundTileBuilds = 0;
+    std::size_t previewMaskBuilds = 0;
+    std::size_t geometryBuilds = 0;
 };
 
 struct ScreenshotGuideLineRenderDiagnostics {
@@ -144,10 +148,11 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
         return m_outlineCache.bytes();
     }
     qsizetype selectionMaskCacheBytes() const {
-        return m_maskCache.bytes() + m_selectionViewGeometry.previewMask.sizeInBytes();
+        return m_maskCache.bytes() + m_selectionViewGeometry.previewMask.sizeInBytes() +
+               m_selectionPreviewMaskTiles.totalCost();
     }
     qsizetype selectionBackgroundCacheBytes() const {
-        return m_selectionBackgroundCache.sizeInBytes();
+        return m_selectionBackgroundTiles.totalCost();
     }
     qsizetype selectionRegionHoverCacheBytes() const {
         return m_regionHoverCache.sizeInBytes();
@@ -302,8 +307,10 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     PathRasterCache m_maskCache;
     std::optional<ScreenshotRegionGeometry> m_regionHoverCacheRegion;
     QImage m_regionHoverCache;
-    QImage m_selectionBackgroundCache;
-    QRect m_selectionBackgroundCacheBounds;
+    QCache<QPoint, QImage> m_selectionBackgroundTiles{64 * 1024 * 1024};
+    QCache<QPoint, QImage> m_selectionPreviewMaskTiles{16 * 1024 * 1024};
+    QRect m_selectionBackgroundCacheViewport;
+    qreal m_selectionBackgroundCacheDpr = 0;
     QTransform m_selectionBackgroundCacheTransform;
     QPainterPath m_selectionBackgroundCachePath;
     int m_regionHoverCacheRadius = 0;
