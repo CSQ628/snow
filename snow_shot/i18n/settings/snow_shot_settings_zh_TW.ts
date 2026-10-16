@@ -3305,6 +3305,10 @@
             <translation>快速修改選取區域</translation>
         </message>
         <message>
+            <source>Quick mode (hide screenshot and copy text in background)</source>
+            <translation>快速模式（隱藏截圖並在背景複製文字）</translation>
+        </message>
+        <message>
             <source>Quick save</source>
             <translation>快速儲存</translation>
         </message>

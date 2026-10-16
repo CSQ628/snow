@@ -3305,6 +3305,10 @@
             <translation>Quick Selection Modification</translation>
         </message>
         <message>
+            <source>Quick mode (hide screenshot and copy text in background)</source>
+            <translation>Quick mode (hide screenshot and copy text in background)</translation>
+        </message>
+        <message>
             <source>Quick save</source>
             <translation>Quick save</translation>
         </message>

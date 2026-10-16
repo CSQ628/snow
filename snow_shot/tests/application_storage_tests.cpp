@@ -420,6 +420,32 @@ void autoSaveAfterExecutionSettingsMigrateAndPersist() {
     appStorage.shutdown();
 }
 
+void quickOcrModePersistsAcrossRestart() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "quick OCR settings require isolated storage");
+    const QString executable = temporary.filePath(QStringLiteral("bin"));
+    require(QDir().mkpath(executable), "create quick OCR test executable directory");
+    auto& appStorage = initialize(executable, temporary.path());
+    const storage::ScreenshotSettings settings;
+    require(settings.autoExecuteAfterTextRecognition() == QStringLiteral("no_action"),
+            "quick OCR remains opt-in");
+    require(settings.setAutoExecuteAfterTextRecognition(QStringLiteral("background_copy_text")) &&
+                appStorage.flushNow().success,
+            "quick OCR preference is accepted and saved");
+    appStorage.shutdown();
+    static_cast<void>(initialize(executable, temporary.path()));
+    require(settings.autoExecuteAfterTextRecognition() == QStringLiteral("background_copy_text"),
+            "quick OCR preference survives storage restart");
+    require(settings.setAutoExecuteAfterTextRecognition(QStringLiteral("no_action")) &&
+                appStorage.flushNow().success,
+            "original OCR mode can be restored");
+    appStorage.shutdown();
+    static_cast<void>(initialize(executable, temporary.path()));
+    require(settings.autoExecuteAfterTextRecognition() == QStringLiteral("no_action"),
+            "opting out survives storage restart");
+    appStorage.shutdown();
+}
+
 void markerResolutionAndStatus() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "failed to create marker test directory");
@@ -859,7 +885,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
          {QStringLiteral("no_action"), QStringLiteral("copy_text"),
           QStringLiteral("copy_text_and_end_screenshot"), QStringLiteral("quick_copy_text"),
           QStringLiteral("quick_copy_text_and_end_screenshot"),
-          QStringLiteral("enable_edit_mode")}},
+          QStringLiteral("enable_edit_mode"), QStringLiteral("background_copy_text")}},
         {QStringLiteral("screenshot/double_click_action"),
          {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
           QStringLiteral("pin"), QStringLiteral("none")}},
@@ -2321,6 +2347,10 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 screenshot.imageSaveDirectory() ==
                     systemSaveDirectory(QStandardPaths::PicturesLocation),
             "screenshot adapters must expose requested defaults");
+    require(screenshot.setAutoExecuteAfterTextRecognition(QStringLiteral("background_copy_text")) &&
+                storage::ScreenshotSettings().autoExecuteAfterTextRecognition() ==
+                    QStringLiteral("background_copy_text"),
+            "background OCR quick mode must round trip through existing settings");
     require(screenshot.setAutoExecuteAfterTextRecognition(
                 QStringLiteral("quick_copy_text_and_end_screenshot")) &&
                 screenshot.setDoubleClickAction(QStringLiteral("save")) &&
@@ -3641,6 +3671,10 @@ int main(int argc, char** argv) {
     }
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("storage-tests"));
+    if (application.arguments().contains(QStringLiteral("--ocr-quick-copy-only"))) {
+        quickOcrModePersistsAcrossRestart();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--tray-theme-icons-only"))) {
         trayDarkIconSettingsPersistAndValidate();
         return 0;

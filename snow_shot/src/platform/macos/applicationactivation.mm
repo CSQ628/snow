@@ -143,6 +143,30 @@ void activateWindow(QWidget* window) {
     [nativeWindow makeKeyAndOrderFront:nil];
 }
 
+qint64 foregroundApplicationProcessId() {
+    if (QGuiApplication::platformName() != QStringLiteral("cocoa"))
+        return 0;
+    return NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
+}
+
+bool restoreForegroundApplication(qint64 processId) {
+    const auto ownProcess = NSProcessInfo.processInfo.processIdentifier;
+    if (processId <= 0 || processId == ownProcess || QThread::currentThread() != qApp->thread() ||
+        QGuiApplication::platformName() != QStringLiteral("cocoa") ||
+        foregroundApplicationProcessId() != ownProcess)
+        return false;
+    NSRunningApplication* previous = [NSRunningApplication
+        runningApplicationWithProcessIdentifier:static_cast<pid_t>(processId)];
+    if (previous == nil || previous.terminated)
+        return false;
+    // macOS 14+ coordinates activation between applications. The capture must
+    // explicitly yield before the previous app requests activation; the old
+    // NSApplicationActivateIgnoringOtherApps flag no longer has any effect.
+    [NSApp yieldActivationToApplication:previous];
+    // Do not raise all of the target's windows or change its focused control.
+    return [previous activateFromApplication:NSRunningApplication.currentApplication options:0];
+}
+
 class ApplicationReopenHandler::Impl final {
   public:
     explicit Impl(std::function<void()> reopen) {

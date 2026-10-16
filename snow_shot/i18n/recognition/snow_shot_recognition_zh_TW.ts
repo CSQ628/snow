@@ -121,6 +121,10 @@
             <translation>選取要辨識的區域</translation>
         </message>
         <message>
+            <source>Text copied</source>
+            <translation>文字已複製</translation>
+        </message>
+        <message>
             <source>Text recognition components could not be prepared</source>
             <translation>無法準備文字辨識元件</translation>
         </message>

@@ -121,6 +121,10 @@
             <translation>选择要识别的区域</translation>
         </message>
         <message>
+            <source>Text copied</source>
+            <translation>文本已复制</translation>
+        </message>
+        <message>
             <source>Text recognition components could not be prepared</source>
             <translation>无法准备文本识别组件</translation>
         </message>

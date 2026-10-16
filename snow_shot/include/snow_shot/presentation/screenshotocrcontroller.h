@@ -24,6 +24,8 @@
 class ScreenshotDisplaySession;
 class ScreenshotGeometryMapper;
 class ScreenshotOcrPresentation;
+class ScreenshotOcrQuickCopy;
+class ScreenshotOcrCopyFeedback;
 class ScreenshotRecognitionWindow;
 class ScreenshotRecognitionSessionController;
 class ScreenshotTableEditingSession;
@@ -74,6 +76,7 @@ class ScreenshotOcrController final : public QObject {
     ~ScreenshotOcrController() override;
 
     void activate();
+    void activateQuickCopy(const std::function<void()>& finishCapture);
     void activateTextTranslation();
     void activateTable();
     void activateQr();
@@ -163,6 +166,8 @@ class ScreenshotOcrController final : public QObject {
     ScreenshotActiveTool m_previousTool = ScreenshotActiveTool::Move;
     std::unique_ptr<ScreenshotMessageService> m_messages;
     std::unique_ptr<ScreenshotRecognitionSessionController> m_session;
+    std::unique_ptr<ScreenshotOcrQuickCopy> m_quickCopy;
+    std::unique_ptr<ScreenshotOcrCopyFeedback> m_quickCopyFeedback;
     QPointer<ScreenshotRecognitionWindow> m_recognitionWindow;
     QString m_surfaceKey;
     QString m_importedTargetKey;

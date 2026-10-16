@@ -3,12 +3,16 @@
 
 #include <functional>
 #include <memory>
+#include <QtGlobal>
 
 class QWidget;
 
 namespace snow_shot::platform::macos {
 void activateWindow(QWidget* window);
 void configureMainWindowTitleBar(QWidget* window, int titleBarHeight);
+qint64 foregroundApplicationProcessId();
+// Return keyboard focus only while this app still owns it, never after the user switches away.
+bool restoreForegroundApplication(qint64 processId);
 
 class ApplicationReopenHandler final {
   public:

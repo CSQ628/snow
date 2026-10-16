@@ -236,6 +236,32 @@ void translationConfidenceCatalog() {
     QCoreApplication::removeTranslator(&translator);
 }
 
+void quickOcrUsesExistingScreenshotOption() {
+    const auto* field = settings::builtInSettingsRegistry().fieldForSelect(
+        settings::SettingsSelectBinding::ScreenshotOcrAction);
+    require(field != nullptr &&
+                field->configurationKey ==
+                    QStringLiteral("screenshot/auto_execute_after_text_recognition"),
+            "quick OCR uses the existing screenshot preference");
+    const auto& select = std::get<settings::SettingsSelectDefinition>(field->definition->payload);
+    QStringList values;
+    for (const auto& option : select.options) {
+        values.append(option.value.toString());
+        require(!option.label.translated().isEmpty(), "every OCR mode has a label");
+    }
+    require(values == QStringList{QStringLiteral("no_action"), QStringLiteral("copy_text"),
+                                  QStringLiteral("copy_text_and_end_screenshot"),
+                                  QStringLiteral("quick_copy_text"),
+                                  QStringLiteral("quick_copy_text_and_end_screenshot"),
+                                  QStringLiteral("enable_edit_mode"),
+                                  QStringLiteral("background_copy_text")},
+            "quick OCR adds one choice and preserves every existing OCR choice");
+    const auto* schema = storage::ConfigurationSchema::entry(field->configurationKey);
+    require(schema != nullptr && schema->allowedStringValues == values &&
+                schema->defaultValue.toString() == QStringLiteral("no_action"),
+            "catalog and schema agree while original mode stays the default");
+}
+
 void builtInCatalogIsCompleteAndValid() {
     const settings::SettingsCatalog& catalog = settings::builtInSettingsRegistry().catalog();
     require(catalog.validationErrors().isEmpty(), "built-in settings catalog must validate");
@@ -3689,6 +3715,10 @@ void memoryOptimizationPolicyCatalog() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--ocr-quick-copy-only"))) {
+        quickOcrUsesExistingScreenshotOption();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--translation-confidence-only"))) {
         translationConfidenceCatalog();
         return 0;

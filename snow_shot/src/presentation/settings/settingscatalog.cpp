@@ -1542,6 +1542,9 @@ SettingsItemDefinition screenshotOcrActionItem() {
                  QT_TRANSLATE_NOOP("SettingsCatalog", "Copy text and end screenshot (Global)"))},
             {QStringLiteral("enable_edit_mode"),
              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Enable edit mode"))},
+            {QStringLiteral("background_copy_text"),
+             settingsText(QT_TRANSLATE_NOOP(
+                 "SettingsCatalog", "Quick mode (hide screenshot and copy text in background)"))},
         });
 }
 

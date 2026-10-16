@@ -121,6 +121,10 @@
             <translation>Select an area to recognize</translation>
         </message>
         <message>
+            <source>Text copied</source>
+            <translation>Text copied</translation>
+        </message>
+        <message>
             <source>Text recognition components could not be prepared</source>
             <translation>Text recognition components could not be prepared</translation>
         </message>

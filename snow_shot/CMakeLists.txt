@@ -1755,6 +1755,7 @@ set(PROJECT_HEADERS
     include/snow_shot/presentation/screenshotintelligentselectionmodel.h
     include/snow_shot/presentation/screenshotinteractionstate.h
     include/snow_shot/presentation/screenshotocrcontroller.h
+    include/snow_shot/presentation/screenshotocrcopyfeedback.h
     include/snow_shot/presentation/screenshotocrrecognitionservice.h
     include/snow_shot/presentation/screenshotocrassets.h
     include/snow_shot/presentation/screenshotrecognitionresults.h
@@ -2400,6 +2401,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-application-storage-tests --local-shortcut-migration-only)
     set_tests_properties(snow-shot-local-shortcut-migration-tests PROPERTIES LABELS "unit"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-ocr-quick-copy-settings-tests
+        COMMAND snow-shot-application-storage-tests --ocr-quick-copy-only)
+    set_tests_properties(snow-shot-ocr-quick-copy-settings-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-update-settings-tests
         COMMAND snow-shot-application-storage-tests --update-settings-only)
     set_tests_properties(snow-shot-update-settings-tests PROPERTIES LABELS "unit" TIMEOUT 30
@@ -3000,6 +3005,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-global-hotkeys-catalog-tests
         COMMAND snow-shot-settings-catalog-tests --global-hotkeys-only)
     set_tests_properties(snow-shot-global-hotkeys-catalog-tests PROPERTIES LABELS unit TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-ocr-quick-copy-catalog-tests
+        COMMAND snow-shot-settings-catalog-tests --ocr-quick-copy-only)
+    set_tests_properties(snow-shot-ocr-quick-copy-catalog-tests PROPERTIES LABELS "unit" TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-ocr-text-options-catalog-tests
              COMMAND snow-shot-settings-catalog-tests --ocr-text-options-only)
@@ -8398,6 +8407,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-recognition-session-controller-tests
         tests/screenshot_recognition_session_controller_tests.cpp
+        tests/screenshot_ocr_quick_copy_tests.cpp
         tests/original_image_translation_tests.cpp
         tests/image_conversion_tests.cpp
         include/snow_shot/presentation/languagemanager.h
@@ -8475,6 +8485,17 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-recognition-session-controller-tests --ocr-defaults-only -platform offscreen)
     set_tests_properties(snow-shot-recognition-defaults-tests PROPERTIES LABELS "unit" TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_test(NAME snow-shot-ocr-quick-copy-tests
+        COMMAND snow-shot-recognition-session-controller-tests --quick-copy-only -platform offscreen)
+    set_tests_properties(snow-shot-ocr-quick-copy-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(APPLE)
+        add_test(NAME snow-shot-ocr-quick-copy-native-clipboard-tests
+            COMMAND snow-shot-recognition-session-controller-tests --quick-copy-only -platform cocoa)
+        set_tests_properties(snow-shot-ocr-quick-copy-native-clipboard-tests PROPERTIES
+            LABELS "unit;macos" RUN_SERIAL TRUE TIMEOUT 30)
+    endif()
 
     add_test(NAME snow-shot-recognition-image-snapshot-tests
         COMMAND snow-shot-recognition-window-tests --image-snapshot-only -platform offscreen)
@@ -10701,9 +10722,16 @@ if(APPLE AND SNOW_SHOT_BUILD_TESTS)
     target_compile_definitions(snow-shot-macos-shell-native-tests PRIVATE
         SNOW_SHOT_MACOS_INFO_PLIST="${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/Info.plist.in")
     target_link_libraries(snow-shot-macos-shell-native-tests PRIVATE
-        snow_shot_login_item Qt6::Widgets "-framework AppKit")
+        snow_shot_login_item ant_design_qt Qt6::Widgets "-framework AppKit")
     add_test(NAME snow-shot-macos-shell-native-tests
         COMMAND snow-shot-macos-shell-native-tests -platform cocoa)
+    add_test(NAME snow-shot-ocr-quick-copy-focus-tests
+        COMMAND snow-shot-macos-shell-native-tests --quick-copy-focus-only -platform cocoa)
+    set_tests_properties(snow-shot-ocr-quick-copy-focus-tests PROPERTIES
+        # Model an already-running background app; Qt's first event loop otherwise
+        # auto-activates a newly launched process independently of its toast flags.
+        ENVIRONMENT "QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM=1"
+        LABELS "unit;macos" RUN_SERIAL TRUE TIMEOUT 30)
     set_tests_properties(snow-shot-macos-shell-native-tests PROPERTIES
         LABELS "unit;macos" RUN_SERIAL TRUE TIMEOUT 30)
 

@@ -1,11 +1,15 @@
 #include "snow_shot/platform/macos/applicationactivation.h"
+#include "snow_shot/presentation/screenshotocrcopyfeedback.h"
 
 #import <AppKit/AppKit.h>
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QThread>
+#include <QPushButton>
+#include <QTimer>
 #include <QWidget>
 
 #include <cmath>
@@ -29,6 +33,83 @@ void flushEvents() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+
+    if (const qsizetype fixture =
+            application.arguments().indexOf(QStringLiteral("--quick-copy-handoff-fixture"));
+        fixture >= 0) {
+        require(fixture + 1 < application.arguments().size(), "fixture requires a target process");
+        const qint64 target = application.arguments().at(fixture + 1).toLongLong();
+        require(target > 0 && target != NSProcessInfo.processInfo.processIdentifier,
+                "fixture target must be an independent application");
+        application.setQuitOnLastWindowClosed(false);
+        QWidget capture;
+        ScreenshotOcrCopyFeedback feedback;
+        capture.setWindowTitle(QObject::tr("Quick OCR activation test"));
+        capture.resize(340, 100);
+        QPushButton finish(QObject::tr("Close capture and return to input"), &capture);
+        finish.setGeometry(20, 30, 300, 40);
+        QObject::connect(&finish, &QPushButton::clicked, &application, [&] {
+            const bool owned = snow_shot::platform::macos::foregroundApplicationProcessId() ==
+                               NSProcessInfo.processInfo.processIdentifier;
+            capture.hide();
+            const bool accepted = snow_shot::platform::macos::restoreForegroundApplication(target);
+            std::cout << "handoff owned=" << owned << " accepted=" << accepted << std::endl;
+            require(owned && accepted, "visible capture must yield activation to its origin");
+            QTimer::singleShot(300, &application, [&] {
+                require(snow_shot::platform::macos::foregroundApplicationProcessId() == target,
+                        "capture exit must restore the independent application");
+                application.clipboard()->setText(QStringLiteral("REA Quick OCR\n中文粘贴测试"),
+                                                 QClipboard::Clipboard);
+                feedback.showCopied(QObject::tr("Text copied"));
+                QTimer::singleShot(100, &application, [&] {
+                    require(feedback.isVisible(), "successful copy feedback must be visible");
+                    require(snow_shot::platform::macos::foregroundApplicationProcessId() == target,
+                            "background clipboard publication must not take focus back");
+                    std::cout << "native handoff and background clipboard passed target=" << target
+                              << std::endl;
+                });
+            });
+        });
+        capture.show();
+        std::cout << "handoff fixture ready target=" << target << std::endl;
+        return application.exec();
+    }
+
+    if (application.arguments().contains(QStringLiteral("--quick-copy-focus-only"))) {
+        using namespace snow_shot::platform::macos;
+        const qint64 before = foregroundApplicationProcessId();
+        require(before > 0 && before != NSProcessInfo.processInfo.processIdentifier,
+                "background feedback test must begin with another foreground application");
+        require(before == NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier,
+                "capture must remember the current foreground application");
+        if (before > 0 && before != NSProcessInfo.processInfo.processIdentifier)
+            require(!restoreForegroundApplication(before),
+                    "return must not activate after the user switches to another application");
+        require(!restoreForegroundApplication(0), "missing capture origin must not activate");
+        require(!restoreForegroundApplication(NSProcessInfo.processInfo.processIdentifier),
+                "capture from Snow Shot must not reopen or raise its main window");
+        require(!restoreForegroundApplication(2147483647),
+                "a terminated capture origin must not activate");
+        require(foregroundApplicationProcessId() == before,
+                "rejected returns must preserve the current application focus");
+        ScreenshotOcrCopyFeedback feedback;
+        feedback.showCopied(QObject::tr("Text copied"));
+        flushEvents();
+        NSView* feedbackView = reinterpret_cast<NSView*>(feedback.internalWinId());
+        require(feedback.isVisible() && feedbackView.window.visible &&
+                    !feedbackView.window.canBecomeKeyWindow &&
+                    feedbackView.window.ignoresMouseEvents,
+                "native success feedback must be visible, non-key and click-through");
+        require(foregroundApplicationProcessId() == before,
+                "showing copy success must preserve the foreground application");
+        QEventLoop expiry;
+        QTimer::singleShot(1800, &expiry, &QEventLoop::quit);
+        expiry.exec();
+        require(!feedback.isVisible() && foregroundApplicationProcessId() == before,
+                "success feedback must expire without changing application focus");
+        std::cout << "quick OCR foreground return guards passed\n";
+        return EXIT_SUCCESS;
+    }
 
     NSDictionary* bundleInfo =
         [NSDictionary dictionaryWithContentsOfFile:@SNOW_SHOT_MACOS_INFO_PLIST];

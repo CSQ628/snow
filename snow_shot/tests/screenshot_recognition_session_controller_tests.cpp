@@ -44,6 +44,7 @@ void runImageConversionTests();
 void runImageConversionNetworkTests();
 void runImageConversionClipboardTests();
 void runRecognitionModelTests();
+void runOcrQuickCopyTests();
 void runRecognitionNotificationLifetimeTests();
 
 class SnowShotApiClientTestAccess {
@@ -1093,6 +1094,10 @@ void runLatexRecognitionTests();
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--quick-copy-only"))) {
+        runOcrQuickCopyTests();
+        return 0;
+    }
     QTemporaryDir temporary;
     require(temporary.isValid(), "create isolated recognition test storage");
     const QString executable = QDir(temporary.path()).filePath(QStringLiteral("bin"));

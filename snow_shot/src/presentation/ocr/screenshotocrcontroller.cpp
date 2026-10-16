@@ -11,6 +11,8 @@
 #include "snow_shot/presentation/screenshotdisplaysession.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
+#include "snow_shot/presentation/screenshotocrquickcopy.h"
+#include "snow_shot/presentation/screenshotocrcopyfeedback.h"
 #include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
 #include "snow_shot/presentation/screenshotoverlaycoordinator.h"
@@ -399,6 +401,31 @@ QString ScreenshotOcrController::currentCacheKey() const {
         .arg(selection.height())
         .arg(QString::fromLatin1(
             QCryptographicHash::hash(geometry, QCryptographicHash::Sha256).toHex()));
+}
+
+void ScreenshotOcrController::activateQuickCopy(const std::function<void()>& finishCapture) {
+    const QRect selection = m_context.selection.pixelSelection();
+    if (selection.isEmpty()) {
+        showStatus(tr("Select an area to recognize"), false);
+        return;
+    }
+    QImage image = clipRecognitionSelection(
+        composeScreenshotSourceSelection(m_context.displaySession, selection), m_context.selection);
+    if (image.isNull() || !screenshotOcrImageWithinPixelLimit(image.size())) {
+        showStatus(tr("Unable to read the selected screenshot"), true);
+        return;
+    }
+    if (m_quickCopy == nullptr) {
+        m_quickCopy = std::make_unique<ScreenshotOcrQuickCopy>(m_context.recognition, [this] {
+            if (m_quickCopyFeedback == nullptr)
+                m_quickCopyFeedback = std::make_unique<ScreenshotOcrCopyFeedback>();
+            m_quickCopyFeedback->showCopied(tr("Text copied"));
+        });
+    }
+    const snow_shot::storage::TextRecognitionSettings settings;
+    static_cast<void>(m_quickCopy->submit(std::move(image), QRectF(selection),
+                                          settings.defaultFormatting(),
+                                          settings.defaultPunctuation(), finishCapture));
 }
 
 void ScreenshotOcrController::activateMode(Mode mode, bool textTranslation) {

@@ -658,6 +658,9 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     bool m_printPending = false;
     QHash<quint64, quint64> m_imageExportCaptureEpochs;
     quint64 m_captureEpoch = 0;
+#ifdef Q_OS_MACOS
+    qint64 m_quickCopyForegroundProcess = 0;
+#endif
     ScreenshotExportJobHandle m_exportJob;
     std::vector<std::weak_ptr<ScreenshotExportArtifact>> m_saveArtifacts;
     std::vector<ScreenshotExportJobHandle> m_exportJobs;
@@ -2744,6 +2747,19 @@ void ScreenshotController::Impl::setOcrTool() {
         m_interaction.setCanvasTool(ScreenshotActiveTool::Select);
     }
     if (!ensureRecognitionFeature()) {
+        return;
+    }
+    if (snow_shot::storage::ScreenshotSettings().autoExecuteAfterTextRecognition() ==
+        QStringLiteral("background_copy_text")) {
+        m_ocrController->activateQuickCopy([this] {
+#ifdef Q_OS_MACOS
+            const qint64 previous = std::exchange(m_quickCopyForegroundProcess, 0);
+#endif
+            cancelCapture();
+#ifdef Q_OS_MACOS
+            static_cast<void>(snow_shot::platform::macos::restoreForegroundApplication(previous));
+#endif
+        });
         return;
     }
     m_ocrController->activate();
@@ -5833,6 +5849,10 @@ bool ScreenshotController::Impl::beginCapture(PendingSelectionAction action,
     if (!canBeginCapture() || !snow_shot::presentation::closeActiveCaptureModalWindows()) {
         return false;
     }
+
+#ifdef Q_OS_MACOS
+    m_quickCopyForegroundProcess = snow_shot::platform::macos::foregroundApplicationProcessId();
+#endif
 
     if (m_autoFilterController) {
         m_autoFilterController->resetSession();
