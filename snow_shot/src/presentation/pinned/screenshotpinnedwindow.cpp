@@ -14,6 +14,7 @@
 #include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
+#include "snow_shot/storage/timevariables.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
@@ -6500,9 +6501,12 @@ void ScreenshotPinnedWindow::quickSave() {
         return;
     if (fileSnapshot) {
         const snow_shot::storage::ScreenshotSettings settings;
+        const QDateTime timestamp = QDateTime::currentDateTime();
         const auto result = ScreenshotRecognitionFileExport::quickSave(
-            *fileSnapshot, settings.imageSaveDirectory(),
-            ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat()));
+            *fileSnapshot,
+            snow_shot::storage::expandTimeVariables(settings.imageSaveDirectory(), timestamp),
+            ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat(),
+                                                          timestamp));
         if (!result.succeeded()) {
             showPinnedRecognitionMessage(
                 this,
@@ -7210,11 +7214,13 @@ void ScreenshotPinnedWindow::saveAsFile() {
             return;
         }
         const snow_shot::storage::ScreenshotSettings settings;
+        const QDateTime timestamp = QDateTime::currentDateTime();
         const QString directory = ScreenshotImageFileService::saveDialogDirectory(
-            settings.lastManualSaveDirectory(), settings.imageSaveDirectory());
+            settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp);
         static_cast<void>(QDir().mkpath(directory));
         const QString initialPath = QDir(directory).filePath(
-            ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat()) +
+            ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat(),
+                                                          timestamp) +
             QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(fileSnapshot->kind));
         const QPointer<ScreenshotPinnedWindow> lifetime(this);
         setProperty("saveDialogOpen", true);

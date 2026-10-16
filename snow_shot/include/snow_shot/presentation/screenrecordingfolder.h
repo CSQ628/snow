@@ -2,10 +2,13 @@
 #define SNOW_SHOT_PRESENTATION_SCREENRECORDINGFOLDER_H
 
 #include <QStringList>
+#include <QDateTime>
 
 namespace snow_shot::presentation::recording {
-[[nodiscard]] QStringList screenRecordingDirectories();
-[[nodiscard]] QString screenRecordingDirectory();
+[[nodiscard]] QStringList
+screenRecordingDirectories(const QDateTime& timestamp = QDateTime::currentDateTime());
+[[nodiscard]] QString
+screenRecordingDirectory(const QDateTime& timestamp = QDateTime::currentDateTime());
 // The caller snapshots and expands the filename format before any worker handoff.
 [[nodiscard]] QString screenRecordingOutputPath(const QStringList& directories,
                                                 const QString& baseName, const QString& extension);

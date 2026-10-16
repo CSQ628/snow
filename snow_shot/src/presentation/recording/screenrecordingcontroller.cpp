@@ -1128,10 +1128,11 @@ struct ScreenRecordingController::Impl {
                 static_cast<uint32_t>(mouseHighlightRadius),
             };
             sessionLoopAnimatedImages = config.loop_animated_images != 0;
-            const QString baseName =
-                ScreenshotImageFileService::suggestedBaseName(settings.videoFilenameFormat());
+            const QDateTime outputTimestamp = QDateTime::currentDateTime();
+            const QString baseName = ScreenshotImageFileService::suggestedBaseName(
+                settings.videoFilenameFormat(), outputTimestamp);
             const QStringList directories =
-                snow_shot::presentation::recording::screenRecordingDirectories();
+                snow_shot::presentation::recording::screenRecordingDirectories(outputTimestamp);
             const QString extension = sessionOutputSettings.extension;
             const bool keyboard = showKeyboard || recordMouseClicks;
             const QString requestedPath =

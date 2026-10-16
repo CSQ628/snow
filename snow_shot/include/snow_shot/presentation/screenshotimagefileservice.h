@@ -64,9 +64,12 @@ class ScreenshotImageFileService final {
     [[nodiscard]] static QString dialogFilter(ScreenshotImageFileFormat format);
     [[nodiscard]] static QString saveDialogFilter();
     [[nodiscard]] static QStringList automaticDirectories();
-    [[nodiscard]] static QStringList automaticDirectories(const QString& configuredDirectory);
-    [[nodiscard]] static QString saveDialogDirectory(const QString& lastDirectory,
-                                                     const QString& configuredDirectory);
+    [[nodiscard]] static QStringList
+    automaticDirectories(const QString& configuredDirectory,
+                         const QDateTime& timestamp = QDateTime::currentDateTime());
+    [[nodiscard]] static QString
+    saveDialogDirectory(const QString& lastDirectory, const QString& configuredDirectory,
+                        const QDateTime& timestamp = QDateTime::currentDateTime());
     [[nodiscard]] static QString extension(ScreenshotImageFileFormat format);
     [[nodiscard]] static ScreenshotImageFileFormat formatForKey(const QString& key);
     [[nodiscard]] static QString formatKey(ScreenshotImageFileFormat format);

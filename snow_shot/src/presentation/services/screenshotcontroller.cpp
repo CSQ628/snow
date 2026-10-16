@@ -12,6 +12,7 @@
 #include "snow_shot/presentation/screenshotautofiltercontroller.h"
 #include "snow_shot/presentation/screenshotsourceimagecomposer.h"
 #include "snow_shot/presentation/screenshotcontroller.h"
+#include "snow_shot/storage/timevariables.h"
 #include "snow_shot/presentation/globalshortcuttypes.h"
 #include "snow_shot/presentation/screenshotprintservice.h"
 #include "screenshotprintinteractionguard.h"
@@ -4314,9 +4315,12 @@ void ScreenshotController::Impl::quickSaveSelection() {
             !resetCanvasEditingState())
             return;
         const snow_shot::storage::ScreenshotSettings settings;
+        const QDateTime timestamp = QDateTime::currentDateTime();
         const auto result = ScreenshotRecognitionFileExport::quickSave(
-            *fileSnapshot, settings.imageSaveDirectory(),
-            ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat()));
+            *fileSnapshot,
+            snow_shot::storage::expandTimeVariables(settings.imageSaveDirectory(), timestamp),
+            ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat(),
+                                                          timestamp));
         if (!result.succeeded()) {
             m_messages->error(
                 QString::fromLatin1(kSaveMessageKey),
@@ -4649,11 +4653,13 @@ void ScreenshotController::Impl::saveRecognitionResultWithSystemDialog(
     });
 
     const snow_shot::storage::ScreenshotSettings settings;
+    const QDateTime timestamp = QDateTime::currentDateTime();
     const QString directory = ScreenshotImageFileService::saveDialogDirectory(
-        settings.lastManualSaveDirectory(), settings.imageSaveDirectory());
+        settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp);
     static_cast<void>(QDir().mkpath(directory));
     const QString initialPath = QDir(directory).filePath(
-        ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat()) +
+        ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat(),
+                                                      timestamp) +
         QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(snapshot.kind));
     const QString selectedPath = QFileDialog::getSaveFileName(
         dialogOwner.data(),

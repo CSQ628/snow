@@ -6,6 +6,7 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotsavepreviewcanvas.h"
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/storage/timevariables.h"
 #include "screenshotsaveexportpipeline.h"
 #include "widgets/button.h"
 #include "widgets/context_menu.h"
@@ -101,7 +102,7 @@ class SaveContent final : public QWidget {
         m_renderTimer.setSingleShot(true);
         m_renderTimer.setInterval(100);
         connect(&m_renderTimer, &QTimer::timeout, this, [this] { startRender(); });
-        m_state = ScreenshotSaveDialogState::initial({});
+        m_state = ScreenshotSaveDialogState::initial({}, m_timestamp);
         loadRememberedFormatOptions();
         applyRememberedFormatOptions();
         auto* layout = new QHBoxLayout(this);
@@ -603,7 +604,10 @@ class SaveContent final : public QWidget {
             }
             m_shortcutsLayout->addWidget(group);
         };
-        add(tr("App directory"), snow_shot::storage::ScreenshotSettings().imageSaveDirectory(), -2);
+        add(tr("App directory"),
+            snow_shot::storage::expandTimeVariables(
+                snow_shot::storage::ScreenshotSettings().imageSaveDirectory(), m_timestamp),
+            -2);
         add(tr("Desktop"), QStandardPaths::writableLocation(QStandardPaths::DesktopLocation), -1);
         for (int index = 0; index < m_shortcuts.size(); ++index)
             add(m_shortcuts.at(index).name, m_shortcuts.at(index).path, index);
@@ -1191,6 +1195,7 @@ class SaveContent final : public QWidget {
     AdModal* m_modal;
     std::shared_ptr<ScreenshotExportArtifact> m_artifact;
     ScreenshotSaveAsFileDialog::Saved m_saved;
+    const QDateTime m_timestamp = QDateTime::currentDateTime();
     ScreenshotSaveDialogState m_state;
     pipeline::Source m_source;
     std::optional<ScreenshotSaveExportOptions> m_requestedOptions;
@@ -1257,19 +1262,22 @@ class SaveContent final : public QWidget {
 };
 } // namespace
 
-ScreenshotSaveDialogState ScreenshotSaveDialogState::initial(QSize size) {
+ScreenshotSaveDialogState ScreenshotSaveDialogState::initial(QSize size,
+                                                             const QDateTime& timestamp) {
     ScreenshotSaveDialogState result;
     const snow_shot::storage::ScreenshotSettings settings;
     const QFileInfo remembered(settings.lastManualSaveDirectory());
-    const QString configured = settings.imageSaveDirectory().trimmed();
+    const QString configured =
+        snow_shot::storage::expandTimeVariables(settings.imageSaveDirectory(), timestamp);
     if (remembered.isDir() && remembered.isReadable() && remembered.isWritable())
         result.directory = remembered.absoluteFilePath();
     else if (!configured.isEmpty() && QDir::isAbsolutePath(configured))
         result.directory = QDir::cleanPath(configured);
     else
-        result.directory = ScreenshotImageFileService::saveDialogDirectory({}, configured);
-    result.filename =
-        ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat());
+        result.directory = ScreenshotImageFileService::saveDialogDirectory(
+            {}, settings.imageSaveDirectory(), timestamp);
+    result.filename = ScreenshotImageFileService::suggestedBaseName(
+        settings.manualSaveFilenameFormat(), timestamp);
     result.output.pdfPageSize = screenshot_pdf::pageSizeForKey(settings.pdfPageSize());
     result.sourceSize = size;
     result.output.size = size;

@@ -28,7 +28,8 @@ struct ScreenshotSaveDialogState {
     QSize sourceSize;
     ScreenshotSaveExportOptions output;
     bool lockAspectRatio = true;
-    [[nodiscard]] static ScreenshotSaveDialogState initial(QSize sourceSize);
+    [[nodiscard]] static ScreenshotSaveDialogState
+    initial(QSize sourceSize, const QDateTime& timestamp = QDateTime::currentDateTime());
     void setDimension(bool width, int value);
     [[nodiscard]] QString imageValidationError() const;
     [[nodiscard]] QString validationError() const;

@@ -1594,6 +1594,34 @@ void browseShortcutDirectory(AdModal* editor, const QString& selectedPath, bool 
             "folder selection must update the shortcut path and cancellation must preserve it");
 }
 
+void timeDirectoryDefaultsAndShortcut(QWidget& owner, const QTemporaryDir& temp) {
+    storage::ScreenshotSettings settings;
+    const QString pattern = temp.filePath(QStringLiteral("images/{YYYY}"));
+    require(settings.setImageSaveDirectory(pattern) && settings.setLastManualSaveDirectory({}) &&
+                settings.setManualSaveFilenameFormat(QStringLiteral("{YYYY}")),
+            "dated save dialog settings must persist");
+    const QDateTime before =
+        QDateTime::fromString(QStringLiteral("2026-12-31T23:59:59"), Qt::ISODate);
+    for (const auto& timestamp : {before, before.addSecs(1)}) {
+        const auto state = ScreenshotSaveDialogState::initial(QSize(160, 100), timestamp);
+        require(state.directory == temp.filePath(QStringLiteral("images/") +
+                                                 timestamp.toString(QStringLiteral("yyyy"))) &&
+                    state.filename == timestamp.toString(QStringLiteral("yyyy")),
+                "custom manual dialog must use one time for its configured folder and filename");
+    }
+    auto* modal = openDialog(owner, fixture());
+    auto* content = modal->contentWidget();
+    child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
+    child<AdButton>(content, "savePathShortcut_-2")->click();
+    require(child<AdLineEdit>(content, "saveDirectoryInput")->text() ==
+                temp.filePath(QStringLiteral("images/") +
+                              child<AdLineEdit>(content, "saveFilenameInput")->text()),
+            "App directory shortcut must expand using the same time as the dialog filename");
+    require(settings.imageSaveDirectory() == pattern, "dialog must retain the configured template");
+    modal->reject();
+    flush();
+}
+
 void shortcutsAndCancellation(QWidget& owner, const QTemporaryDir& temp) {
     int saved = 0;
     int finished = 0;
@@ -3377,6 +3405,12 @@ int main(int argc, char* argv[]) {
         QWidget owner;
         owner.resize(1200, 800);
         owner.show();
+        if (app.arguments().contains(QStringLiteral("--time-variables"))) {
+            timeDirectoryDefaultsAndShortcut(owner, temp);
+            ScreenshotExportCoordinator::shared().shutdown();
+            storage::ApplicationStorage::instance().shutdown();
+            return 0;
+        }
         if (QApplication::arguments().contains(QStringLiteral("--collage-modality"))) {
             collageWindowModalityAndRetry(owner);
             ScreenshotExportCoordinator::shared().shutdown();

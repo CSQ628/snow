@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
+#include "snow_shot/storage/timevariables.h"
 #include "snow_shot/presentation/screenshotencodingsettings.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 
@@ -1156,7 +1157,8 @@ bool ScreenshotExportArtifact::prepareClipboard(QObject* receiver, QByteArray ca
 }
 
 bool ScreenshotExportArtifact::requestQuickSave(QObject* receiver,
-                                                ScreenshotExportCoordinator::Completion callback) {
+                                                ScreenshotExportCoordinator::Completion callback,
+                                                QDateTime requestedAt) {
     if (receiver == nullptr || !callback || isCancelled())
         return false;
     const snow_shot::storage::ScreenshotSettings settings;
@@ -1176,11 +1178,14 @@ bool ScreenshotExportArtifact::requestQuickSave(QObject* receiver,
             }),
             Qt::QueuedConnection);
     }
+    if (!requestedAt.isValid())
+        requestedAt = QDateTime::currentDateTime();
     return requestAutomaticSave(
-        receiver, {directory}, ScreenshotImageFileService::formatForKey(settings.imageFormat()),
+        receiver, {snow_shot::storage::expandTimeVariables(directory, requestedAt)},
+        ScreenshotImageFileService::formatForKey(settings.imageFormat()),
         settings.autoSaveFilenameFormat(),
         snow_shot::presentation::screenshotEncodingOptions(settings), std::move(callback),
-        ScreenshotPdfOptions{screenshot_pdf::pageSizeForKey(settings.pdfPageSize())});
+        ScreenshotPdfOptions{screenshot_pdf::pageSizeForKey(settings.pdfPageSize())}, requestedAt);
 }
 
 bool ScreenshotExportArtifact::requestSaveToPath(QObject* receiver, QString path,
@@ -1559,8 +1564,8 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
                             ScreenshotExportFailureStage::File, std::move(error));
                     directories = {clipboardDirectory->path()};
                 } else if (const auto* configuredDirectory = std::get_if<QString>(&destination)) {
-                    directories =
-                        ScreenshotImageFileService::automaticDirectories(*configuredDirectory);
+                    directories = ScreenshotImageFileService::automaticDirectories(
+                        *configuredDirectory, requestedAt);
                 } else {
                     directories = std::get<QStringList>(destination);
                 }

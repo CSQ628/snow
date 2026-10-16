@@ -1,6 +1,7 @@
 #include "snow_shot/presentation/screenrecordingfolder.h"
 
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/storage/timevariables.h"
 
 #include <QDesktopServices>
 #include <QDir>
@@ -24,12 +25,14 @@ QStringList defaultRecordingDirectories() {
 }
 } // namespace
 
-QStringList screenRecordingDirectories() {
+QStringList screenRecordingDirectories(const QDateTime& timestamp) {
     QStringList directories;
-    const QString configured =
-        QDir::cleanPath(storage::RecordingSettings().videoSaveDirectory().trimmed());
+    const QString configuredTemplate = storage::RecordingSettings().videoSaveDirectory();
+    const QString expanded = storage::expandTimeVariables(configuredTemplate, timestamp);
+    const QString configured = expanded.isEmpty() ? QString() : QDir::cleanPath(expanded);
     const QFileInfo configuredInfo(configured);
-    if (!configured.isEmpty() && configuredInfo.isDir() && configuredInfo.isWritable()) {
+    if (!configured.isEmpty() && ((configuredInfo.isDir() && configuredInfo.isWritable()) ||
+                                  storage::containsTimeVariables(configuredTemplate))) {
         directories.push_back(configured);
     }
     for (const QString& fallback : defaultRecordingDirectories()) {
@@ -40,8 +43,8 @@ QStringList screenRecordingDirectories() {
     return directories;
 }
 
-QString screenRecordingDirectory() {
-    const QStringList directories = screenRecordingDirectories();
+QString screenRecordingDirectory(const QDateTime& timestamp) {
+    const QStringList directories = screenRecordingDirectories(timestamp);
     for (const QString& candidate : directories) {
         QDir directory(candidate);
         if ((directory.exists() || directory.mkpath(QStringLiteral("."))) &&

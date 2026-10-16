@@ -4677,6 +4677,21 @@
         </message>
     </context>
     <context>
+        <name>SettingsVariableHelp</name>
+        <message>
+            <source>OK</source>
+            <translation>OK</translation>
+        </message>
+        <message>
+            <source>Time placeholders in braces are replaced with the current local date and time.</source>
+            <translation>Time placeholders in braces are replaced with the current local date and time.</translation>
+        </message>
+        <message>
+            <source>Variable Description</source>
+            <translation>Variable Description</translation>
+        </message>
+    </context>
+    <context>
         <name>ShellContextMenuRegistration</name>
         <message>
             <source>Could not access the Windows context menu registry. Windows error %1.</source>

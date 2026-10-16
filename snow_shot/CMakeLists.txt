@@ -751,6 +751,7 @@ set(SNOW_SHOT_STORAGE_SOURCES
     include/snow_shot/storage/configurationstore.h
     include/snow_shot/storage/configurationschema.h
     include/snow_shot/storage/exportfilename.h
+    include/snow_shot/storage/timevariables.h
     include/snow_shot/storage/persistedselectioncodec.h
     include/snow_shot/storage/persistedwindowgeometry.h
     include/snow_shot/storage/pinnedwindowrepository.h
@@ -767,6 +768,7 @@ set(SNOW_SHOT_STORAGE_SOURCES
     src/storage/configurationstore.cpp
     src/storage/configurationschema.cpp
     src/storage/exportfilename.cpp
+    src/storage/timevariables.cpp
     src/storage/persistedselectioncodec.cpp
     src/storage/persistedwindowgeometry.cpp
     src/storage/pinnedwindowrepository.cpp
@@ -3117,11 +3119,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+    snow_find_qt(COMPONENTS Test)
     add_executable(snow-shot-settings-page-loading-tests
         tests/settings_page_loading_tests.cpp
         src/presentation/services/screenshotclipboardservice.cpp)
     target_link_libraries(snow-shot-settings-page-loading-tests PRIVATE
-        snow_shot_settings snow_shot_image_codec)
+        snow_shot_settings snow_shot_image_codec Qt6::Test)
     snow_shot_import_offscreen_platform(snow-shot-settings-page-loading-tests)
     snow_shot_add_translations(snow-shot-settings-page-loading-tests)
     add_test(NAME snow-shot-settings-select-tests
@@ -3139,6 +3142,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-settings-page-loading-tests
         COMMAND snow-shot-settings-page-loading-tests)
+    add_test(NAME snow-shot-settings-variable-help-tests
+        COMMAND snow-shot-settings-page-loading-tests --variable-help-only -platform offscreen)
+    set_tests_properties(snow-shot-settings-variable-help-tests PROPERTIES
+        LABELS unit RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-stitch-selected-images-settings-tests
         COMMAND snow-shot-settings-page-loading-tests --stitch-selected-images-only)
     set_tests_properties(snow-shot-stitch-selected-images-settings-tests PROPERTIES LABELS unit
@@ -5245,6 +5253,22 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-pdf-export-tests PROPERTIES
         LABELS "unit" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+    add_executable(snow-shot-save-directory-time-variables-tests
+        tests/save_directory_time_variables_tests.cpp
+        src/presentation/services/screenshotimagefileservice.cpp
+        src/presentation/services/screenshotpdfexport.cpp
+        src/presentation/recording/screenrecordingfolder.cpp)
+    target_include_directories(snow-shot-save-directory-time-variables-tests PRIVATE
+        include src/image)
+    target_link_libraries(snow-shot-save-directory-time-variables-tests PRIVATE
+        snow_shot_storage snow_shot_image_codec Qt6::Gui)
+    add_test(NAME snow-shot-save-directory-time-variables-tests
+        COMMAND snow-shot-save-directory-time-variables-tests -platform offscreen)
+    snow_shot_import_offscreen_platform(snow-shot-save-directory-time-variables-tests)
+    set_tests_properties(snow-shot-save-directory-time-variables-tests PROPERTIES
+        LABELS unit RUN_SERIAL TRUE
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     add_executable(snow-shot-screenshot-image-file-service-tests
         tests/screenshot_image_file_service_tests.cpp
         include/snow_shot/presentation/screenshotimagefileservice.h
@@ -5775,6 +5799,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-export-dialog-workflow-tests)
     add_test(NAME snow-shot-export-dialog-shortcut-tests
         COMMAND snow-shot-export-dialog-workflow-tests --shortcuts)
+    add_test(NAME snow-shot-export-dialog-time-variables-tests
+        COMMAND snow-shot-export-dialog-workflow-tests --time-variables -platform offscreen)
+    set_tests_properties(snow-shot-export-dialog-time-variables-tests PROPERTIES
+        LABELS unit RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-collage-export-dialog-tests
         COMMAND snow-shot-export-dialog-workflow-tests --collage-modality -platform offscreen)
     set_tests_properties(snow-shot-collage-export-dialog-tests PROPERTIES

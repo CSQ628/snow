@@ -1,6 +1,7 @@
 #include "snow_shot/presentation/screenshotimagefileservice.h"
 
 #include "snowimageqtcodec.h"
+#include "snow_shot/storage/timevariables.h"
 
 #include <QClipboard>
 #include <QCoreApplication>
@@ -9,7 +10,6 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QMimeData>
-#include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QUrl>
@@ -217,22 +217,7 @@ QString ScreenshotImageFileService::suggestedBaseName(const QDateTime& timestamp
 
 QString ScreenshotImageFileService::suggestedBaseName(const QString& filenameFormat,
                                                       const QDateTime& timestamp) {
-    QString result = filenameFormat.trimmed();
-    static const QRegularExpression placeholder(QStringLiteral("\\{([^{}]+)\\}"));
-    QList<QRegularExpressionMatch> matches;
-    auto iterator = placeholder.globalMatch(result);
-    while (iterator.hasNext()) {
-        matches.push_back(iterator.next());
-    }
-    for (auto match = matches.crbegin(); match != matches.crend(); ++match) {
-        QString dateTimeFormat = match->captured(1);
-        dateTimeFormat.replace(QStringLiteral("YYYY"), QStringLiteral("yyyy"));
-        dateTimeFormat.replace(QStringLiteral("YY"), QStringLiteral("yy"));
-        dateTimeFormat.replace(QStringLiteral("DD"), QStringLiteral("dd"));
-        result.replace(match->capturedStart(), match->capturedLength(),
-                       timestamp.toString(dateTimeFormat));
-    }
-    return result;
+    return snow_shot::storage::expandTimeVariables(filenameFormat, timestamp);
 }
 
 QString ScreenshotImageFileService::dialogFilter(ScreenshotImageFileFormat format) {
@@ -265,10 +250,14 @@ QStringList ScreenshotImageFileService::automaticDirectories() {
     return directories;
 }
 
-QStringList ScreenshotImageFileService::automaticDirectories(const QString& configuredDirectory) {
+QStringList ScreenshotImageFileService::automaticDirectories(const QString& configuredDirectory,
+                                                             const QDateTime& timestamp) {
     QStringList directories;
-    const QString configured = QDir::cleanPath(configuredDirectory.trimmed());
-    if (!configured.isEmpty() && QFileInfo(configured).isDir()) {
+    const QString expanded =
+        snow_shot::storage::expandTimeVariables(configuredDirectory, timestamp);
+    const QString configured = expanded.isEmpty() ? QString() : QDir::cleanPath(expanded);
+    if (!configured.isEmpty() && (QFileInfo(configured).isDir() ||
+                                  snow_shot::storage::containsTimeVariables(configuredDirectory))) {
         directories.push_back(configured);
     }
     for (const QString& fallback : automaticDirectories()) {
@@ -280,7 +269,8 @@ QStringList ScreenshotImageFileService::automaticDirectories(const QString& conf
 }
 
 QString ScreenshotImageFileService::saveDialogDirectory(const QString& lastDirectory,
-                                                        const QString& configuredDirectory) {
+                                                        const QString& configuredDirectory,
+                                                        const QDateTime& timestamp) {
     const QString remembered = lastDirectory.trimmed();
     if (!remembered.isEmpty()) {
         const QString cleaned = QDir::cleanPath(remembered);
@@ -289,7 +279,7 @@ QString ScreenshotImageFileService::saveDialogDirectory(const QString& lastDirec
         }
     }
 
-    const QStringList candidates = automaticDirectories(configuredDirectory);
+    const QStringList candidates = automaticDirectories(configuredDirectory, timestamp);
     if (!candidates.isEmpty()) {
         return candidates.constFirst();
     }

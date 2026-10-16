@@ -170,7 +170,8 @@ class ScreenshotExportArtifact final : public QObject {
         ScreenshotExportCoordinator::Completion callback, ScreenshotPdfOptions pdf = {},
         QDateTime requestedAt = {});
     [[nodiscard]] bool requestQuickSave(QObject* receiver,
-                                        ScreenshotExportCoordinator::Completion callback);
+                                        ScreenshotExportCoordinator::Completion callback,
+                                        QDateTime requestedAt = {});
     void cancel();
 
     [[nodiscard]] bool isValid() const;

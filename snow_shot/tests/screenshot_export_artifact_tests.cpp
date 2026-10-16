@@ -742,6 +742,62 @@ void clipboardFilesUseTemporaryStorageAndKeepExportOptions() {
     }
 }
 
+void saveDirectoryTemplatesUseRequestTime() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "time-directory fixture unavailable");
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    require(storage.initialize({directory.path(), directory.path(), 60000}).success,
+            "time-directory settings unavailable");
+    const auto shutdown = qScopeGuard([&] { storage.shutdown(); });
+    const snow_shot::storage::ScreenshotSettings settings;
+    const QString pattern = directory.filePath(QStringLiteral("output/{YYYY}"));
+    require(settings.setImageSaveDirectory(pattern) &&
+                settings.setAutoSaveFilenameFormat(QStringLiteral("{YYYY-MM-DD_HH-mm-ss}")),
+            "time-directory settings must persist");
+    const QDateTime before =
+        QDateTime::fromString(QStringLiteral("2026-12-31T23:59:59"), Qt::ISODate);
+    QObject receiver;
+    for (const bool quick : {false, true}) {
+        ScreenshotExportArtifact artifact(ScreenshotExportSource::fromImage(testImage()));
+        for (const auto& timestamp : {before, before.addSecs(1)}) {
+            std::optional<ScreenshotExportTaskResult> result;
+            const auto completed = [&](ScreenshotExportTaskResult saved) {
+                result = std::move(saved);
+            };
+            require(quick ? artifact.requestQuickSave(&receiver, completed, timestamp)
+                          : artifact.requestAutomaticSaveToConfiguredDirectory(
+                                &receiver, pattern, ScreenshotImageFileFormat::Png,
+                                QStringLiteral("{YYYY-MM-DD_HH-mm-ss}"), {}, completed, {},
+                                timestamp),
+                    "dated save must be accepted");
+            processUntil([&] { return result.has_value(); });
+            const QString expectedDirectory = directory.filePath(
+                QStringLiteral("output/") + timestamp.toString(QStringLiteral("yyyy")));
+            require(
+                result->succeeded() &&
+                    QFileInfo(result->savedPath).absolutePath() == expectedDirectory &&
+                    QFileInfo(result->savedPath)
+                        .baseName()
+                        .startsWith(timestamp.toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"))),
+                "worker and quick saves must use the captured time for both folder and filename");
+        }
+    }
+    QFile blocker(directory.filePath(QStringLiteral("blocked")));
+    require(blocker.open(QIODevice::WriteOnly), "dated quick-save blocker must open");
+    blocker.close();
+    require(settings.setImageSaveDirectory(blocker.fileName() + QStringLiteral("/{YYYY}")),
+            "blocked template must persist");
+    ScreenshotExportArtifact artifact(ScreenshotExportSource::fromImage(testImage()));
+    std::optional<ScreenshotExportTaskResult> failed;
+    require(artifact.requestQuickSave(
+                &receiver, [&](ScreenshotExportTaskResult saved) { failed = std::move(saved); },
+                before),
+            "blocked dated quick save must be accepted for processing");
+    processUntil([&] { return failed.has_value(); });
+    require(!failed->succeeded() && failed->savedPath.isEmpty(),
+            "dated quick saves must fail without falling back to another folder");
+}
+
 void automaticSavesUseRequestedEncoding() {
     const QImage image = testImage();
     QTemporaryDir directory;
@@ -2489,6 +2545,7 @@ int main(int argc, char** argv) {
         }
         if (application.arguments().contains(QStringLiteral("--configured-directory-only"))) {
             configuredAutomaticDirectoryResolvesInTheSaveWorker();
+            saveDirectoryTemplatesUseRequestTime();
             return EXIT_SUCCESS;
         }
         if (application.arguments().contains(QStringLiteral("--row-source-only"))) {
@@ -2518,6 +2575,7 @@ int main(int argc, char** argv) {
         clipboardFilesUseTemporaryStorageAndKeepExportOptions();
         automaticSavesUseRequestedEncoding();
         configuredAutomaticDirectoryResolvesInTheSaveWorker();
+        saveDirectoryTemplatesUseRequestTime();
         clipboardUsesConfiguredCompression();
         manualPngSavesUseTheirRequestedCompression();
         clipboardSharesPendingConfiguredEncoding();

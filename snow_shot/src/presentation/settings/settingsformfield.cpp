@@ -5,7 +5,9 @@
 #include "snow_shot/network/snowshotapiclient.h"
 #endif
 #include "snow_shot/storage/configurationschema.h"
+#include "snow_shot/storage/timevariables.h"
 #include "widgets/radio.h"
+#include "widgets/modal.h"
 
 #include <QEvent>
 #include <QFileDialog>
@@ -29,6 +31,19 @@ struct SettingsFormField::Impl {
         : q(owner), descriptor(fieldDescriptor), session(runtime) {
         const auto& definition = *descriptor.definition;
         fields::Metadata metadata{descriptor.id, definition.title, definition.description};
+        const auto* text = std::get_if<SettingsTextDefinition>(&definition.payload);
+        const auto* directory = std::get_if<SettingsDirectoryPathDefinition>(&definition.payload);
+        if ((directory != nullptr &&
+             (directory->binding == SettingsDirectoryPathBinding::ScreenshotImageDirectory ||
+              directory->binding == SettingsDirectoryPathBinding::ScreenRecordingVideoDirectory)) ||
+            (text != nullptr &&
+             (text->binding == SettingsTextBinding::ScreenshotManualFilenameFormat ||
+              text->binding == SettingsTextBinding::ScreenshotAutoFilenameFormat ||
+              text->binding == SettingsTextBinding::ScreenRecordingVideoFilenameFormat))) {
+            metadata.descriptionAction = {
+                "SettingsVariableHelp",
+                QT_TRANSLATE_NOOP("SettingsVariableHelp", "Variable Description")};
+        }
         options.allowClear = descriptor.kind == SettingsFieldKind::FilePath ||
                              descriptor.kind == SettingsFieldKind::DirectoryPath;
         std::visit(
@@ -206,7 +221,9 @@ struct SettingsFormField::Impl {
                                      [this, payload](const QString& current) {
                                          const QString path = QFileDialog::getExistingDirectory(
                                              field->viewWidget()->window(),
-                                             payload.dialogTitle.translated(), current);
+                                             payload.dialogTitle.translated(),
+                                             storage::expandTimeVariables(
+                                                 current, QDateTime::currentDateTime()));
                                          commitBrowsedPath(path);
                                      });
                 } else if constexpr (std::is_same_v<Payload, SettingsTextDefinition>) {
@@ -223,6 +240,8 @@ struct SettingsFormField::Impl {
             },
             definition.payload);
         Q_ASSERT(field != nullptr && editor != nullptr);
+        QObject::connect(field, &fields::FormField::descriptionActionRequested, &q,
+                         [this] { showVariableDescription(); });
         q.setParent(field->viewWidget());
         field->viewWidget()->setObjectName(
             generatedObjectName(QStringLiteral("settings-item"), descriptor.id));
@@ -272,6 +291,41 @@ struct SettingsFormField::Impl {
         optionsError = initialOptions.error;
         optionsLoading = initialOptions.loading;
         retranslateUi();
+    }
+
+    void retranslateVariableDescription() {
+        if (!variableModal)
+            return;
+        variableModal->setWindowTitle(
+            QCoreApplication::translate("SettingsVariableHelp", "Variable Description"));
+        variableModal->setAcceptText(QCoreApplication::translate("SettingsVariableHelp", "OK"));
+        variableModal->setText(
+            QCoreApplication::translate(
+                "SettingsVariableHelp",
+                "Time placeholders in braces are replaced with the current local date and time.") +
+            QStringLiteral("\n\n{YYYY} \u2192 ") +
+            QDateTime::currentDateTime().toString(QStringLiteral("yyyy")));
+    }
+
+    void showVariableDescription() {
+        if (variableModal)
+            return;
+        auto* modal = new adqt::widgets::AdModal(field->viewWidget());
+        variableModal = modal;
+        modal->setObjectName(QStringLiteral("settingsVariableDescriptionModal"));
+        modal->setMode(adqt::widgets::AdModal::Mode::Overlay);
+        modal->setOwnerWindow(field->viewWidget()->window());
+        modal->setCentered(true);
+        modal->setPreferredWidth(480);
+        modal->setPreset(adqt::widgets::AdModal::Preset::Plain);
+        modal->setStandardButtons(adqt::widgets::AdModal::StandardButton::Ok);
+        QObject::connect(modal, &adqt::widgets::AdModal::finished, &q,
+                         [this, modal](adqt::widgets::AdModal::DialogCode) {
+                             variableModal = nullptr;
+                             modal->deleteLater();
+                         });
+        retranslateVariableDescription();
+        modal->setOpen(true);
     }
 
     void commitBrowsedPath(const QString& path) {
@@ -424,6 +478,7 @@ struct SettingsFormField::Impl {
     }
 
     void retranslateUi() {
+        retranslateVariableDescription();
         syncChoices();
         field->retranslateUi();
         if (const auto* file =
@@ -452,6 +507,7 @@ struct SettingsFormField::Impl {
     const SettingsFieldDescriptor& descriptor;
     SettingsRuntimeSession& session;
     fields::FormField* field = nullptr;
+    QPointer<adqt::widgets::AdModal> variableModal;
     QWidget* editor = nullptr;
     adqt::widgets::AdRadioButtonGroup* radioGroup = nullptr;
     QVariant lastDraft;
