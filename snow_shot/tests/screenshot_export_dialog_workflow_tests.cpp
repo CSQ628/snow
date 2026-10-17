@@ -1665,6 +1665,59 @@ void windowNameDefaultsAndShortcut(QWidget& owner, const QTemporaryDir& temp) {
             "custom exports without live capture context must use Unknown");
 }
 
+void dottedWindowNameDefaultsAndSaves(QWidget& owner, const QTemporaryDir& temp) {
+    storage::ScreenshotSettings settings;
+    require(settings.setImageSaveDirectory(temp.path()) &&
+                settings.setLastManualSaveDirectory({}) &&
+                settings.setLastManualSaveFormat(QStringLiteral("png")) &&
+                settings.setManualSaveFilenameFormat(QStringLiteral("{WN}_{YYYY}")),
+            "dotted window-name settings must persist");
+    const QDateTime timestamp =
+        QDateTime::fromString(QStringLiteral("2026-10-16T12:34:56"), Qt::ISODate);
+    for (const QString& title :
+         {QStringLiteral("README.md - Visual Studio Code"),
+          QStringLiteral("Report.v2.pdf - Browser"), QStringLiteral("image.png")}) {
+        auto state = ScreenshotSaveDialogState::initial(QSize(160, 100), timestamp, {{}, title});
+        const QString stem = title + QStringLiteral("_2026");
+        require(state.filename == stem && state.validationError().isEmpty(),
+                "dotted titles must remain valid filename stems");
+        for (const auto format : {Format::Png, Format::Jpeg, Format::Webp, Format::Pdf}) {
+            state.output.format = format;
+            require(QFileInfo(state.outputPath()).fileName() ==
+                        stem + QLatin1Char('.') + ScreenshotImageFileService::extension(format),
+                    "selecting an output format must preserve every dot and the template suffix");
+        }
+        state.output.format = Format::Png;
+        const auto saved =
+            ScreenshotImageFileService::write(fixture(), state.outputPath(), state.output.format);
+        require(saved.succeeded() &&
+                    QFileInfo(saved.path).fileName() == stem + QStringLiteral(".png"),
+                "the written filename must match the full dotted stem displayed by the dialog");
+        state.filename = QStringLiteral("edited.v2.name");
+        require(QFileInfo(state.outputPath()).fileName() == QStringLiteral("edited.v2.name.png"),
+                "edited filenames must follow the same stem contract as generated defaults");
+    }
+    require(settings.setManualSaveFilenameFormat(QStringLiteral("{WN}")),
+            "set a filename template whose title ends in an image extension");
+    auto artifact =
+        std::make_shared<ScreenshotExportArtifact>(ScreenshotExportSource::fromImage(fixture()));
+    artifact->setWindowNames({{}, QStringLiteral("image.png")});
+    QString savedPath;
+    require(ScreenshotSaveAsFileDialog::open(&owner, &owner, artifact,
+                                             [&](const QString& path) { savedPath = path; }),
+            "open the dialog with a literal image-extension title");
+    auto* modal = child<AdModal>(&owner, "screenshotSaveAsFileModal");
+    processUntil([&] { return modal->acceptButton()->isEnabled(); });
+    require(child<AdLineEdit>(modal->contentWidget(), "saveFilenameInput")->text() ==
+                QStringLiteral("image.png"),
+            "generated image-extension titles must be displayed unchanged");
+    modal->acceptButton()->click();
+    processUntil([&] { return !savedPath.isEmpty(); });
+    require(QFileInfo(savedPath).fileName() == QStringLiteral("image.png.png"),
+            "saving must not reinterpret a generated filename stem as a user-entered extension");
+    flush();
+}
+
 void shortcutsAndCancellation(QWidget& owner, const QTemporaryDir& temp) {
     int saved = 0;
     int finished = 0;
@@ -3451,6 +3504,7 @@ int main(int argc, char* argv[]) {
         if (app.arguments().contains(QStringLiteral("--time-variables"))) {
             timeDirectoryDefaultsAndShortcut(owner, temp);
             windowNameDefaultsAndShortcut(owner, temp);
+            dottedWindowNameDefaultsAndSaves(owner, temp);
             ScreenshotExportCoordinator::shared().shutdown();
             storage::ApplicationStorage::instance().shutdown();
             return 0;

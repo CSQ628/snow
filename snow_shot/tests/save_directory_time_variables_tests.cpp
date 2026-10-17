@@ -62,7 +62,7 @@ void windowVariables(const QTemporaryDir& temporary) {
     require(storage::expandTimeVariables(QStringLiteral("{AN}-{WN}"), timestamp) ==
                 timestamp.toString(QStringLiteral("AN")) + QLatin1Char('-') +
                     timestamp.toString(QStringLiteral("WN")),
-            "time-only expansion must retain recording compatibility");
+            "the time-only expander must remain unchanged for other callers");
     const QString directory = temporary.filePath(QStringLiteral("names/{AN}/{YYYY}"));
     const QString filename = QStringLiteral("{WN}_{HH-mm-ss}");
     require(storage::ScreenshotSettings().setImageSaveDirectory(directory) &&
@@ -83,6 +83,53 @@ void windowVariables(const QTemporaryDir& temporary) {
         image, directories, ScreenshotImageFileFormat::Png, filename, timestamp, {}, {}, names);
     require(duplicate.succeeded() && duplicate.path.endsWith(QStringLiteral("_1.png")),
             "window variables must retain collision suffix behavior");
+
+    const QString videoTemplate = temporary.filePath(QStringLiteral("videos/{AN}/{WN}/{YYYY}"));
+    const QString expandedVideo =
+        temporary.filePath(QStringLiteral("videos/Google Chrome/文档_ A_B/2026"));
+    require(storage::RecordingSettings().setVideoSaveDirectory(videoTemplate),
+            "recording window directory template must persist");
+    const auto videoDirectories = recording::screenRecordingDirectories(timestamp, names);
+    require(videoDirectories.constFirst() == expandedVideo && !QFileInfo::exists(expandedVideo),
+            "recording names and time must resolve together without creating directories");
+    const QString videoBase = storage::expandScreenshotExportVariables(filename, timestamp, names);
+    const QString video =
+        recording::screenRecordingOutputPath(videoDirectories, videoBase, QStringLiteral("mp4"));
+    require(video == QDir(expandedVideo).filePath(QStringLiteral("文档_ A_B_12-34-56.mp4")) &&
+                recording::screenRecordingDirectory(timestamp, names) == expandedVideo,
+            "recording export and folder resolution must create the same expanded directory");
+    QFile collision(video);
+    require(collision.open(QIODevice::WriteOnly), "create a named recording collision");
+    collision.close();
+    require(
+        recording::screenRecordingOutputPath(videoDirectories, videoBase, QStringLiteral("mp4")) ==
+            QDir(expandedVideo).filePath(QStringLiteral("文档_ A_B_12-34-56_1.mp4")),
+        "named recordings preserve collision suffixes");
+    require(recording::screenRecordingDirectories(timestamp).constFirst() ==
+                    temporary.filePath(QStringLiteral("videos/Unknown/Unknown/2026")) &&
+                storage::RecordingSettings().videoSaveDirectory() == videoTemplate,
+            "missing recording context uses Unknown and preserves the stored template");
+    require(storage::RecordingSettings().setVideoSaveDirectory(
+                temporary.filePath(QStringLiteral("literal-names/{AN}/{WN}"))) &&
+                recording::screenRecordingDirectories(
+                    timestamp, {QStringLiteral("{WN}"), QStringLiteral("{YYYY}")})
+                        .constFirst() ==
+                    temporary.filePath(QStringLiteral("literal-names/{WN}/{YYYY}")),
+            "recording directory names containing braces must never expand recursively");
+    const QString blocked = temporary.filePath(QStringLiteral("window-blocker"));
+    QFile blocker(blocked);
+    require(blocker.open(QIODevice::WriteOnly),
+            "create a blocker for the named recording directory");
+    blocker.close();
+    require(storage::RecordingSettings().setVideoSaveDirectory(blocked + QStringLiteral("/{AN}")),
+            "configure an unusable named recording directory");
+    auto blockedDirectories = recording::screenRecordingDirectories(timestamp, names);
+    const QString fallback = temporary.filePath(QStringLiteral("window-fallback"));
+    blockedDirectories = {blockedDirectories.constFirst(), fallback};
+    require(recording::screenRecordingOutputPath(blockedDirectories, videoBase,
+                                                 QStringLiteral("mp4")) ==
+                QDir(fallback).filePath(videoBase + QStringLiteral(".mp4")),
+            "unusable named recording directories retain the output fallback");
 }
 
 void timeDirectories(const QTemporaryDir& temporary) {
@@ -176,6 +223,78 @@ void timeDirectories(const QTemporaryDir& temporary) {
                     QDir(fallback).filePath(QStringLiteral("fallback.mp4")),
             "unusable expanded targets must retain writer fallback behavior");
 }
+
+void longWindowNames(const QTemporaryDir& temporary) {
+    const QDateTime timestamp(QDate(2026, 10, 16), QTime(12, 34, 56), QTimeZone::UTC);
+    QImage image(2, 2, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    const QString longStem = QString::fromUtf8("文😀").repeated(100);
+    for (const QString& ending : {QStringLiteral("_1234567890.webp"),
+                                  QStringLiteral("-12345678-1234-1234-1234-123456789012.png")}) {
+        const QString name = storage::composeExportFileName(longStem, ending);
+        require(name.toUtf8().size() <= 255 && name.endsWith(ending) &&
+                    QString::fromUtf8(name.toUtf8()) == name,
+                "large collision and unique suffixes must fit without splitting Unicode");
+    }
+    const QString windowsDirectory = storage::expandScreenshotExportVariables(
+        QStringLiteral("C:\\images\\prefix-{AN}-{WN}\\{WN}"), timestamp, {longStem, longStem});
+    const QString uncDirectory = storage::expandScreenshotExportVariables(
+        QStringLiteral("\\\\server\\share\\{WN}"), timestamp, {{}, longStem});
+    require(windowsDirectory.startsWith(QStringLiteral("C:\\images\\prefix-")) &&
+                uncDirectory.startsWith(QStringLiteral("\\\\server\\share\\")),
+            "bounding directory components must preserve drive and UNC separators");
+    int index = 0;
+    for (const QString& title : {QString(300, u'x'), QString::fromUtf8("文😀").repeated(100)}) {
+        const storage::ScreenshotWindowNames names{title, title};
+        const QString directory =
+            temporary.filePath(QStringLiteral("long-%1/prefix-{AN}-{WN}-suffix/{WN}").arg(index++));
+        const QString filename = QStringLiteral("{AN}_{WN}_{YYYY}");
+        const auto directories =
+            ScreenshotImageFileService::automaticDirectories(directory, timestamp, names);
+        const auto first = ScreenshotImageFileService::saveAutomatically(
+            image, directories, ScreenshotImageFileFormat::Png, filename, timestamp, {}, {}, names);
+        require(first.succeeded() &&
+                    QFileInfo(first.path).absolutePath() == directories.constFirst(),
+                "long window names must save in the configured directory without fallback");
+        const auto duplicate = ScreenshotImageFileService::saveAutomatically(
+            image, directories, ScreenshotImageFileFormat::Png, filename, timestamp, {}, {}, names);
+        require(duplicate.succeeded() && duplicate.path.endsWith(QStringLiteral("_1.png")),
+                "long window names must leave room for collision suffixes");
+        QFile encoded(first.path);
+        require(encoded.open(QIODevice::ReadOnly), "read the long-name PNG fixture");
+        const auto copied = ScreenshotImageFileService::saveEncodedBytesAutomatically(
+            encoded.readAll(), directories, ScreenshotImageFileFormat::Png, filename, timestamp, {},
+            names);
+        require(copied.succeeded() && copied.path.endsWith(QStringLiteral("_2.png")),
+                "encoded exports must use the same bounded collision names");
+        require(storage::ScreenshotSettings().setImageSaveDirectory(directory) &&
+                    storage::ScreenshotSettings().setLastManualSaveDirectory({}) &&
+                    storage::ScreenshotSettings().setLastManualSaveFormat(QStringLiteral("png")) &&
+                    storage::ScreenshotSettings().setManualSaveFilenameFormat(filename) &&
+                    screenshotManualSaveDefaults(timestamp, names).initialPath == first.path,
+                "native manual defaults must reserve the same extension space as automatic saves");
+
+        const QString base = storage::expandScreenshotExportVariables(filename, timestamp, names);
+        const QString video =
+            recording::screenRecordingOutputPath(directories, base, QStringLiteral("mp4"));
+        QFile existing(video);
+        require(existing.open(QIODevice::WriteOnly), "long recording names must be writable");
+        existing.close();
+        const QString duplicateVideo =
+            recording::screenRecordingOutputPath(directories, base, QStringLiteral("mp4"));
+        require(duplicateVideo.endsWith(QStringLiteral("_1.mp4")),
+                "long recording names must preserve collision suffixes");
+        for (const QString& path :
+             {first.path, duplicate.path, copied.path, video, duplicateVideo}) {
+            for (const QString& component : path.split(QLatin1Char('/'))) {
+                require(
+                    component.toUtf8().size() <= 255 &&
+                        QString::fromUtf8(component.toUtf8()) == component,
+                    "every generated component must fit the byte limit without splitting Unicode");
+            }
+        }
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -187,6 +306,7 @@ int main(int argc, char** argv) {
             "isolated settings must initialize");
     timeDirectories(temporary);
     windowVariables(temporary);
+    longWindowNames(temporary);
     appStorage.shutdown();
     return EXIT_SUCCESS;
 }

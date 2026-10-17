@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "snow_shot/platform/screenshotwindownames.h"
+#include "../screenshotwindownamereader_p.h"
 
 #ifdef Q_OS_WIN
 #include <QFileInfo>
@@ -59,8 +60,10 @@ QString applicationName(DWORD pid) {
 
 namespace snow_shot::platform {
 storage::ScreenshotWindowNames
-screenshotWindowNamesAtPoint(const QPointF& point,
-                             std::span<const std::uintptr_t> excludedWindows) {
+screenshotWindowNamesAtPoint(const QPointF& point, std::span<const std::uintptr_t> excludedWindows,
+                             storage::ScreenshotWindowNameFields fields) {
+    if (!fields.any())
+        return {};
 #ifdef Q_OS_WIN
     const POINT position{qFloor(point.x()), qFloor(point.y())};
     for (HWND window = GetTopWindow(nullptr); window; window = GetWindow(window, GW_HWNDNEXT)) {
@@ -83,12 +86,20 @@ screenshotWindowNamesAtPoint(const QPointF& point,
         if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) &&
             cloaked)
             continue;
-        DWORD pid = 0;
-        GetWindowThreadProcessId(window, &pid);
-        // GetWindowText reads another process's caption without messaging its UI thread.
-        std::vector<wchar_t> title(static_cast<size_t>(GetWindowTextLengthW(window)) + 1);
-        const int length = GetWindowTextW(window, title.data(), static_cast<int>(title.size()));
-        return {applicationName(pid), QString::fromWCharArray(title.data(), length)};
+        return detail::readScreenshotWindowNames(
+            fields,
+            [window] {
+                DWORD pid = 0;
+                GetWindowThreadProcessId(window, &pid);
+                return applicationName(pid);
+            },
+            [window] {
+                // GetWindowText reads another process's caption without messaging its UI thread.
+                std::vector<wchar_t> title(static_cast<size_t>(GetWindowTextLengthW(window)) + 1);
+                const int length =
+                    GetWindowTextW(window, title.data(), static_cast<int>(title.size()));
+                return QString::fromWCharArray(title.data(), length);
+            });
     }
 #else
     Q_UNUSED(point);

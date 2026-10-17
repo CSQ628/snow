@@ -13,10 +13,8 @@ screenshotWindowNamesForExport(const QString& directory, const QString& filename
                                const QRect& selection, const ScreenshotDisplaySession& displays,
                                const ScreenshotGeometryMapper& geometry,
                                std::span<const std::uintptr_t> excludedWindows, Lookup lookup) {
-    using snow_shot::storage::containsScreenshotWindowVariables;
-    if ((!containsScreenshotWindowVariables(directory) &&
-         !containsScreenshotWindowVariables(filename)) ||
-        selection.isEmpty() || displays.hasImageSources())
+    const auto fields = snow_shot::storage::screenshotWindowNameFields(directory, filename);
+    if (!fields.any() || selection.isEmpty() || displays.hasImageSources())
         return {};
     const QPointF center = ScreenshotHalfOpenRect::fromRect(selection).center();
     const auto* display = geometry.displayForCanvasPoint(displays, center);
@@ -26,5 +24,5 @@ screenshotWindowNamesForExport(const QString& directory, const QString& filename
     const QPointF point = display->canvasUsesPoints
                               ? geometry.logicalPositionForCanvasPoint(*display, center)
                               : geometry.physicalPositionForCanvasPoint(displays, center);
-    return lookup(point, excludedWindows);
+    return lookup(point, excludedWindows, fields);
 }

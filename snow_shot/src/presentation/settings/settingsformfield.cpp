@@ -223,8 +223,10 @@ struct SettingsFormField::Impl {
                         [this, payload](const QString& current) {
                             const QString path = QFileDialog::getExistingDirectory(
                                 field->viewWidget()->window(), payload.dialogTitle.translated(),
-                                (payload.binding ==
-                                         SettingsDirectoryPathBinding::ScreenshotImageDirectory
+                                (payload.binding == SettingsDirectoryPathBinding::
+                                                        ScreenshotImageDirectory ||
+                                         payload.binding == SettingsDirectoryPathBinding::
+                                                                ScreenRecordingVideoDirectory
                                      ? storage::expandScreenshotExportVariables(
                                            current, QDateTime::currentDateTime())
                                      : storage::expandTimeVariables(current,
@@ -309,13 +311,15 @@ struct SettingsFormField::Impl {
         const auto* directory =
             std::get_if<SettingsDirectoryPathDefinition>(&descriptor.definition->payload);
         const auto* filename = std::get_if<SettingsTextDefinition>(&descriptor.definition->payload);
-        const bool screenshot =
+        const bool windowVariables =
             (directory &&
-             directory->binding == SettingsDirectoryPathBinding::ScreenshotImageDirectory) ||
+             (directory->binding == SettingsDirectoryPathBinding::ScreenshotImageDirectory ||
+              directory->binding == SettingsDirectoryPathBinding::ScreenRecordingVideoDirectory)) ||
             (filename &&
              (filename->binding == SettingsTextBinding::ScreenshotManualFilenameFormat ||
-              filename->binding == SettingsTextBinding::ScreenshotAutoFilenameFormat));
-        if (screenshot) {
+              filename->binding == SettingsTextBinding::ScreenshotAutoFilenameFormat ||
+              filename->binding == SettingsTextBinding::ScreenRecordingVideoFilenameFormat));
+        if (windowVariables) {
             text += QLatin1Char('\n') +
                     QCoreApplication::translate("SettingsVariableHelp", "%1: Application Name")
                         .arg(QStringLiteral("{AN}"));

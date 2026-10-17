@@ -4669,10 +4669,10 @@ void ScreenshotController::Impl::saveRecognitionResultWithSystemDialog(
     const QString directory = ScreenshotImageFileService::saveDialogDirectory(
         settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp, names);
     static_cast<void>(QDir().mkpath(directory));
-    const QString initialPath = QDir(directory).filePath(
+    const QString initialPath = QDir(directory).filePath(snow_shot::storage::composeExportFileName(
         ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat(),
-                                                      timestamp, names) +
-        QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(snapshot.kind));
+                                                      timestamp, names),
+        QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(snapshot.kind)));
     const QString selectedPath = QFileDialog::getSaveFileName(
         dialogOwner.data(),
         QCoreApplication::translate("ScreenshotController", "Save recognition result"), initialPath,

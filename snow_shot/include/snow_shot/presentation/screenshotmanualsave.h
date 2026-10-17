@@ -5,6 +5,7 @@
 #include "snow_shot/presentation/screenshotimagefileservice.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/storage/exportfilename.h"
 #include <QDir>
 #include <QPointer>
 
@@ -51,10 +52,10 @@ screenshotManualSaveDefaults(const QDateTime& timestamp = QDateTime::currentDate
         settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp, names);
     static_cast<void>(QDir().mkpath(directory));
     const auto format = ScreenshotImageFileService::formatForKey(settings.lastManualSaveFormat());
-    return {QDir(directory).filePath(ScreenshotImageFileService::suggestedBaseName(
-                                         settings.manualSaveFilenameFormat(), timestamp, names) +
-                                     QStringLiteral(".") +
-                                     ScreenshotImageFileService::extension(format)),
+    return {QDir(directory).filePath(snow_shot::storage::composeExportFileName(
+                ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat(),
+                                                              timestamp, names),
+                QStringLiteral(".") + ScreenshotImageFileService::extension(format))),
             ScreenshotImageFileService::dialogFilter(format)};
 }
 

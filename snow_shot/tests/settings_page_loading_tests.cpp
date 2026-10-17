@@ -618,27 +618,29 @@ void variableDescriptionLinks(const settings::SettingsRegistry& registry,
     owner.show();
     drainEvents();
     QTemporaryDir browseDirectory;
-    const QString pathTemplate = browseDirectory.filePath(QStringLiteral("{'resolved'}"));
-    const QString resolved = browseDirectory.filePath(QStringLiteral("resolved"));
+    const QString pathTemplate = browseDirectory.filePath(QStringLiteral("{AN}/{WN}/{'resolved'}"));
+    const QString resolved = browseDirectory.filePath(QStringLiteral("Unknown/Unknown/resolved"));
     require(browseDirectory.isValid() && QDir().mkpath(resolved), "browse fixture must exist");
-    auto* path = qobject_cast<DirectoryPathInput*>(fields.constFirst()->editor());
-    require(path != nullptr, "image directory must expose a path editor");
-    path->setText(pathTemplate);
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
-    bool inspectedPicker = false;
-    QTimer::singleShot(0, &owner, [&] {
-        for (auto* widget : QApplication::topLevelWidgets()) {
-            if (auto* dialog = qobject_cast<QFileDialog*>(widget)) {
-                require(dialog->directory().absolutePath() == resolved,
-                        "directory picker must receive the resolved template");
-                inspectedPicker = true;
-                dialog->reject();
+    for (auto* field : {fields.at(0), fields.at(1)}) {
+        auto* path = qobject_cast<DirectoryPathInput*>(field->editor());
+        require(path != nullptr, "image and recording directories must expose path editors");
+        path->setText(pathTemplate);
+        bool inspectedPicker = false;
+        QTimer::singleShot(0, &owner, [&] {
+            for (auto* widget : QApplication::topLevelWidgets()) {
+                if (auto* dialog = qobject_cast<QFileDialog*>(widget)) {
+                    require(dialog->directory().absolutePath() == resolved,
+                            "directory picker resolves window variables without recording context");
+                    inspectedPicker = true;
+                    dialog->reject();
+                }
             }
-        }
-    });
-    path->browseButton()->click();
-    require(inspectedPicker && path->text() == pathTemplate,
-            "canceling the directory picker must preserve the stored template");
+        });
+        path->browseButton()->click();
+        require(inspectedPicker && path->text() == pathTemplate,
+                "canceling the directory picker must preserve the stored template");
+    }
     for (auto* field : fields) {
         auto* description =
             field->viewWidget()->findChild<QLabel*>(QStringLiteral("formFieldDescription"));
@@ -657,12 +659,10 @@ void variableDescriptionLinks(const settings::SettingsRegistry& registry,
                     modal->text().startsWith(QStringLiteral("{YYYY}: Current time")),
                 "keyboard activation must open a centered modal with the variable description and "
                 "one button");
-        const bool screenshot =
-            ids.at(fields.indexOf(field)).startsWith(QStringLiteral("screenshot-output."));
-        require(modal->text().contains(QStringLiteral("{AN}: Application Name")) == screenshot &&
-                    modal->text().contains(QStringLiteral("{WN}: Window Name")) == screenshot &&
+        require(modal->text().contains(QStringLiteral("{AN}: Application Name")) &&
+                    modal->text().contains(QStringLiteral("{WN}: Window Name")) &&
                     !modal->text().contains(QStringLiteral("Unknown")),
-                "window variable help must be available only for screenshot templates");
+                "window variable help must be available for screenshot and recording templates");
         const QString snapshot = qEnvironmentVariable("SNOW_VARIABLE_HELP_SNAPSHOT");
         if (field == fields.constFirst() && !snapshot.isEmpty())
             require(owner.grab().save(snapshot), "help modal snapshot must save");

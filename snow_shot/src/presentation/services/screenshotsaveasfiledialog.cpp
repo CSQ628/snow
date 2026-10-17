@@ -6,6 +6,7 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotsavepreviewcanvas.h"
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/storage/exportfilename.h"
 #include "screenshotsaveexportpipeline.h"
 #include "widgets/button.h"
 #include "widgets/context_menu.h"
@@ -227,7 +228,12 @@ class SaveContent final : public QWidget {
             validateFields();
         });
         connect(m_filename, &AdLineEdit::textChanged, this, [this](const QString& value) {
-            m_state.filename = value;
+            // Generated defaults are already literal stems. Only explicit edits interpret a
+            // recognized image suffix; arbitrary dotted titles and names stay intact.
+            QString stem = value.trimmed();
+            if (ScreenshotImageFileService::formatForPath(stem))
+                stem.chop(QFileInfo(stem).suffix().size() + 1);
+            m_state.filename = std::move(stem);
             if (m_state.output.format == Format::Pdf)
                 changed();
             else
@@ -315,7 +321,6 @@ class SaveContent final : public QWidget {
             return;
         commitDimensionEdit();
         m_state.directory = m_directory->text();
-        m_state.filename = m_filename->text();
         const QString error = m_state.validationError();
         if (!error.isEmpty()) {
             validateFields();
@@ -1336,8 +1341,10 @@ QString ScreenshotSaveDialogState::imageValidationError() const {
     return {};
 }
 QString ScreenshotSaveDialogState::outputPath() const {
-    return ScreenshotImageFileService::normalizedPath(
-        QDir(directory.trimmed()).filePath(filename.trimmed()), output.format);
+    return QDir(directory.trimmed())
+        .filePath(snow_shot::storage::composeExportFileName(
+            filename.trimmed(),
+            QLatin1Char('.') + ScreenshotImageFileService::extension(output.format)));
 }
 bool ScreenshotSaveDialogState::lossless() const {
     return output.quality == 100 && formatSupportsLossless(output.format);

@@ -84,9 +84,19 @@ int main(int argc, char** argv) {
 #endif
     settle();
     const QPointF point = nativeCenter(target);
-    const auto original = snow_shot::platform::screenshotWindowNamesAtPoint(point, {});
+    const snow_shot::storage::ScreenshotWindowNameFields both{true, true};
+    const auto original = snow_shot::platform::screenshotWindowNamesAtPoint(point, {}, both);
     require(original.windowName == target.windowTitle() && !original.applicationName.isEmpty(),
             "native lookup must return the exact window title and a friendly or executable name");
+    require(snow_shot::platform::screenshotWindowNamesAtPoint(point, {}, {false, true}) ==
+                snow_shot::storage::ScreenshotWindowNames{{}, original.windowName},
+            "title-only lookups must leave the application name empty");
+    require(snow_shot::platform::screenshotWindowNamesAtPoint(point, {}, {true, false}) ==
+                snow_shot::storage::ScreenshotWindowNames{original.applicationName, {}},
+            "application-only lookups must leave the window title empty");
+    require(snow_shot::platform::screenshotWindowNamesAtPoint(point, {}, {}) ==
+                snow_shot::storage::ScreenshotWindowNames{},
+            "requests without fields must return no native metadata");
     QWidget overlay(nullptr, Qt::Tool | Qt::WindowStaysOnTopHint);
     overlay.setWindowTitle(QStringLiteral("Snow Shot naming overlay"));
     overlay.setGeometry(target.geometry());
@@ -97,11 +107,14 @@ int main(int argc, char** argv) {
     [nativeOverlay orderFrontRegardless];
 #endif
     settle();
-    require(snow_shot::platform::screenshotWindowNamesAtPoint(point, {}).windowName ==
+    require(snow_shot::platform::screenshotWindowNamesAtPoint(point, {}, both).windowName ==
                 overlay.windowTitle(),
             "the frontmost window must own the target point");
     const std::uintptr_t excluded[] = {nativeId(overlay)};
-    require(snow_shot::platform::screenshotWindowNamesAtPoint(point, excluded) == original,
+    require(snow_shot::platform::screenshotWindowNamesAtPoint(point, excluded, both) == original,
             "excluding a capture overlay must reveal the same underlying window");
+    require(snow_shot::platform::screenshotWindowNamesAtPoint(point, excluded, {false, true}) ==
+                snow_shot::storage::ScreenshotWindowNames{{}, original.windowName},
+            "selective reads must preserve capture overlay exclusions");
     return EXIT_SUCCESS;
 }

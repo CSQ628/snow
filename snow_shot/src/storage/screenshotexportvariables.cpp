@@ -8,7 +8,8 @@
 namespace snow_shot::storage {
 namespace {
 QString pathComponent(const QString& value) {
-    QString result = sanitizeExportFileName(value, u"Unknown", {ExportFileNameControls::C0AndC1});
+    QString result = sanitizeExportFileName(
+        value, u"Unknown", {ExportFileNameControls::C0AndC1, maximumExportPathComponentUtf8Bytes});
     // Windows device names remain reserved even when followed by an extension.
     static const QRegularExpression reserved(
         QStringLiteral("^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\\.|$)"),
@@ -21,6 +22,13 @@ QString pathComponent(const QString& value) {
 
 bool containsScreenshotWindowVariables(const QString& text) {
     return text.contains(QStringLiteral("{AN}")) || text.contains(QStringLiteral("{WN}"));
+}
+
+ScreenshotWindowNameFields screenshotWindowNameFields(const QString& directory,
+                                                      const QString& filename) {
+    return {directory.contains(QStringLiteral("{AN}")) || filename.contains(QStringLiteral("{AN}")),
+            directory.contains(QStringLiteral("{WN}")) ||
+                filename.contains(QStringLiteral("{WN}"))};
 }
 
 QString expandScreenshotExportVariables(const QString& text, const QDateTime& timestamp,
@@ -43,6 +51,19 @@ QString expandScreenshotExportVariables(const QString& text, const QDateTime& ti
         position = match.capturedEnd();
     }
     result += QStringView(input).mid(position);
-    return result;
+    // A component can combine multiple window variables with literal text and time variables.
+    // Bound the complete component too, preserving separators (including drives and UNC roots).
+    QString bounded;
+    qsizetype componentStart = 0;
+    for (qsizetype index = 0; index <= result.size(); ++index) {
+        if (index != result.size() && result.at(index) != u'/' && result.at(index) != u'\\')
+            continue;
+        bounded += composeExportFileName(result.mid(componentStart, index - componentStart), {},
+                                         maximumExportPathComponentUtf8Bytes);
+        if (index != result.size())
+            bounded += result.at(index);
+        componentStart = index + 1;
+    }
+    return bounded;
 }
 } // namespace snow_shot::storage

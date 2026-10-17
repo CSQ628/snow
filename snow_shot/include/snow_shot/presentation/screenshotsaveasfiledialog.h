@@ -24,6 +24,7 @@ struct ScreenshotSaveExportOptions {
 
 struct ScreenshotSaveDialogState {
     QString directory;
+    // A literal stem, including any dots. The selected format supplies the extension.
     QString filename;
     QSize sourceSize;
     ScreenshotSaveExportOptions output;

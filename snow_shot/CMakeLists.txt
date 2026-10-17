@@ -5324,6 +5324,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_executable(snow-shot-recognition-file-export-tests
         tests/screenshot_recognition_file_export_tests.cpp
         src/presentation/services/screenshotrecognitionfileexport.cpp
+        src/storage/exportfilename.cpp
         src/presentation/ocr/screenshottabledocument.cpp
     )
     target_include_directories(snow-shot-recognition-file-export-tests PRIVATE
@@ -8019,6 +8020,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/../test-support/fonts/recording_test_fonts.qrc")
     # Override only the test executable: exercise the real controller without
     # opening capture devices, recording the desktop, or exporting media.
+    target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
+        screenshotWindowNamesAtPoint=test_recording_window_names_at_point)
     foreach(_operation create_direct create_deferred finalize_deferred destroy start pause resume request_stop stop state set_audio_gain set_audio_metering take_audio_levels request_exclusions exclusion_status)
         target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
             "snow_recording_session_${_operation}=test_recording_session_${_operation}")

@@ -1,6 +1,7 @@
 #include "snow_shot/presentation/screenshotimagefileservice.h"
 
 #include "snowimageqtcodec.h"
+#include "snow_shot/storage/exportfilename.h"
 #include "snow_shot/storage/timevariables.h"
 
 #include <QClipboard>
@@ -41,10 +42,11 @@ QString filterForFormat(ScreenshotImageFileFormat format) {
 QString collisionSafePath(const QString& directory, const QString& baseName,
                           const QString& extension) {
     const QDir target(directory);
-    QString candidate = target.filePath(QStringLiteral("%1.%2").arg(baseName, extension));
+    QString candidate = target.filePath(
+        snow_shot::storage::composeExportFileName(baseName, QStringLiteral(".%1").arg(extension)));
     for (int suffix = 1; QFileInfo::exists(candidate); ++suffix) {
-        candidate =
-            target.filePath(QStringLiteral("%1_%2.%3").arg(baseName).arg(suffix).arg(extension));
+        candidate = target.filePath(snow_shot::storage::composeExportFileName(
+            baseName, QStringLiteral("_%1.%2").arg(suffix).arg(extension)));
     }
     return candidate;
 }
