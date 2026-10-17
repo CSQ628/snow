@@ -333,7 +333,8 @@ or privacy grants.
 - Xcode 16+ or Apple Command Line Tools (`xcode-select --install`), with a macOS 15+ SDK.
   The static Qt builder permits Command Line Tools without full Xcode and retains
   Qt's SDK version checks.
-- Rust installed through rustup. The checked-in toolchain pins Rust 1.97.1.
+- Rust 1.97.1 or newer installed through rustup. Builds use the active toolchain;
+  bootstrap adds its required components and target without selecting an older version.
 - CMake 4.2+, Ninja, pkg-config, Git and Python 3. Intel codec builds also need NASM.
 - The official **Qt 6.12.0 LTS macOS** kit, including Qt SVG and Linguist tools,
   for Debug and performance builds. Release and fast builds use the repository's

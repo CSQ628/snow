@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import plistlib
+import shlex
 from pathlib import Path
 import signal
 import shutil
@@ -954,6 +955,25 @@ elif name == 'lipo':
         self.assertFalse(staged)
 
 
+@unittest.skipUnless(bash_executable(), 'Bash is required')
+class RustToolchainShell(unittest.TestCase):
+    def test_minimum_accepts_newer_versions(self):
+        for version, supported in [('1.97.0', False), ('1.97.1', True), ('1.97.2', True),
+                                   ('1.100.0', True), ('2.0.0', True), ('invalid', False)]:
+            with self.subTest(version=version):
+                script = f'''
+source {shlex.quote((ROOT / 'scripts/snow-build-environment.sh').as_posix())}
+python3() {{ {shlex.quote(Path(sys.executable).as_posix())} "$@"; }}
+rustc() {{ printf '%s\\n' {shlex.quote('rustc ' + version + ' (fixture)')}; }}
+snow_require_rust
+'''
+                result = subprocess.run([bash_executable(), '-c', script], capture_output=True,
+                                        text=True, timeout=30)
+                self.assertEqual(result.returncode == 0, supported, result.stdout + result.stderr)
+                if not supported:
+                    self.assertIn('or newer is required', result.stderr)
+
+
 class MacOSBuildScripts(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="snow build tests ")
@@ -976,6 +996,7 @@ if name == 'configure': sys.exit(17)
 if name == 'xcode-select': print('/mock Xcode')
 if name == 'git' and 'rev-parse' in sys.argv: print('4497409a47f19db373a410a0efb84eca4747adbf')
 if name == 'cmake' and '--version' in sys.argv: print('cmake version 4.4.3')
+if name == 'rustc': print('rustc ' + os.environ.get('SNOW_TEST_RUST_VERSION', '1.98.0') + ' (fixture)')
 if name == 'cmake' and '--preset' in sys.argv and os.environ.get('FAIL_CONFIGURE'): sys.exit(17)
 if name == 'cmake' and '--preset' in sys.argv and '--build' not in sys.argv:
     preset = sys.argv[sys.argv.index('--preset') + 1]
@@ -1036,7 +1057,7 @@ if name == 'openssl':
         if option in sys.argv:
             pathlib.Path(sys.argv[sys.argv.index(option) + 1]).touch()
 """
-        tools = ("cmake", "cpack", "ninja", "cargo", "rustup", "pkg-config", "uname",
+        tools = ("cmake", "cpack", "ninja", "cargo", "rustc", "rustup", "pkg-config", "uname",
                  "open", "ps", "xcode-select", "xcrun", "git", "lsregister", "security",
                  "openssl", "arch", "sysctl")
         for name in tools:
@@ -1127,8 +1148,21 @@ if name == 'openssl':
         value['Architecture'] = 'x64'
         stamp.write_text(json.dumps(value))
         calls = self.run_script("bootstrap-macos.sh", "snow-shot-macos-x64-release")
-        rustup = next(c for c in calls if c[:3] == ['rustup', 'toolchain', 'install'])
-        self.assertIn('x86_64-apple-darwin', rustup)
+        self.assertIn(['rustup', 'target', 'add', 'x86_64-apple-darwin'], calls)
+        self.assertIn(['rustup', 'component', 'add', 'rustfmt', 'clippy'], calls)
+        self.assertFalse(any(c[:3] == ['rustup', 'toolchain', 'install'] for c in calls))
+
+    def test_rust_minimum_accepts_newer_and_rejects_older_before_building(self):
+        for version in ('1.97.1', '1.97.2', '1.100.0', '2.0.0'):
+            with self.subTest(version=version):
+                self.env['SNOW_TEST_RUST_VERSION'] = version
+                calls = self.run_script('build.sh', '--skip-bootstrap')
+                self.assertTrue(any('--build' in call for call in calls))
+                self.log.unlink()
+        self.env['SNOW_TEST_RUST_VERSION'] = '1.97.0'
+        calls = self.run_script('build.sh', '--skip-bootstrap', success=False)
+        self.assertIn('Rust 1.97.1 or newer is required', self.last_result.stderr)
+        self.assertFalse(any('--build' in call for call in calls))
 
     def test_x64_build_requires_rosetta_before_configuring(self):
         self.env['FAIL_ROSETTA'] = '1'

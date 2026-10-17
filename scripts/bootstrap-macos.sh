@@ -24,7 +24,7 @@ done
 xcrun --find clang >/dev/null
 if [[ "$skip_qt" == 1 ]]; then
     export PATH="$snow_repo_root/.tools/macos-dev/bin:$snow_repo_root/.tools/macos-media/host/bin:$PATH"
-    for tool in cmake ninja cargo rustup pkg-config; do
+    for tool in cmake ninja cargo rustc rustup pkg-config; do
         command -v "$tool" >/dev/null || snow_die "Missing $tool. Install the prerequisites listed in docs-macos-build.md."
     done
     snow_require_target_tools "$snow_arch"
@@ -40,7 +40,9 @@ if [[ ! "$cmake_version" =~ ^cmake[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+
     snow_die "CMake 4.2 or newer is required; found: ${cmake_version:-unknown}"
 fi
 cd "$snow_repo_root"
-rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy --target "$snow_rust_target"
+snow_require_rust
+rustup component add rustfmt clippy
+rustup target add "$snow_rust_target"
 # Use the same pinned registry baseline and isolated dynamic/static install roots as Windows.
 vcpkg_root="$snow_repo_root/.tools/vcpkg"
 vcpkg_baseline=4497409a47f19db373a410a0efb84eca4747adbf
