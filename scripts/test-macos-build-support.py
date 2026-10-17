@@ -996,7 +996,25 @@ if name == 'configure': sys.exit(17)
 if name == 'xcode-select': print('/mock Xcode')
 if name == 'git' and 'rev-parse' in sys.argv: print('4497409a47f19db373a410a0efb84eca4747adbf')
 if name == 'cmake' and '--version' in sys.argv: print('cmake version 4.4.3')
-if name == 'rustc': print('rustc ' + os.environ.get('SNOW_TEST_RUST_VERSION', '1.98.0') + ' (fixture)')
+if name in ('rustc', 'rustup'):
+    host = ('aarch64' if os.environ.get('SNOW_TEST_HOST_ARCH', 'arm64') == 'arm64'
+            else 'x86_64') + '-apple-darwin'
+if name == 'rustc':
+    if os.environ.get('SNOW_TEST_RUST_MISSING'): sys.exit(1)
+    print('rustc ' + os.environ.get('SNOW_TEST_RUST_VERSION', '1.98.0') + ' (fixture)')
+    if '-vV' in sys.argv: print('host: ' + host)
+if name == 'rustup':
+    if sys.argv[1:3] == ['component', 'list']:
+        if os.environ.get('FAIL_RUST_COMPONENT_LIST'): sys.exit(17)
+        components = [component + '-' + host
+                      for component in ('cargo', 'rustc', 'rust-std', 'rustfmt', 'clippy')]
+        components += ['rust-std-aarch64-apple-darwin', 'rust-std-x86_64-apple-darwin']
+        missing = os.environ.get('SNOW_TEST_MISSING_RUST_COMPONENT', '')
+        print('\\n'.join(component for component in components if component != missing))
+    if (sys.argv[1:3] in (['toolchain', 'install'], ['component', 'add'], ['target', 'add'])
+            and os.environ.get('FAIL_RUST_INSTALL')):
+        print('Rust distribution server is unavailable', file=sys.stderr)
+        sys.exit(17)
 if name == 'cmake' and '--preset' in sys.argv and os.environ.get('FAIL_CONFIGURE'): sys.exit(17)
 if name == 'cmake' and '--preset' in sys.argv and '--build' not in sys.argv:
     preset = sys.argv[sys.argv.index('--preset') + 1]
@@ -1143,13 +1161,14 @@ if name == 'openssl':
             self.assertFalse(any(c[0] == 'cmake' for c in calls))
 
     def test_bootstrap_selects_matching_rust_target(self):
+        self.env['SNOW_TEST_MISSING_RUST_COMPONENT'] = 'rust-std-x86_64-apple-darwin'
         stamp = self.root / "Qt kit/share/snow-apps/static-qt-build.json"
         value = json.loads(stamp.read_text())
         value['Architecture'] = 'x64'
         stamp.write_text(json.dumps(value))
         calls = self.run_script("bootstrap-macos.sh", "snow-shot-macos-x64-release")
         self.assertIn(['rustup', 'target', 'add', 'x86_64-apple-darwin'], calls)
-        self.assertIn(['rustup', 'component', 'add', 'rustfmt', 'clippy'], calls)
+        self.assertFalse(any(c[:2] == ['rustup', 'component'] and 'add' in c for c in calls))
         self.assertFalse(any(c[:3] == ['rustup', 'toolchain', 'install'] for c in calls))
 
     def test_rust_minimum_accepts_newer_and_rejects_older_before_building(self):
@@ -1163,6 +1182,54 @@ if name == 'openssl':
         calls = self.run_script('build.sh', '--skip-bootstrap', success=False)
         self.assertIn('Rust 1.97.1 or newer is required', self.last_result.stderr)
         self.assertFalse(any('--build' in call for call in calls))
+
+    def test_launch_reuses_complete_rust_toolchain_without_network(self):
+        self.env['FAIL_RUST_INSTALL'] = '1'
+        for version in ('1.97.1', '1.100.0'):
+            for host, target in (('arm64', 'arm64'), ('x86_64', 'x64'), ('arm64', 'x64')):
+                with self.subTest(version=version, host=host, target=target):
+                    self.env.update(SNOW_TEST_HOST_ARCH=host, SNOW_TEST_RUST_VERSION=version)
+                    calls = self.run_script('run-snow-shot.sh', f'snow-shot-macos-{target}-debug')
+                    self.assertEqual([c for c in calls if c[0] == 'rustup'],
+                                     [['rustup', 'component', 'list', '--installed']])
+                    self.assertTrue(any('--build' in c for c in calls))
+                    self.assertEqual(calls[-1][0], 'open')
+                    self.log.unlink()
+
+    def test_bootstrap_adds_only_missing_components_to_active_toolchain(self):
+        missing_components = ('cargo', 'rustc', 'rust-std', 'rustfmt', 'clippy')
+        for component in missing_components:
+            with self.subTest(component=component):
+                self.env['SNOW_TEST_MISSING_RUST_COMPONENT'] = f'{component}-aarch64-apple-darwin'
+                calls = self.run_script('bootstrap-macos.sh', '--skip-dependency-install')
+                self.assertEqual([c for c in calls if c[0] == 'rustup'], [
+                    ['rustup', 'component', 'list', '--installed'],
+                    ['rustup', 'component', 'add', component],
+                ])
+                self.log.unlink()
+
+    def test_missing_rust_download_failure_stops_before_configuring(self):
+        for component in ('rustfmt-aarch64-apple-darwin', 'rust-std-x86_64-apple-darwin'):
+            with self.subTest(component=component):
+                self.env.update(SNOW_TEST_MISSING_RUST_COMPONENT=component, FAIL_RUST_INSTALL='1')
+                calls = self.run_script('build.sh', 'snow-shot-macos-x64-debug', success=False)
+                self.assertFalse(any('--preset' in c or '--build' in c for c in calls))
+                self.assertIn('Rust distribution server is unavailable', self.last_result.stderr)
+                self.log.unlink()
+
+    def test_unavailable_active_rust_stops_without_installing_another_toolchain(self):
+        self.env['SNOW_TEST_RUST_MISSING'] = '1'
+        calls = self.run_script('build.sh', success=False)
+        self.assertFalse(any(c[0] == 'rustup' or '--preset' in c or '--build' in c for c in calls))
+        self.assertIn('Unable to determine the active Rust version', self.last_result.stderr)
+
+    def test_failed_rust_component_query_stops_before_installing_or_configuring(self):
+        self.env['FAIL_RUST_COMPONENT_LIST'] = '1'
+        calls = self.run_script('build.sh', success=False)
+        self.assertEqual([c for c in calls if c[0] == 'rustup'],
+                         [['rustup', 'component', 'list', '--installed']])
+        self.assertFalse(any('--preset' in c or '--build' in c for c in calls))
+        self.assertIn('Unable to list installed Rust components', self.last_result.stderr)
 
     def test_x64_build_requires_rosetta_before_configuring(self):
         self.env['FAIL_ROSETTA'] = '1'

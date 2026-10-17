@@ -357,8 +357,11 @@ Bootstrap checks the host tools, installs the matching Rust target, bootstraps
 repository-local vcpkg at the registry baseline, and installs the selected
 manifest dependency set. `build.sh` validates that setup before configuring and
 automatically refreshes a stale CMake cache; pass `--skip-bootstrap` only after
-provisioning the selected preset. `--clean` removes that preset's build tree,
-matching the Windows wrapper, and `--parallel N` controls build concurrency.
+provisioning the selected preset. A complete active Rust toolchain meeting the
+minimum version is reused without contacting the Rust distribution server;
+only missing components or targets are downloaded into that toolchain.
+`--clean` removes that preset's build tree, matching the Windows wrapper, and
+`--parallel N` controls build concurrency.
 The run script rebuilds the `snow_shot` target before launching by default; pass
 `--no-build` to launch an existing build or `--clean` to request a clean rebuild.
 CMake installs native dependencies from the manifest. The first run builds
