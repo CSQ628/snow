@@ -26,6 +26,65 @@ void require(bool condition, const char* message) {
     }
 }
 
+void windowVariables(const QTemporaryDir& temporary) {
+    const QDateTime timestamp(QDate(2026, 10, 16), QTime(12, 34, 56), QTimeZone::UTC);
+    const storage::ScreenshotWindowNames names{QStringLiteral("Google Chrome"),
+                                               QStringLiteral("文档: A/B")};
+    require(storage::containsScreenshotWindowVariables(QStringLiteral("/{AN}/image")) &&
+                storage::containsScreenshotWindowVariables(QStringLiteral("{WN}")) &&
+                !storage::containsScreenshotWindowVariables(QStringLiteral("{an}-{wn}-{YYYY}")),
+            "only exact AN and WN tokens must trigger native lookup");
+    require(storage::expandScreenshotExportVariables(QStringLiteral("{AN}/{WN}_{YYYY}_{AN}"),
+                                                     timestamp, names) ==
+                QStringLiteral("Google Chrome/文档_ A_B_2026_Google Chrome"),
+            "window values must be sanitized individually and coexist with time variables");
+    require(storage::expandScreenshotExportVariables(QStringLiteral("{AN}-{WN}"), timestamp) ==
+                    QStringLiteral("Unknown-Unknown") &&
+                storage::expandScreenshotExportVariables(QStringLiteral("{AN}-{WN}"), timestamp,
+                                                         {QStringLiteral("Known"), {}}) ==
+                    QStringLiteral("Known-Unknown"),
+            "missing names must fall back independently");
+    require(storage::expandScreenshotExportVariables(
+                QStringLiteral("{AN}-{WN}"), timestamp,
+                {QStringLiteral("{WN}"), QStringLiteral("{YYYY}")}) ==
+                QStringLiteral("{WN}-{YYYY}"),
+            "retrieved names must never be parsed as templates");
+    for (const QString& value : {QStringLiteral("CON"), QStringLiteral("nul.txt"),
+                                 QStringLiteral("LPT1"), QStringLiteral("COM²")})
+        require(storage::expandScreenshotExportVariables(
+                    QStringLiteral("{WN}"), timestamp, {{}, value}) == QStringLiteral("_") + value,
+                "reserved device names must be safe path components");
+    require(storage::expandScreenshotExportVariables(
+                QStringLiteral("{AN}/{WN}"), timestamp,
+                {QStringLiteral(" .. "), QStringLiteral("x\n\t\x7f<>:\"/\\|?*... ")}) ==
+                QStringLiteral("Unknown/x____________"),
+            "dot-only names, control characters and path punctuation must be safe");
+    require(storage::expandTimeVariables(QStringLiteral("{AN}-{WN}"), timestamp) ==
+                timestamp.toString(QStringLiteral("AN")) + QLatin1Char('-') +
+                    timestamp.toString(QStringLiteral("WN")),
+            "time-only expansion must retain recording compatibility");
+    const QString directory = temporary.filePath(QStringLiteral("names/{AN}/{YYYY}"));
+    const QString filename = QStringLiteral("{WN}_{HH-mm-ss}");
+    require(storage::ScreenshotSettings().setImageSaveDirectory(directory) &&
+                storage::ScreenshotSettings().setManualSaveFilenameFormat(filename) &&
+                storage::ScreenshotSettings().setLastManualSaveDirectory({}),
+            "window naming settings must persist");
+    QImage image(2, 2, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    const auto directories =
+        ScreenshotImageFileService::automaticDirectories(directory, timestamp, names);
+    const auto saved = ScreenshotImageFileService::saveAutomatically(
+        image, directories, ScreenshotImageFileFormat::Png, filename, timestamp, {}, {}, names);
+    require(saved.succeeded() &&
+                saved.path == screenshotManualSaveDefaults(timestamp, names).initialPath &&
+                saved.path.endsWith(QStringLiteral("/Google Chrome/2026/文档_ A_B_12-34-56.png")),
+            "automatic saves and native dialog defaults must use identical metadata");
+    const auto duplicate = ScreenshotImageFileService::saveAutomatically(
+        image, directories, ScreenshotImageFileFormat::Png, filename, timestamp, {}, {}, names);
+    require(duplicate.succeeded() && duplicate.path.endsWith(QStringLiteral("_1.png")),
+            "window variables must retain collision suffix behavior");
+}
+
 void timeDirectories(const QTemporaryDir& temporary) {
     const QDateTime before(QDate(2026, 12, 31), QTime(23, 59, 59), QTimeZone::UTC);
     const QDateTime after = before.addSecs(1);
@@ -127,6 +186,7 @@ int main(int argc, char** argv) {
                 appStorage.initialize({temporary.path(), temporary.path(), 60000}).success,
             "isolated settings must initialize");
     timeDirectories(temporary);
+    windowVariables(temporary);
     appStorage.shutdown();
     return EXIT_SUCCESS;
 }

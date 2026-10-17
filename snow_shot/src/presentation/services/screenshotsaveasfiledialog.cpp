@@ -6,7 +6,6 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotsavepreviewcanvas.h"
 #include "snow_shot/storage/settingsadapters.h"
-#include "snow_shot/storage/timevariables.h"
 #include "screenshotsaveexportpipeline.h"
 #include "widgets/button.h"
 #include "widgets/context_menu.h"
@@ -97,12 +96,13 @@ class SaveContent final : public QWidget {
   public:
     SaveContent(AdModal* modal, std::shared_ptr<ScreenshotExportArtifact> artifact,
                 ScreenshotSaveAsFileDialog::Saved saved)
-        : m_modal(modal), m_artifact(std::move(artifact)), m_saved(std::move(saved)) {
+        : m_modal(modal), m_artifact(std::move(artifact)), m_saved(std::move(saved)),
+          m_windowNames(m_artifact->windowNames()) {
         setObjectName(QStringLiteral("saveDialogContent"));
         m_renderTimer.setSingleShot(true);
         m_renderTimer.setInterval(100);
         connect(&m_renderTimer, &QTimer::timeout, this, [this] { startRender(); });
-        m_state = ScreenshotSaveDialogState::initial({}, m_timestamp);
+        m_state = ScreenshotSaveDialogState::initial({}, m_timestamp, m_windowNames);
         loadRememberedFormatOptions();
         applyRememberedFormatOptions();
         auto* layout = new QHBoxLayout(this);
@@ -605,8 +605,9 @@ class SaveContent final : public QWidget {
             m_shortcutsLayout->addWidget(group);
         };
         add(tr("App directory"),
-            snow_shot::storage::expandTimeVariables(
-                snow_shot::storage::ScreenshotSettings().imageSaveDirectory(), m_timestamp),
+            snow_shot::storage::expandScreenshotExportVariables(
+                snow_shot::storage::ScreenshotSettings().imageSaveDirectory(), m_timestamp,
+                m_windowNames),
             -2);
         add(tr("Desktop"), QStandardPaths::writableLocation(QStandardPaths::DesktopLocation), -1);
         for (int index = 0; index < m_shortcuts.size(); ++index)
@@ -1195,6 +1196,7 @@ class SaveContent final : public QWidget {
     AdModal* m_modal;
     std::shared_ptr<ScreenshotExportArtifact> m_artifact;
     ScreenshotSaveAsFileDialog::Saved m_saved;
+    const snow_shot::storage::ScreenshotWindowNames m_windowNames;
     const QDateTime m_timestamp = QDateTime::currentDateTime();
     ScreenshotSaveDialogState m_state;
     pipeline::Source m_source;
@@ -1262,22 +1264,23 @@ class SaveContent final : public QWidget {
 };
 } // namespace
 
-ScreenshotSaveDialogState ScreenshotSaveDialogState::initial(QSize size,
-                                                             const QDateTime& timestamp) {
+ScreenshotSaveDialogState
+ScreenshotSaveDialogState::initial(QSize size, const QDateTime& timestamp,
+                                   const snow_shot::storage::ScreenshotWindowNames& names) {
     ScreenshotSaveDialogState result;
     const snow_shot::storage::ScreenshotSettings settings;
     const QFileInfo remembered(settings.lastManualSaveDirectory());
-    const QString configured =
-        snow_shot::storage::expandTimeVariables(settings.imageSaveDirectory(), timestamp);
+    const QString configured = snow_shot::storage::expandScreenshotExportVariables(
+        settings.imageSaveDirectory(), timestamp, names);
     if (remembered.isDir() && remembered.isReadable() && remembered.isWritable())
         result.directory = remembered.absoluteFilePath();
     else if (!configured.isEmpty() && QDir::isAbsolutePath(configured))
         result.directory = QDir::cleanPath(configured);
     else
         result.directory = ScreenshotImageFileService::saveDialogDirectory(
-            {}, settings.imageSaveDirectory(), timestamp);
+            {}, settings.imageSaveDirectory(), timestamp, names);
     result.filename = ScreenshotImageFileService::suggestedBaseName(
-        settings.manualSaveFilenameFormat(), timestamp);
+        settings.manualSaveFilenameFormat(), timestamp, names);
     result.output.pdfPageSize = screenshot_pdf::pageSizeForKey(settings.pdfPageSize());
     result.sourceSize = size;
     result.output.size = size;

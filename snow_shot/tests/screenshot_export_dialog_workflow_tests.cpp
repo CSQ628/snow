@@ -1622,6 +1622,49 @@ void timeDirectoryDefaultsAndShortcut(QWidget& owner, const QTemporaryDir& temp)
     flush();
 }
 
+void windowNameDefaultsAndShortcut(QWidget& owner, const QTemporaryDir& temp) {
+    storage::ScreenshotSettings settings;
+    const QString pattern = temp.filePath(QStringLiteral("window-names/{AN}"));
+    require(settings.setImageSaveDirectory(pattern) && settings.setLastManualSaveDirectory({}) &&
+                settings.setManualSaveFilenameFormat(QStringLiteral("{WN}_{YYYY}")),
+            "window dialog templates must persist");
+    const storage::ScreenshotWindowNames names{QStringLiteral("Browser"),
+                                               QStringLiteral("Title {AN}/文档")};
+    const QDateTime timestamp =
+        QDateTime::fromString(QStringLiteral("2026-10-16T12:34:56"), Qt::ISODate);
+    const auto state = ScreenshotSaveDialogState::initial(QSize(160, 100), timestamp, names);
+    require(state.directory == temp.filePath(QStringLiteral("window-names/Browser")) &&
+                state.filename == QStringLiteral("Title {AN}_文档_2026"),
+            "custom dialog defaults must expand both variables once");
+    auto artifact =
+        std::make_shared<ScreenshotExportArtifact>(ScreenshotExportSource::fromImage(fixture()));
+    artifact->setWindowNames(names);
+    require(ScreenshotSaveAsFileDialog::open(&owner, &owner, artifact),
+            "window-name dialog must open");
+    auto* modal = owner.findChild<AdModal*>(QStringLiteral("screenshotSaveAsFileModal"));
+    require(modal, "window-name dialog must be present");
+    auto* content = modal->contentWidget();
+    processUntil([&] { return content->property("previewGeneration").toULongLong() > 0; });
+    flush();
+    child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
+    child<AdButton>(content, "savePathShortcut_-2")->click();
+    require(child<AdLineEdit>(content, "saveDirectoryInput")->text() == state.directory &&
+                child<AdLineEdit>(content, "saveFilenameInput")
+                    ->text()
+                    .startsWith(QStringLiteral("Title {AN}_文档_")),
+            "App directory and filename must use the artifact's frozen metadata");
+    child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("literal-{WN}"));
+    require(child<AdLineEdit>(content, "saveFilenameInput")->text() ==
+                QStringLiteral("literal-{WN}"),
+            "edited concrete filenames must remain literal");
+    modal->reject();
+    flush();
+    const auto later = ScreenshotSaveDialogState::initial(QSize(160, 100), timestamp);
+    require(later.directory.endsWith(QStringLiteral("/Unknown")) &&
+                later.filename == QStringLiteral("Unknown_2026"),
+            "custom exports without live capture context must use Unknown");
+}
+
 void shortcutsAndCancellation(QWidget& owner, const QTemporaryDir& temp) {
     int saved = 0;
     int finished = 0;
@@ -3407,6 +3450,7 @@ int main(int argc, char* argv[]) {
         owner.show();
         if (app.arguments().contains(QStringLiteral("--time-variables"))) {
             timeDirectoryDefaultsAndShortcut(owner, temp);
+            windowNameDefaultsAndShortcut(owner, temp);
             ScreenshotExportCoordinator::shared().shutdown();
             storage::ApplicationStorage::instance().shutdown();
             return 0;

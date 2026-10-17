@@ -1,3 +1,4 @@
+#include "snow_shot/storage/timevariables.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "recordingtrimsession.h"
 #include "recordingrenderdialog.h"
@@ -41,8 +42,9 @@ void copyRecording(const QString& path) {
 }
 QString nextOutput(const QString& original) {
     const QFileInfo file(original);
-    const QString baseName = ScreenshotImageFileService::suggestedBaseName(
-        snow_shot::storage::RecordingSettings().videoFilenameFormat());
+    const QString baseName = snow_shot::storage::expandTimeVariables(
+        snow_shot::storage::RecordingSettings().videoFilenameFormat(),
+        QDateTime::currentDateTime());
     return snow_shot::presentation::recording::screenRecordingOutputPath({file.absolutePath()},
                                                                          baseName, file.suffix());
 }

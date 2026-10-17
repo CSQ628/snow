@@ -1,5 +1,4 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
-#include "snow_shot/storage/timevariables.h"
 #include "snow_shot/presentation/screenshotencodingsettings.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 
@@ -290,6 +289,7 @@ struct ScreenshotExportArtifact::Impl final {
     quint64 pngUseSerial = 0;
     const QString diagnosticId = QUuid::createUuid().toString(QUuid::Id128);
     mutable QMutex mutex;
+    snow_shot::storage::ScreenshotWindowNames windowNames;
     bool cancelled = false;
     RequestPhase imagePhase = RequestPhase::Empty;
     QImage image;
@@ -392,6 +392,16 @@ ScreenshotExportArtifact::ScreenshotExportArtifact(ScreenshotExportSource source
                                                    PngCachePolicy cachePolicy, QObject* parent)
     : QObject(parent),
       m_impl(std::make_unique<Impl>(std::move(source), compressionLevel, cachePolicy)) {}
+
+void ScreenshotExportArtifact::setWindowNames(snow_shot::storage::ScreenshotWindowNames names) {
+    QMutexLocker lock(&m_impl->mutex);
+    m_impl->windowNames = std::move(names);
+}
+
+snow_shot::storage::ScreenshotWindowNames ScreenshotExportArtifact::windowNames() const {
+    QMutexLocker lock(&m_impl->mutex);
+    return m_impl->windowNames;
+}
 
 QString ScreenshotExportArtifact::diagnosticId() const {
     return m_impl->diagnosticId;
@@ -1181,7 +1191,9 @@ bool ScreenshotExportArtifact::requestQuickSave(QObject* receiver,
     if (!requestedAt.isValid())
         requestedAt = QDateTime::currentDateTime();
     return requestAutomaticSave(
-        receiver, {snow_shot::storage::expandTimeVariables(directory, requestedAt)},
+        receiver,
+        {snow_shot::storage::expandScreenshotExportVariables(directory, requestedAt,
+                                                             windowNames())},
         ScreenshotImageFileService::formatForKey(settings.imageFormat()),
         settings.autoSaveFilenameFormat(),
         snow_shot::presentation::screenshotEncodingOptions(settings), std::move(callback),
@@ -1529,8 +1541,9 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
     const QPointer<QObject> target(receiver);
     if (!requestedAt.isValid())
         requestedAt = QDateTime::currentDateTime();
+    const auto names = windowNames();
     auto schedule = [guarded, target, destination = std::move(destination), format, pdf, priority,
-                     requestedAt, filenameFormat = std::move(filenameFormat),
+                     requestedAt, names, filenameFormat = std::move(filenameFormat),
                      callback = std::move(callback)](std::shared_ptr<FileSource> source,
                                                      QString error) mutable {
         if (guarded.isNull() || guarded->isCancelled() || target.isNull())
@@ -1545,7 +1558,7 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
             std::make_shared<ScreenshotExportCoordinator::Completion>(std::move(callback));
         auto job = ScreenshotExportCoordinator::shared().submit(
             target, priority,
-            [destination, format, pdf, requestedAt, filenameFormat,
+            [destination, format, pdf, requestedAt, filenameFormat, names,
              source = std::move(source)](const ScreenshotExportCancellation& cancellation) mutable {
                 if (cancellation.isCancellationRequested()) {
                     return ScreenshotExportTaskResult::failure(
@@ -1565,7 +1578,7 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
                     directories = {clipboardDirectory->path()};
                 } else if (const auto* configuredDirectory = std::get_if<QString>(&destination)) {
                     directories = ScreenshotImageFileService::automaticDirectories(
-                        *configuredDirectory, requestedAt);
+                        *configuredDirectory, requestedAt, names);
                 } else {
                     directories = std::get<QStringList>(destination);
                 }
@@ -1576,20 +1589,23 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
                 if (source->png.isValid()) {
                     // Use the same cancellation-aware atomic writer as manual output.
                     saved = ScreenshotImageFileService::saveAutomatically(
-                        source->png, directories, filenameFormat, requestedAt, cancelled);
+                        source->png, directories, filenameFormat, requestedAt, cancelled, names);
                 } else if (!source->bytes.isEmpty()) {
                     saved = ScreenshotImageFileService::saveEncodedBytesAutomatically(
-                        source->bytes, directories, format, filenameFormat, requestedAt, cancelled);
+                        source->bytes, directories, format, filenameFormat, requestedAt, cancelled,
+                        names);
                 } else if (source->rows.isValid()) {
                     auto rows = withCancellation(source->rows, cancelled);
                     saved = ScreenshotImageFileService::saveAutomatically(
-                        rows, directories, format, filenameFormat, requestedAt, pdf);
+                        rows, directories, format, filenameFormat, requestedAt, pdf, {}, names);
                 } else if (source->pdf) {
                     saved = ScreenshotImageFileService::savePdfAutomatically(
-                        *source->pdf, directories, filenameFormat, requestedAt, pdf, cancelled);
+                        *source->pdf, directories, filenameFormat, requestedAt, pdf, cancelled,
+                        names);
                 } else {
                     saved = ScreenshotImageFileService::saveEncodedAutomatically(
-                        source->path, directories, format, filenameFormat, requestedAt, cancelled);
+                        source->path, directories, format, filenameFormat, requestedAt, cancelled,
+                        names);
                 }
                 if (!saved.succeeded()) {
                     return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::File,

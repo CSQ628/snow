@@ -107,7 +107,7 @@ class ScreenshotExportArtifact final : public QObject {
         // memory-backed entries also count toward maximumBytes. In-flight
         // consumers keep outputs alive even when too large to retain.
         qint64 maximumFileBytes = 256 * 1024 * 1024;
-        std::function<void(ScreenshotImageFileFormat)> fileEncodingStarted;
+        std::function<void(ScreenshotImageFileFormat)> fileEncodingStarted = {};
     };
     using ImageCallback = std::function<void(ScreenshotExportImageResult)>;
     using EncodingCallback = std::function<void(ScreenshotExportEncodingResult)>;
@@ -125,6 +125,10 @@ class ScreenshotExportArtifact final : public QObject {
 
     ScreenshotExportArtifact(const ScreenshotExportArtifact&) = delete;
     ScreenshotExportArtifact& operator=(const ScreenshotExportArtifact&) = delete;
+
+    // Set before starting a live capture export; never persisted with image content.
+    void setWindowNames(snow_shot::storage::ScreenshotWindowNames names);
+    [[nodiscard]] snow_shot::storage::ScreenshotWindowNames windowNames() const;
 
     [[nodiscard]] bool requestImage(QObject* receiver, ImageCallback callback);
     using RowSourceCallback = std::function<void(ScreenshotImageRowSource, QString)>;

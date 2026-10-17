@@ -4679,12 +4679,20 @@
     <context>
         <name>SettingsVariableHelp</name>
         <message>
-            <source>OK</source>
-            <translation>確定</translation>
+            <source>%1: Application Name</source>
+            <translation>%1：應用程式名稱</translation>
         </message>
         <message>
-            <source>Time placeholders in braces are replaced with the current local date and time.</source>
-            <translation>大括號中的時間預留位置會替換為目前的本機日期和時間。</translation>
+            <source>%1: Current time</source>
+            <translation>%1: 目前時間</translation>
+        </message>
+        <message>
+            <source>%1: Window Name</source>
+            <translation>%1：視窗名稱</translation>
+        </message>
+        <message>
+            <source>OK</source>
+            <translation>確定</translation>
         </message>
         <message>
             <source>Variable Description</source>

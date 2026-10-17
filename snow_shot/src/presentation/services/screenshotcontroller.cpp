@@ -12,7 +12,7 @@
 #include "snow_shot/presentation/screenshotautofiltercontroller.h"
 #include "snow_shot/presentation/screenshotsourceimagecomposer.h"
 #include "snow_shot/presentation/screenshotcontroller.h"
-#include "snow_shot/storage/timevariables.h"
+#include "snow_shot/presentation/screenshotexportnaming.h"
 #include "snow_shot/presentation/globalshortcuttypes.h"
 #include "snow_shot/presentation/screenshotprintservice.h"
 #include "screenshotprintinteractionguard.h"
@@ -499,8 +499,11 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void cancelCapture() override;
     void copySelectionToClipboard() override;
     void copySelectionToClipboardWithSource(snow_shot::storage::CaptureHistorySource historySource);
+    snow_shot::storage::ScreenshotWindowNames exportWindowNames(const QString& directory,
+                                                                const QString& filename) const;
     ScreenshotAutomaticSaveRequest
-    automaticSaveRequest(const snow_shot::storage::ScreenshotSettings& settings);
+    automaticSaveRequest(const snow_shot::storage::ScreenshotSettings& settings,
+                         bool configuredDirectoryUsed = true);
     void saveImageForCopy(QImage image, quint64 generation, ScreenshotCopyOutputOptions output,
                           snow_shot::storage::CaptureHistorySource historySource,
                           std::shared_ptr<std::optional<ScreenshotHistoryEntry>> historyCandidate,
@@ -4303,6 +4306,9 @@ void ScreenshotController::Impl::uploadSelectionToCloud() {
 }
 
 void ScreenshotController::Impl::quickSaveSelection() {
+    const snow_shot::storage::ScreenshotSettings namingSettings;
+    const auto names = exportWindowNames(namingSettings.imageSaveDirectory(),
+                                         namingSettings.autoSaveFilenameFormat());
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION ||                     \
     SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     const QPointer<ScreenshotController> snapshotLifetime(&owner);
@@ -4318,9 +4324,10 @@ void ScreenshotController::Impl::quickSaveSelection() {
         const QDateTime timestamp = QDateTime::currentDateTime();
         const auto result = ScreenshotRecognitionFileExport::quickSave(
             *fileSnapshot,
-            snow_shot::storage::expandTimeVariables(settings.imageSaveDirectory(), timestamp),
+            snow_shot::storage::expandScreenshotExportVariables(settings.imageSaveDirectory(),
+                                                                timestamp, names),
             ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat(),
-                                                          timestamp));
+                                                          timestamp, names));
         if (!result.succeeded()) {
             m_messages->error(
                 QString::fromLatin1(kSaveMessageKey),
@@ -4349,10 +4356,11 @@ void ScreenshotController::Impl::quickSaveSelection() {
         return;
     }
     const QPointer<ScreenshotController> receiver(&owner);
-    const auto save = [receiver, generation = *generation,
-                       history](std::shared_ptr<ScreenshotExportArtifact> artifact) {
+    const auto save = [receiver, generation = *generation, history,
+                       names](std::shared_ptr<ScreenshotExportArtifact> artifact) {
         if (!receiver || !receiver->m_impl->imageExportCurrent(generation))
             return;
+        artifact->setWindowNames(names);
         auto& impl = *receiver->m_impl;
         std::erase_if(impl.m_saveArtifacts, [](const auto& weak) { return weak.expired(); });
         impl.m_saveArtifacts.push_back(artifact);
@@ -4488,7 +4496,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -4548,7 +4556,9 @@ void ScreenshotController::Impl::saveSelectionToFile() {
 
     const snow_shot::storage::ScreenshotSettings outputSettings;
     const ScreenshotPdfOptions pdf{screenshot_pdf::pageSizeForKey(outputSettings.pdfPageSize())};
-    const auto defaults = screenshotManualSaveDefaults();
+    const auto names = exportWindowNames(outputSettings.imageSaveDirectory(),
+                                         outputSettings.manualSaveFilenameFormat());
+    const auto defaults = screenshotManualSaveDefaults(QDateTime::currentDateTime(), names);
     QString selectedFilter = defaults.selectedFilter;
     const QString selectedPath = QFileDialog::getSaveFileName(
         dialogOwner.data(), QCoreApplication::translate("ScreenshotController", "Save screenshot"),
@@ -4653,13 +4663,15 @@ void ScreenshotController::Impl::saveRecognitionResultWithSystemDialog(
     });
 
     const snow_shot::storage::ScreenshotSettings settings;
+    const auto names =
+        exportWindowNames(settings.imageSaveDirectory(), settings.manualSaveFilenameFormat());
     const QDateTime timestamp = QDateTime::currentDateTime();
     const QString directory = ScreenshotImageFileService::saveDialogDirectory(
-        settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp);
+        settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp, names);
     static_cast<void>(QDir().mkpath(directory));
     const QString initialPath = QDir(directory).filePath(
         ScreenshotImageFileService::suggestedBaseName(settings.manualSaveFilenameFormat(),
-                                                      timestamp) +
+                                                      timestamp, names) +
         QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(snapshot.kind));
     const QString selectedPath = QFileDialog::getSaveFileName(
         dialogOwner.data(),
@@ -4691,6 +4703,9 @@ void ScreenshotController::Impl::saveRecognitionResultWithSystemDialog(
 }
 
 void ScreenshotController::Impl::saveSelectionWithSnowDialog() {
+    const snow_shot::storage::ScreenshotSettings namingSettings;
+    const auto names = exportWindowNames(namingSettings.imageSaveDirectory(),
+                                         namingSettings.manualSaveFilenameFormat());
     if (owner.property("saveDialogOpen").toBool() || !ensureExportFeature() ||
         !resetCanvasEditingState())
         return;
@@ -4744,7 +4759,7 @@ void ScreenshotController::Impl::saveSelectionWithSnowDialog() {
         finished(false);
     };
     auto open = [receiver, dialogOwner, generation = *generation, epoch, history, finished,
-                 completed](std::shared_ptr<ScreenshotExportArtifact> artifact) {
+                 completed, names](std::shared_ptr<ScreenshotExportArtifact> artifact) {
         if (*completed)
             return;
         if (!receiver || !receiver->m_impl || !dialogOwner ||
@@ -4752,6 +4767,7 @@ void ScreenshotController::Impl::saveSelectionWithSnowDialog() {
             finished(false);
             return;
         }
+        artifact->setWindowNames(names);
         const bool opened = ScreenshotSaveAsFileDialog::open(
             receiver, dialogOwner, artifact,
             [receiver, generation, epoch, history, artifact](const QString& path) {
@@ -4954,8 +4970,24 @@ void ScreenshotController::Impl::copySelectionToClipboard() {
     copySelectionToClipboardWithSource(snow_shot::storage::CaptureHistorySource::CopiedToClipboard);
 }
 
+snow_shot::storage::ScreenshotWindowNames
+ScreenshotController::Impl::exportWindowNames(const QString& directory,
+                                              const QString& filename) const {
+    if (!snow_shot::storage::containsScreenshotWindowVariables(directory) &&
+        !snow_shot::storage::containsScreenshotWindowVariables(filename))
+        return {};
+    const QRect selection = m_scrollingCaptureController && m_scrollingCaptureController->active()
+                                ? m_scrollingCaptureController->canvasSelection()
+                                : m_selection.pixelSelection();
+    const auto excluded = m_overlayCoordinator->excludedHwnds(m_displaySession);
+    return screenshotWindowNamesForExport(
+        directory, filename, selection, m_displaySession, m_geometry,
+        {excluded.constData(), static_cast<size_t>(excluded.size())},
+        snow_shot::platform::screenshotWindowNamesAtPoint);
+}
+
 ScreenshotAutomaticSaveRequest ScreenshotController::Impl::automaticSaveRequest(
-    const snow_shot::storage::ScreenshotSettings& settings) {
+    const snow_shot::storage::ScreenshotSettings& settings, bool configuredDirectoryUsed) {
     ScreenshotAutomaticSaveRequest request;
     request.receiver = &owner;
     request.configuredSaveDirectory = settings.imageSaveDirectory();
@@ -4963,6 +4995,9 @@ ScreenshotAutomaticSaveRequest ScreenshotController::Impl::automaticSaveRequest(
     request.filenameFormat = settings.autoSaveFilenameFormat();
     request.encoding = snow_shot::presentation::screenshotEncodingOptions(settings);
     request.pdf.pageSize = screenshot_pdf::pageSizeForKey(settings.pdfPageSize());
+    request.windowNames =
+        exportWindowNames(configuredDirectoryUsed ? request.configuredSaveDirectory : QString(),
+                          request.filenameFormat);
     request.requestedAt = QDateTime::currentDateTime();
     const QPointer<ScreenshotController> receiver(&owner);
     request.completion = [receiver,
@@ -5000,10 +5035,13 @@ void ScreenshotController::Impl::copySelectionToClipboardWithSource(
     const snow_shot::storage::ScreenshotSettings settings;
     const bool scrolling =
         m_scrollingCaptureController != nullptr && m_scrollingCaptureController->active();
-    const ScreenshotCopyOutputOptions output{
+    ScreenshotCopyOutputOptions output{
         settings.autoSaveAfterExecution(scrolling ? QStringLiteral("copy_scrolling_screenshot")
                                                   : QStringLiteral("copy_screenshot")),
-        settings.copyImageFileToClipboard(), automaticSaveRequest(settings)};
+        settings.copyImageFileToClipboard(),
+        {}};
+    if (output.autoSave || output.copyFileToClipboard)
+        output.file = automaticSaveRequest(settings, output.autoSave);
     const bool historyEligible = !isScreenshotRecognitionTool(m_interaction.activeTool());
     if (scrolling) {
         const bool shouldSnapshotHistory =
@@ -5147,6 +5185,7 @@ void ScreenshotController::Impl::saveArtifactForCopy(
     std::shared_ptr<ScreenshotExportArtifact> artifact, quint64 generation,
     ScreenshotCopyOutputOptions output, snow_shot::storage::CaptureHistorySource historySource,
     std::shared_ptr<std::optional<ScreenshotHistoryEntry>> historyCandidate, bool scrolling) {
+    artifact->setWindowNames(output.file.windowNames);
     const QPointer<ScreenshotController> receiver(&owner);
     std::erase_if(m_saveArtifacts, [](const auto& weak) { return weak.expired(); });
     m_saveArtifacts.push_back(artifact);

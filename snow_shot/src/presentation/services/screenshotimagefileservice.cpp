@@ -114,9 +114,10 @@ template <typename Writer>
 ScreenshotImageFileSaveResult
 savePreparedAutomatically(const QStringList& directories, ScreenshotImageFileFormat format,
                           const QString& filenameFormat, const QDateTime& timestamp,
-                          const std::function<bool()>& cancelled, Writer&& writer) {
+                          const std::function<bool()>& cancelled,
+                          const snow_shot::storage::ScreenshotWindowNames& names, Writer&& writer) {
     const QString baseName =
-        ScreenshotImageFileService::suggestedBaseName(filenameFormat, timestamp);
+        ScreenshotImageFileService::suggestedBaseName(filenameFormat, timestamp, names);
     if (baseName.isEmpty() || baseName.contains(QLatin1Char('/')) ||
         baseName.contains(QLatin1Char('\\')))
         return {{}, QStringLiteral("The screenshot filename format is invalid")};
@@ -144,9 +145,10 @@ savePreparedAutomatically(const QStringList& directories, ScreenshotImageFileFor
 
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveEncodedAutomatically(
     const QString& encodedFile, const QStringList& directories, ScreenshotImageFileFormat format,
-    const QString& filenameFormat, const QDateTime& timestamp, std::function<bool()> cancelled) {
+    const QString& filenameFormat, const QDateTime& timestamp, std::function<bool()> cancelled,
+    const snow_shot::storage::ScreenshotWindowNames& names) {
     return savePreparedAutomatically(
-        directories, format, filenameFormat, timestamp, cancelled, [&](const QString& path) {
+        directories, format, filenameFormat, timestamp, cancelled, names, [&](const QString& path) {
             return writeEncodedFile(encodedFile, path, format, cancelled);
         });
 }
@@ -196,18 +198,19 @@ ScreenshotImageFileService::writeEncodedBytes(const QByteArray& bytes, const QSt
 
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveEncodedBytesAutomatically(
     const QByteArray& bytes, const QStringList& directories, ScreenshotImageFileFormat format,
-    const QString& filenameFormat, const QDateTime& timestamp, std::function<bool()> cancelled) {
+    const QString& filenameFormat, const QDateTime& timestamp, std::function<bool()> cancelled,
+    const snow_shot::storage::ScreenshotWindowNames& names) {
     return savePreparedAutomatically(
-        directories, format, filenameFormat, timestamp, cancelled,
+        directories, format, filenameFormat, timestamp, cancelled, names,
         [&](const QString& path) { return writeEncodedBytes(bytes, path, format, cancelled); });
 }
 
 ScreenshotImageFileSaveResult ScreenshotImageFileService::savePdfAutomatically(
     const screenshot_pdf::Payload& payload, const QStringList& directories,
     const QString& filenameFormat, const QDateTime& timestamp, ScreenshotPdfOptions options,
-    std::function<bool()> cancelled) {
+    std::function<bool()> cancelled, const snow_shot::storage::ScreenshotWindowNames& names) {
     return savePreparedAutomatically(
-        directories, ScreenshotImageFileFormat::Pdf, filenameFormat, timestamp, cancelled,
+        directories, ScreenshotImageFileFormat::Pdf, filenameFormat, timestamp, cancelled, names,
         [&](const QString& path) { return writePdf(payload, path, options, cancelled); });
 }
 
@@ -215,9 +218,10 @@ QString ScreenshotImageFileService::suggestedBaseName(const QDateTime& timestamp
     return suggestedBaseName(QStringLiteral("SnowShot_{YYYY-MM-DD_HH-mm-ss}"), timestamp);
 }
 
-QString ScreenshotImageFileService::suggestedBaseName(const QString& filenameFormat,
-                                                      const QDateTime& timestamp) {
-    return snow_shot::storage::expandTimeVariables(filenameFormat, timestamp);
+QString ScreenshotImageFileService::suggestedBaseName(
+    const QString& filenameFormat, const QDateTime& timestamp,
+    const snow_shot::storage::ScreenshotWindowNames& names) {
+    return snow_shot::storage::expandScreenshotExportVariables(filenameFormat, timestamp, names);
 }
 
 QString ScreenshotImageFileService::dialogFilter(ScreenshotImageFileFormat format) {
@@ -250,11 +254,12 @@ QStringList ScreenshotImageFileService::automaticDirectories() {
     return directories;
 }
 
-QStringList ScreenshotImageFileService::automaticDirectories(const QString& configuredDirectory,
-                                                             const QDateTime& timestamp) {
+QStringList ScreenshotImageFileService::automaticDirectories(
+    const QString& configuredDirectory, const QDateTime& timestamp,
+    const snow_shot::storage::ScreenshotWindowNames& names) {
     QStringList directories;
     const QString expanded =
-        snow_shot::storage::expandTimeVariables(configuredDirectory, timestamp);
+        snow_shot::storage::expandScreenshotExportVariables(configuredDirectory, timestamp, names);
     const QString configured = expanded.isEmpty() ? QString() : QDir::cleanPath(expanded);
     if (!configured.isEmpty() && (QFileInfo(configured).isDir() ||
                                   snow_shot::storage::containsTimeVariables(configuredDirectory))) {
@@ -268,9 +273,9 @@ QStringList ScreenshotImageFileService::automaticDirectories(const QString& conf
     return directories;
 }
 
-QString ScreenshotImageFileService::saveDialogDirectory(const QString& lastDirectory,
-                                                        const QString& configuredDirectory,
-                                                        const QDateTime& timestamp) {
+QString ScreenshotImageFileService::saveDialogDirectory(
+    const QString& lastDirectory, const QString& configuredDirectory, const QDateTime& timestamp,
+    const snow_shot::storage::ScreenshotWindowNames& names) {
     const QString remembered = lastDirectory.trimmed();
     if (!remembered.isEmpty()) {
         const QString cleaned = QDir::cleanPath(remembered);
@@ -279,7 +284,7 @@ QString ScreenshotImageFileService::saveDialogDirectory(const QString& lastDirec
         }
     }
 
-    const QStringList candidates = automaticDirectories(configuredDirectory, timestamp);
+    const QStringList candidates = automaticDirectories(configuredDirectory, timestamp, names);
     if (!candidates.isEmpty()) {
         return candidates.constFirst();
     }
@@ -566,13 +571,14 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
     const QImage& image, const QStringList& candidateDirectories, ScreenshotImageFileFormat format,
     const QString& filenameFormat, const QDateTime& timestamp, ScreenshotPdfOptions pdf,
-    ScreenshotImageEncodingOptions encoding) {
+    ScreenshotImageEncodingOptions encoding,
+    const snow_shot::storage::ScreenshotWindowNames& names) {
     if (image.isNull()) {
         return {{}, QStringLiteral("The screenshot image is empty")};
     }
 
     pdf.quality = qBound(0, encoding.quality, 100);
-    const QString baseName = suggestedBaseName(filenameFormat, timestamp);
+    const QString baseName = suggestedBaseName(filenameFormat, timestamp, names);
     if (baseName.isEmpty() || baseName.contains(QLatin1Char('/')) ||
         baseName.contains(QLatin1Char('\\'))) {
         return {{}, QStringLiteral("The screenshot filename format is invalid")};
@@ -604,13 +610,14 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
     const ScreenshotImageRowSource& source, const QStringList& candidateDirectories,
     ScreenshotImageFileFormat format, const QString& filenameFormat, const QDateTime& timestamp,
-    ScreenshotPdfOptions pdf, ScreenshotImageEncodingOptions encoding) {
+    ScreenshotPdfOptions pdf, ScreenshotImageEncodingOptions encoding,
+    const snow_shot::storage::ScreenshotWindowNames& names) {
     if (!source.isValid()) {
         return {{}, QStringLiteral("The screenshot image source is empty")};
     }
 
     pdf.quality = qBound(0, encoding.quality, 100);
-    const QString baseName = suggestedBaseName(filenameFormat, timestamp);
+    const QString baseName = suggestedBaseName(filenameFormat, timestamp, names);
     if (baseName.isEmpty() || baseName.contains(QLatin1Char('/')) ||
         baseName.contains(QLatin1Char('\\'))) {
         return {{}, QStringLiteral("The screenshot filename format is invalid")};
@@ -644,12 +651,13 @@ ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
 
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
     const snow_shot::storage::PreparedPngImage& png, const QStringList& candidateDirectories,
-    const QString& filenameFormat, const QDateTime& timestamp, std::function<bool()> cancelled) {
+    const QString& filenameFormat, const QDateTime& timestamp, std::function<bool()> cancelled,
+    const snow_shot::storage::ScreenshotWindowNames& names) {
     if (!png.isValid())
         return {{}, QStringLiteral("The screenshot image is empty")};
     return savePreparedAutomatically(
         candidateDirectories, ScreenshotImageFileFormat::Png, filenameFormat, timestamp, cancelled,
-        [&](const QString& path) { return write(png, path, cancelled); });
+        names, [&](const QString& path) { return write(png, path, cancelled); });
 }
 
 bool ScreenshotImageFileService::publishFileToClipboard(QClipboard* clipboard,

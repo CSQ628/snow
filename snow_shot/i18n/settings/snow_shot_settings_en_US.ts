@@ -4679,12 +4679,20 @@
     <context>
         <name>SettingsVariableHelp</name>
         <message>
-            <source>OK</source>
-            <translation>OK</translation>
+            <source>%1: Application Name</source>
+            <translation>%1: Application Name</translation>
         </message>
         <message>
-            <source>Time placeholders in braces are replaced with the current local date and time.</source>
-            <translation>Time placeholders in braces are replaced with the current local date and time.</translation>
+            <source>%1: Current time</source>
+            <translation>%1: Current time</translation>
+        </message>
+        <message>
+            <source>%1: Window Name</source>
+            <translation>%1: Window Name</translation>
+        </message>
+        <message>
+            <source>OK</source>
+            <translation>OK</translation>
         </message>
         <message>
             <source>Variable Description</source>

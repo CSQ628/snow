@@ -1,3 +1,4 @@
+#include "snow_shot/storage/timevariables.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "recordingtrimsession.h"
 #include "snow_shot/platform/applicationqos.h"
@@ -1129,7 +1130,7 @@ struct ScreenRecordingController::Impl {
             };
             sessionLoopAnimatedImages = config.loop_animated_images != 0;
             const QDateTime outputTimestamp = QDateTime::currentDateTime();
-            const QString baseName = ScreenshotImageFileService::suggestedBaseName(
+            const QString baseName = snow_shot::storage::expandTimeVariables(
                 settings.videoFilenameFormat(), outputTimestamp);
             const QStringList directories =
                 snow_shot::presentation::recording::screenRecordingDirectories(outputTimestamp);

@@ -654,9 +654,15 @@ void variableDescriptionLinks(const settings::SettingsRegistry& registry,
             QStringLiteral("settingsVariableDescriptionModal"));
         require(modal && modal->isOpen() && modal->centered() &&
                     modal->standardButtons() == adqt::widgets::AdModal::StandardButton::Ok &&
-                    modal->text().contains(QStringLiteral("{YYYY} \u2192 ")) &&
-                    !modal->text().contains(QStringLiteral("{MM}")),
-                "keyboard activation must open a centered modal with one example and one button");
+                    modal->text().startsWith(QStringLiteral("{YYYY}: Current time")),
+                "keyboard activation must open a centered modal with the variable description and "
+                "one button");
+        const bool screenshot =
+            ids.at(fields.indexOf(field)).startsWith(QStringLiteral("screenshot-output."));
+        require(modal->text().contains(QStringLiteral("{AN}: Application Name")) == screenshot &&
+                    modal->text().contains(QStringLiteral("{WN}: Window Name")) == screenshot &&
+                    !modal->text().contains(QStringLiteral("Unknown")),
+                "window variable help must be available only for screenshot templates");
         const QString snapshot = qEnvironmentVariable("SNOW_VARIABLE_HELP_SNAPSHOT");
         if (field == fields.constFirst() && !snapshot.isEmpty())
             require(owner.grab().save(snapshot), "help modal snapshot must save");
@@ -664,7 +670,7 @@ void variableDescriptionLinks(const settings::SettingsRegistry& registry,
         drainEvents();
         require(
             modal->windowTitle() == QStringLiteral("Translated: Variable Description") &&
-                modal->text().startsWith(QStringLiteral("Translated: Time placeholders")) &&
+                modal->text().startsWith(QStringLiteral("Translated: {YYYY}: Current time")) &&
                 description->text().contains(QStringLiteral("Translated: Variable Description")),
             "open modal and inline link must follow language changes");
         QCoreApplication::removeTranslator(&translator);

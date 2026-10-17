@@ -6,6 +6,7 @@
 #endif
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/timevariables.h"
+#include "snow_shot/storage/screenshotexportvariables.h"
 #include "widgets/radio.h"
 #include "widgets/modal.h"
 
@@ -217,15 +218,19 @@ struct SettingsFormField::Impl {
                     const auto handle = fields::directoryPath(metadata, options);
                     field = handle.field;
                     editor = handle.editor;
-                    QObject::connect(handle.editor, &DirectoryPathInput::browseRequested, &q,
-                                     [this, payload](const QString& current) {
-                                         const QString path = QFileDialog::getExistingDirectory(
-                                             field->viewWidget()->window(),
-                                             payload.dialogTitle.translated(),
-                                             storage::expandTimeVariables(
-                                                 current, QDateTime::currentDateTime()));
-                                         commitBrowsedPath(path);
-                                     });
+                    QObject::connect(
+                        handle.editor, &DirectoryPathInput::browseRequested, &q,
+                        [this, payload](const QString& current) {
+                            const QString path = QFileDialog::getExistingDirectory(
+                                field->viewWidget()->window(), payload.dialogTitle.translated(),
+                                (payload.binding ==
+                                         SettingsDirectoryPathBinding::ScreenshotImageDirectory
+                                     ? storage::expandScreenshotExportVariables(
+                                           current, QDateTime::currentDateTime())
+                                     : storage::expandTimeVariables(current,
+                                                                    QDateTime::currentDateTime())));
+                            commitBrowsedPath(path);
+                        });
                 } else if constexpr (std::is_same_v<Payload, SettingsTextDefinition>) {
                     options.commitPolicy = fields::CommitPolicy::OnFinish;
                     options.allowClear = payload.binding == SettingsTextBinding::ServerUrl;
@@ -299,12 +304,26 @@ struct SettingsFormField::Impl {
         variableModal->setWindowTitle(
             QCoreApplication::translate("SettingsVariableHelp", "Variable Description"));
         variableModal->setAcceptText(QCoreApplication::translate("SettingsVariableHelp", "OK"));
-        variableModal->setText(
-            QCoreApplication::translate(
-                "SettingsVariableHelp",
-                "Time placeholders in braces are replaced with the current local date and time.") +
-            QStringLiteral("\n\n{YYYY} \u2192 ") +
-            QDateTime::currentDateTime().toString(QStringLiteral("yyyy")));
+        QString text = QCoreApplication::translate("SettingsVariableHelp", "%1: Current time")
+                           .arg(QStringLiteral("{YYYY}"));
+        const auto* directory =
+            std::get_if<SettingsDirectoryPathDefinition>(&descriptor.definition->payload);
+        const auto* filename = std::get_if<SettingsTextDefinition>(&descriptor.definition->payload);
+        const bool screenshot =
+            (directory &&
+             directory->binding == SettingsDirectoryPathBinding::ScreenshotImageDirectory) ||
+            (filename &&
+             (filename->binding == SettingsTextBinding::ScreenshotManualFilenameFormat ||
+              filename->binding == SettingsTextBinding::ScreenshotAutoFilenameFormat));
+        if (screenshot) {
+            text += QLatin1Char('\n') +
+                    QCoreApplication::translate("SettingsVariableHelp", "%1: Application Name")
+                        .arg(QStringLiteral("{AN}"));
+            text += QLatin1Char('\n') +
+                    QCoreApplication::translate("SettingsVariableHelp", "%1: Window Name")
+                        .arg(QStringLiteral("{WN}"));
+        }
+        variableModal->setText(text);
     }
 
     void showVariableDescription() {

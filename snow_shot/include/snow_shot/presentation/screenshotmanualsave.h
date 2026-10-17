@@ -44,14 +44,15 @@ struct ScreenshotManualSaveDefaults final {
 };
 
 [[nodiscard]] inline ScreenshotManualSaveDefaults
-screenshotManualSaveDefaults(const QDateTime& timestamp = QDateTime::currentDateTime()) {
+screenshotManualSaveDefaults(const QDateTime& timestamp = QDateTime::currentDateTime(),
+                             const snow_shot::storage::ScreenshotWindowNames& names = {}) {
     const snow_shot::storage::ScreenshotSettings settings;
     const QString directory = ScreenshotImageFileService::saveDialogDirectory(
-        settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp);
+        settings.lastManualSaveDirectory(), settings.imageSaveDirectory(), timestamp, names);
     static_cast<void>(QDir().mkpath(directory));
     const auto format = ScreenshotImageFileService::formatForKey(settings.lastManualSaveFormat());
     return {QDir(directory).filePath(ScreenshotImageFileService::suggestedBaseName(
-                                         settings.manualSaveFilenameFormat(), timestamp) +
+                                         settings.manualSaveFilenameFormat(), timestamp, names) +
                                      QStringLiteral(".") +
                                      ScreenshotImageFileService::extension(format)),
             ScreenshotImageFileService::dialogFilter(format)};

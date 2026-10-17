@@ -14,7 +14,6 @@
 #include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
-#include "snow_shot/storage/timevariables.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
@@ -6504,7 +6503,8 @@ void ScreenshotPinnedWindow::quickSave() {
         const QDateTime timestamp = QDateTime::currentDateTime();
         const auto result = ScreenshotRecognitionFileExport::quickSave(
             *fileSnapshot,
-            snow_shot::storage::expandTimeVariables(settings.imageSaveDirectory(), timestamp),
+            snow_shot::storage::expandScreenshotExportVariables(settings.imageSaveDirectory(),
+                                                                timestamp),
             ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat(),
                                                           timestamp));
         if (!result.succeeded()) {
@@ -7065,7 +7065,7 @@ void ScreenshotPinnedWindow::printContent() {
                 {{QStringLiteral("request_kind"), QStringLiteral("pinned")},
                  {QStringLiteral("operation"), QString::number(replacement)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
