@@ -1692,6 +1692,9 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
                 [this]() { m_presentationServices->resetPresentation(); },
             },
             [this]() {
+                if (m_overlayInputHandler != nullptr) {
+                    m_overlayInputHandler->endCaptureSession();
+                }
                 cancelCloudUpload();
                 m_pendingHistoryEditRecordId.clear();
                 m_pendingMcpDocument.reset();
@@ -4968,9 +4971,6 @@ void ScreenshotController::Impl::cancelCapture() {
     }
     ++m_captureEpoch;
     clearCanvasColorSampling();
-    if (m_overlayInputHandler != nullptr) {
-        m_overlayInputHandler->resetTransientShortcuts();
-    }
     resetPendingCaptureRequest();
     invalidateRecognitionSession();
     static_cast<void>(stopScrollingCapture(false));
@@ -6129,9 +6129,6 @@ void ScreenshotController::Impl::shutdown() {
         cancel();
     clearCanvasColorSampling();
     m_keyboardOwnerOverlay.clear();
-    if (m_overlayInputHandler != nullptr) {
-        m_overlayInputHandler->resetTransientShortcuts();
-    }
     for (const auto& handle : m_exportJobs) {
         handle.cancel();
     }
