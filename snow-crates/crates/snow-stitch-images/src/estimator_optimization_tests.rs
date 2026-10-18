@@ -4,7 +4,6 @@ use std::{hint::black_box, time::Instant};
 fn original_refinement(
     reference: &Frame,
     incoming: &Frame,
-    direct: &SimilarityMap,
     axis: StitchAxis,
     strongest: i32,
     maximum: i32,
@@ -15,7 +14,7 @@ fn original_refinement(
         .map(|offset| {
             (
                 offset,
-                precise_alignment_error(reference, incoming, direct, axis, offset),
+                precise_alignment_error(reference, incoming, axis, offset),
             )
         })
         .min_by(|left, right| {
@@ -25,16 +24,6 @@ fn original_refinement(
                 .then_with(|| left.0.cmp(&right.0))
         })
         .unwrap()
-}
-
-fn direct_map(reference: &Frame, incoming: &Frame, axis: StitchAxis) -> SimilarityMap {
-    SimilarityMap::between(
-        &GrayImage::from_frame(reference).unwrap(),
-        &GrayImage::from_frame(incoming).unwrap(),
-        TileLayout::new(incoming.width(), incoming.height(), 32),
-        axis,
-        0,
-    )
 }
 
 fn texture(width: u32, height: u32, format: PixelFormat, phase: u32) -> Frame {
@@ -66,7 +55,6 @@ fn shared_refinement_matches_independent_errors_and_ties() {
             for phase in [0, 1] {
                 let incoming = texture(width, height, format, phase);
                 for axis in [StitchAxis::Vertical, StitchAxis::Horizontal] {
-                    let direct = direct_map(&reference, &incoming, axis);
                     for (strongest, maximum) in [
                         (-99, 100),
                         (-10, 10),
@@ -77,25 +65,19 @@ fn shared_refinement_matches_independent_errors_and_ties() {
                         (99, 100),
                     ] {
                         for (offset, error) in precise_alignment_errors(
-                            &reference, &incoming, &direct, axis, strongest, maximum,
+                            &reference, &incoming, axis, strongest, maximum,
                         ) {
                             if offset.abs() <= maximum {
                                 assert_eq!(
                                     error,
-                                    precise_alignment_error(
-                                        &reference, &incoming, &direct, axis, offset
-                                    ),
+                                    precise_alignment_error(&reference, &incoming, axis, offset),
                                     "{width}x{height} {format:?} {axis:?} phase={phase} offset={offset}",
                                 );
                             }
                         }
                         assert_eq!(
-                            refine_motion_offset(
-                                &reference, &incoming, &direct, axis, strongest, maximum
-                            ),
-                            original_refinement(
-                                &reference, &incoming, &direct, axis, strongest, maximum
-                            ),
+                            refine_motion_offset(&reference, &incoming, axis, strongest, maximum),
+                            original_refinement(&reference, &incoming, axis, strongest, maximum),
                         );
                     }
                 }
@@ -111,11 +93,10 @@ fn refinement_dispatch_boundaries_preserve_results() {
             let reference = texture(width, height, format, 0);
             let incoming = texture(width, height, format, 1);
             for axis in [StitchAxis::Vertical, StitchAxis::Horizontal] {
-                let direct = direct_map(&reference, &incoming, axis);
                 for strongest in [-17, 17] {
                     assert_eq!(
-                        refine_motion_offset(&reference, &incoming, &direct, axis, strongest, 900),
-                        original_refinement(&reference, &incoming, &direct, axis, strongest, 900),
+                        refine_motion_offset(&reference, &incoming, axis, strongest, 900),
+                        original_refinement(&reference, &incoming, axis, strongest, 900),
                         "{width}x{height} {format:?} {axis:?}",
                     );
                 }
@@ -200,9 +181,7 @@ fn refinement_release_benchmark() {
                     } else {
                         (&first, &second, -75)
                     };
-                    let direct = direct_map(reference, incoming, axis);
-                    let expected =
-                        original_refinement(reference, incoming, &direct, axis, strongest, 1200);
+                    let expected = original_refinement(reference, incoming, axis, strongest, 1200);
                     if crop_width == source.width() {
                         assert_eq!(expected, (strongest, 0.0));
                     }
@@ -219,7 +198,6 @@ fn refinement_release_benchmark() {
                                 refine_motion_offset(
                                     black_box(reference),
                                     black_box(incoming),
-                                    black_box(&direct),
                                     axis,
                                     strongest,
                                     1200,
@@ -228,7 +206,6 @@ fn refinement_release_benchmark() {
                                 original_refinement(
                                     black_box(reference),
                                     black_box(incoming),
-                                    black_box(&direct),
                                     axis,
                                     strongest,
                                     1200,
@@ -298,7 +275,6 @@ fn zero_candidate_release_benchmark() {
                 let reference_gray = GrayImage::from_frame(&reference).unwrap();
                 let incoming_gray = GrayImage::from_frame(&incoming).unwrap();
                 let zero = SimilarityMap::between(&reference_gray, &incoming_gray, layout, axis, 0);
-                let regions = TemporalRegionModel::new(layout);
                 let mut observations = Vec::new();
                 for y in (1..reference.height()).step_by(32) {
                     for x in (1..reference.width()).step_by(32) {
@@ -314,8 +290,7 @@ fn zero_candidate_release_benchmark() {
                         });
                     }
                 }
-                let expected =
-                    score_candidate(0, axis, &observations, &zero, &zero, zero.clone(), &regions);
+                let expected = score_candidate(0, axis, &observations, &zero, &zero, &zero);
                 let mut samples = [Vec::new(), Vec::new()];
                 for round in 0..21 {
                     for reuse in if round % 2 == 0 {
@@ -324,17 +299,18 @@ fn zero_candidate_release_benchmark() {
                         [true, false]
                     } {
                         let started = Instant::now();
-                        let map = if reuse {
-                            black_box(&zero).clone()
+                        let recomputed = if reuse {
+                            None
                         } else {
-                            SimilarityMap::between(
+                            Some(SimilarityMap::between(
                                 black_box(&reference_gray),
                                 black_box(&incoming_gray),
                                 layout,
                                 axis,
                                 0,
-                            )
+                            ))
                         };
+                        let map = recomputed.as_ref().unwrap_or(black_box(&zero));
                         let actual = black_box(score_candidate(
                             0,
                             axis,
@@ -342,11 +318,10 @@ fn zero_candidate_release_benchmark() {
                             &zero,
                             &zero,
                             map,
-                            &regions,
                         ));
                         let elapsed = started.elapsed().as_nanos() as u64;
-                        assert_eq!(actual.diagnostics, expected.diagnostics);
-                        assert_same_map(&actual.compensated, &expected.compensated);
+                        assert_eq!(actual, expected);
+                        assert_same_map(map, &zero);
                         if round > 0 {
                             samples[usize::from(reuse)].push(elapsed);
                         }
