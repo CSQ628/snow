@@ -248,7 +248,8 @@ class MacOSOcrAssets(unittest.TestCase):
         ocr.remove_bundled_models(self.runtime)
         ocr.finalize(self.source, self.runtime, runtime_only=True)
         result = ocr.verify_assets(self.source, self.runtime, runtime_only=True)
-        self.assertEqual(len(result['runtime']['files']), 2)
+        self.assertEqual([item['name'] for item in result['runtime']['files']],
+                         ['snow-ocr-process'])
         models = self.runtime / 'assets/ocr/models'
         models.symlink_to(self.root / 'missing-model-directory')
         with self.assertRaisesRegex(ValueError, 'must not contain bundled models'):
@@ -512,9 +513,125 @@ class MacOSOcrAssets(unittest.TestCase):
         ocr.stage_native_dependencies(worker, libraries, self.runtime)
         self.assertEqual((self.runtime / dependency.name).read_bytes(), dependency.read_bytes())
         self.assertEqual(sorted(p.name for p in self.runtime.glob('*.dylib')), ['libz.dylib'])
+        inventory = self.runtime / 'assets/ocr/development-libraries.json'
+        retained_times = {path: path.stat().st_mtime_ns
+                          for path in (self.runtime / dependency.name, inventory)}
+        ocr.stage_native_dependencies(worker, libraries, self.runtime)
+        self.assertEqual({path: path.stat().st_mtime_ns for path in retained_times}, retained_times)
         ocr.remove_development_libraries(self.runtime)
         self.assertFalse((self.runtime / dependency.name).exists())
         self.assertTrue(worker.is_file())
+
+    def test_cpu_staging_prunes_the_previous_runtime_dependency_closure(self):
+        libraries = self.root / 'upstream'
+        libraries.mkdir()
+        (libraries / 'libz.dylib').write_bytes(ocr.ARM64_HEADER + bytes(24))
+        cache = self.root / 'cache'
+        for item in self.source['models'][0]['files']:
+            ocr.copy_changed(self.model / item['name'], cache / 'ocr-models-small-id' / item['name'])
+        marker = self.runtime / 'assets/ocr/development-libraries.json'
+        worker = self.runtime / 'snow-ocr-process'
+        unrelated = self.runtime / 'unrelated.dylib'
+        unrelated.write_bytes(b'unrelated application library')
+
+        def inspect(*args):
+            if '--version' in args:
+                return 'snow-ocr-process 1.0.11 macos-aarch64 protocol 6'
+            path = Path(args[-1])
+            if '-D' in args:
+                return f'{path}:\n@rpath/{path.name}'
+            dependency = '\n\t@rpath/libz.dylib (compatibility version 1.0.0)' if path == worker.resolve() else ''
+            return f'{path}:{dependency}'
+
+        self.run.side_effect = inspect
+        for dynamic in (True, False):
+            for runtime_only in (False, True):
+                with self.subTest(dynamic=dynamic, runtime_only=runtime_only):
+                    for name in ('libonnxruntime.dylib', 'libretired.dylib', 'libz.dylib'):
+                        (self.runtime / name).write_bytes(b'old runtime dependency')
+                    ocr.atomic_json(marker, ['libretired.dylib', 'libz.dylib'])
+                    arguments = ['--worker', worker, '--cache', cache]
+                    if dynamic:
+                        arguments += ['--library-dir', libraries]
+                    if runtime_only:
+                        arguments += ['--runtime-only']
+                    self.command('stage', *arguments)
+                    self.assertFalse((self.runtime / 'libonnxruntime.dylib').exists())
+                    self.assertFalse((self.runtime / 'libretired.dylib').exists())
+                    self.assertTrue(worker.is_file())
+                    self.assertEqual(unrelated.read_bytes(), b'unrelated application library')
+                    if dynamic:
+                        self.assertEqual(json.loads(marker.read_text()), ['libz.dylib'])
+                        self.assertEqual((self.runtime / 'libz.dylib').read_bytes(),
+                                         (libraries / 'libz.dylib').read_bytes())
+                    else:
+                        self.assertFalse(marker.exists())
+                        self.assertFalse((self.runtime / 'libz.dylib').exists())
+                    ocr.verify_assets(self.source, self.runtime, runtime_only=runtime_only)
+
+    def test_cpu_staging_removes_the_retired_runtime_without_an_inventory(self):
+        retired = self.runtime / 'libonnxruntime.dylib'
+        retired.write_bytes(b'old inference runtime')
+        for attempt in range(2):
+            self.command('stage', '--worker', self.runtime / 'snow-ocr-process', '--runtime-only')
+            self.assertFalse(retired.exists())
+            self.assertFalse((self.runtime / 'assets/ocr/development-libraries.json').exists())
+            ocr.verify_assets(self.source, self.runtime, runtime_only=True)
+
+    def test_bundle_preparation_removes_the_untracked_retired_runtime(self):
+        app = self.root / 'Reused App.app'
+        runtime = app / 'Contents/MacOS'
+        runtime.mkdir(parents=True)
+        worker = runtime / 'snow-ocr-process'
+        worker.write_bytes(ocr.ARM64_HEADER + bytes(24))
+        libraries = self.root / 'upstream'
+        libraries.mkdir()
+        self.run.side_effect = lambda *args: f'{args[-1]}:'
+        for dynamic in (True, False):
+            with self.subTest(dynamic=dynamic):
+                retired = runtime / 'libonnxruntime.dylib'
+                retired.write_bytes(ocr.ARM64_HEADER + bytes(24))
+                ocr.prepare_bundle(app, libraries if dynamic else None)
+                self.assertFalse(retired.exists())
+                self.assertTrue(worker.is_file())
+
+    def test_deployment_prunes_retired_libraries_before_scanning_the_bundle(self):
+        app = self.root / 'Reused App.app'
+        runtime = app / 'Contents/MacOS'
+        runtime.mkdir(parents=True)
+        libraries = self.root / 'upstream'
+        libraries.mkdir()
+        worker = runtime / 'snow-ocr-process'
+        worker.write_bytes(ocr.ARM64_HEADER + bytes(24))
+        for directory, names in ((runtime, ('libonnxruntime.dylib', 'libretired.dylib', 'libz.dylib')),
+                                 (libraries, ('libz.dylib',))):
+            for name in names:
+                (directory / name).write_bytes(ocr.ARM64_HEADER + bytes(24))
+        marker = runtime / 'assets/ocr/development-libraries.json'
+        ocr.atomic_json(marker, ['libretired.dylib', 'libz.dylib'])
+
+        def inspect(*args):
+            if 'install_name_tool' in args[0]:
+                return ''
+            path = Path(args[-1])
+            self.assertNotIn(path.name, ('libonnxruntime.dylib', 'libretired.dylib'),
+                             'obsolete libraries must not become deployment roots')
+            if '-D' in args:
+                return f'{path}:\n@rpath/{path.name}'
+            if '-l' in args:
+                return ''
+            dependency = '\n\t@rpath/libz.dylib (compatibility version 1.0.0)' if path == worker else ''
+            return f'{path}:{dependency}'
+
+        self.run.side_effect = inspect
+        ocr.deploy_native_libraries(app, libraries)
+        self.assertFalse((runtime / 'libonnxruntime.dylib').exists())
+        self.assertFalse((runtime / 'libretired.dylib').exists())
+        self.assertFalse((runtime / 'libz.dylib').exists())
+        self.assertFalse(marker.exists())
+        self.assertTrue(worker.is_file())
+        self.assertEqual((app / 'Contents/Frameworks/libz.dylib').read_bytes(),
+                         (libraries / 'libz.dylib').read_bytes())
 
     def test_development_cleanup_removes_versioned_library_symlink_chain(self):
         versioned = self.runtime / 'libz.1.3.1.zlib-ng.dylib'

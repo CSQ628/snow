@@ -120,20 +120,23 @@ def stage_native_dependencies(worker, library_directory, runtime):
             copy_changed(source, runtime / source.name)
             names.add(source.name)
             pending.append(source.resolve())
-    inventory = runtime / 'assets/ocr/development-libraries.json'
-    if inventory.exists():
-        names.update(json.loads(inventory.read_text()))
-    atomic_json(inventory, sorted(names))
+    # Reconcile the previous closure instead of retaining dependencies of an
+    # older worker. Current dependencies have already been verified and staged.
+    remove_development_libraries(runtime, retained=names)
 
 
-def remove_development_libraries(runtime):
+def remove_development_libraries(runtime, retained=()):
+    bundled_models_directory(runtime)
     marker = runtime / 'assets/ocr/development-libraries.json'
-    if not marker.exists():
-        return
-    names = json.loads(marker.read_text())
+    names = json.loads(marker.read_text()) if marker.exists() else []
     for name in names:
         if Path(name).name != name or not name.endswith('.dylib') or name in RUNTIME_FILES:
             raise ValueError('Invalid development library inventory')
+    retained = set(retained)
+    names = set(names) - retained
+    # The former runtime itself was staged separately from its dependency
+    # inventory. Remove it even when the old inventory is absent.
+    names.add('libonnxruntime.dylib')
     staged_libraries = {runtime.resolve() / name for name in names}
     # CMake may stage versioned dylib symlinks alongside the temporary files.
     # Remove links before their targets so the signed bundle has no dangling code.
@@ -143,7 +146,10 @@ def remove_development_libraries(runtime):
         path.unlink()
     for name in names:
         (runtime / name).unlink(missing_ok=True)
-    marker.unlink()
+    if retained:
+        atomic_json(marker, sorted(retained))
+    else:
+        marker.unlink(missing_ok=True)
 
 
 def deploy_native_libraries(app, library_directory):
@@ -154,6 +160,9 @@ def deploy_native_libraries(app, library_directory):
     relocatable before invoking it.
     """
     runtime = app / 'Contents/MacOS'
+    # Resolve the live binaries from the supplied library directory. Stale
+    # development copies must not become independent deployment roots.
+    remove_development_libraries(runtime)
     frameworks = app / 'Contents/Frameworks'
     frameworks.mkdir(parents=True, exist_ok=True)
     pending = [p for directory in (runtime, frameworks) for p in directory.iterdir()
@@ -194,7 +203,6 @@ def deploy_native_libraries(app, library_directory):
                 value = loads[i + 2].strip().split(' (offset')[0].removeprefix('path ')
                 if not value.startswith(('@loader_path', '@executable_path', '/usr/lib/', '/System/Library/')):
                     run('/usr/bin/install_name_tool', '-delete_rpath', value, str(current))
-    remove_development_libraries(runtime)
 
 
 def require_real_directory(path):
@@ -270,6 +278,8 @@ def prepare_bundle(app, library_directory=None, runtime_only=False):
         verify_no_bundled_models(app / 'Contents/Resources')
     if library_directory is not None:
         deploy_native_libraries(app, library_directory)
+    else:
+        remove_development_libraries(app / 'Contents/MacOS')
 
 
 def stage_models(manifest, cache, destination, all_models=False):
@@ -462,6 +472,8 @@ def main():
         copy_changed(args.worker, runtime / RUNTIME_FILES[0])
         if args.library_dir is not None:
             stage_native_dependencies(args.worker, args.library_dir, runtime)
+        else:
+            remove_development_libraries(runtime)
         if args.runtime_only:
             remove_bundled_models(runtime)
         else:
