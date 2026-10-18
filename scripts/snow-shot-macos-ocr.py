@@ -13,7 +13,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / 'snow_shot/packaging/snow-shot-ocr-asset-manifest.json'
-RUNTIME_FILES = ('snow-ocr-process', 'libonnxruntime.dylib')
+RUNTIME_FILES = ('snow-ocr-process',)
 ARM64_HEADER = bytes.fromhex('cffaedfe0c000001')
 X64_HEADER = bytes.fromhex('cffaedfe07000001')
 ARCHITECTURES = {
@@ -53,6 +53,7 @@ def atomic_json(path, value):
             temporary.chmod(0o644)
             temporary.replace(path)
         finally:
+            output.close()
             temporary.unlink(missing_ok=True)
 
 
@@ -77,6 +78,7 @@ def fetch(expected, destination):
                 raise ValueError(f'OCR model integrity check failed: {expected["name"]}')
             partial.replace(destination)
         finally:
+            output.close()
             partial.unlink(missing_ok=True)
 
 
@@ -88,15 +90,13 @@ def copy_changed(source, destination):
         shutil.copy2(source, destination)
 
 
-def stage_native_dependencies(library, runtime, worker=None):
-    """Supply the worker and ORT dependency closure for build-tree execution.
+def stage_native_dependencies(worker, library_directory, runtime):
+    """Supply the worker's Crashpad dependency closure for build-tree execution.
 
     macdeployqt moves the used closure to Frameworks during installation; these
     development copies are removed before the final bundle is sealed.
     """
-    pending = [library.resolve()]
-    if worker is not None:
-        pending.append(worker.resolve())
+    pending = [worker.resolve()]
     visited = set()
     names = set()
     while pending:
@@ -110,7 +110,7 @@ def stage_native_dependencies(library, runtime, worker=None):
             if dependency in identities or dependency.startswith(('/usr/lib/', '/System/Library/')):
                 continue
             if dependency.startswith('@rpath/'):
-                source = library.parent / dependency[len('@rpath/'):]
+                source = library_directory / dependency[len('@rpath/'):]
             elif dependency.startswith('@loader_path/'):
                 source = current.parent / dependency[len('@loader_path/'):]
             else:
@@ -286,10 +286,10 @@ def stage_models(manifest, cache, destination, all_models=False):
                     dict(schema=1, component=model['id']))
 
 
-def runtime_manifest(source, runtime, static_runtime=False, arch='arm64'):
+def runtime_manifest(source, runtime, arch='arm64'):
     architecture = ARCHITECTURES[arch]
     version = source['runtime']['version']
-    runtime_files = RUNTIME_FILES[:1] if static_runtime else RUNTIME_FILES
+    runtime_files = RUNTIME_FILES
     for name in runtime_files:
         path = runtime / name
         with path.open('rb') as binary:
@@ -298,12 +298,12 @@ def runtime_manifest(source, runtime, static_runtime=False, arch='arm64'):
             raise ValueError(f'Expected a thin {architecture["label"]} Mach-O binary: {path}')
     if not os.access(runtime / RUNTIME_FILES[0], os.X_OK):
         raise ValueError('The OCR worker is not executable')
-    expected = f'snow-ocr-process {version} macos-{architecture["worker"]} protocol 5'
+    expected = f'snow-ocr-process {version} macos-{architecture["worker"]} protocol 6'
     if run(str(runtime / RUNTIME_FILES[0]), '--version') != expected:
         raise ValueError('The OCR worker version/protocol does not match the application')
     return dict(schema=3, default_model='small', runtime=dict(
-        version=version, platform=f'macos-{arch}', delivery='bundled', protocol=5,
-        executable=RUNTIME_FILES[0], static=static_runtime,
+        version=version, platform=f'macos-{arch}', delivery='bundled', protocol=6,
+        executable=RUNTIME_FILES[0],
         files=[descriptor(runtime / n) for n in runtime_files]),
         models=source['models'])
 
@@ -342,18 +342,18 @@ def verify_no_bundled_models(runtime):
         raise ValueError(f'Runtime-only OCR package must not contain bundled models: {directory}')
 
 
-def finalize(source, runtime, static_runtime=False, runtime_only=False, arch='arm64'):
+def finalize(source, runtime, runtime_only=False, arch='arm64'):
     if runtime_only:
         verify_no_bundled_models(runtime)
-    manifest = runtime_manifest(source, runtime, static_runtime, arch)
+    manifest = runtime_manifest(source, runtime, arch)
     atomic_json(runtime / 'assets/ocr/asset-manifest.json', manifest)
 
 
-def verify_assets(source, runtime, static_runtime=False, runtime_only=False, arch='arm64'):
+def verify_assets(source, runtime, runtime_only=False, arch='arm64'):
     if runtime_only:
         verify_no_bundled_models(runtime)
     actual = json.loads((runtime / 'assets/ocr/asset-manifest.json').read_text())
-    if actual != runtime_manifest(source, runtime, static_runtime, arch):
+    if actual != runtime_manifest(source, runtime, arch):
         raise ValueError('Bundled OCR manifest does not match finalized runtime bytes')
     if runtime_only:
         return actual
@@ -429,15 +429,12 @@ def main():
     parser.add_argument('--runtime-dir', type=Path)
     parser.add_argument('--cache', type=Path, default=ROOT / 'artifacts')
     parser.add_argument('--worker', type=Path)
-    parser.add_argument('--library', type=Path)
     parser.add_argument('--library-dir', type=Path)
     parser.add_argument('--model-root', type=Path)
     parser.add_argument('--app', type=Path)
     parser.add_argument('--report', type=Path)
     parser.add_argument('--deployed', action='store_true',
                         help='Finalize after macdeployqt has moved dependencies into Frameworks')
-    parser.add_argument('--static-runtime', action='store_true',
-                        help='ONNX Runtime is linked into the worker instead of deployed as a dylib')
     parser.add_argument('--runtime-only', action='store_true',
                         help='Package the OCR runtime without bundled models')
     args = parser.parse_args()
@@ -460,25 +457,22 @@ def main():
         bundled_models_directory(args.runtime_dir.absolute())
     runtime = args.runtime_dir.resolve()
     if args.command == 'stage':
-        if args.worker is None or (args.library is None and not args.static_runtime):
-            parser.error('--worker is required; --library is also required for a dynamic runtime')
+        if args.worker is None:
+            parser.error('--worker is required')
         copy_changed(args.worker, runtime / RUNTIME_FILES[0])
-        if not args.static_runtime:
-            copy_changed(args.library, runtime / RUNTIME_FILES[1])
-            stage_native_dependencies(args.library, runtime, args.worker)
-        else:
-            (runtime / RUNTIME_FILES[1]).unlink(missing_ok=True)
+        if args.library_dir is not None:
+            stage_native_dependencies(args.worker, args.library_dir, runtime)
         if args.runtime_only:
             remove_bundled_models(runtime)
         else:
             stage_models(source, args.cache, runtime / 'assets/ocr/models')
-        finalize(source, runtime, args.static_runtime, args.runtime_only, args.arch)
+        finalize(source, runtime, args.runtime_only, args.arch)
     elif args.command == 'finalize':
         if args.deployed:
             remove_development_libraries(runtime)
-        finalize(source, runtime, args.static_runtime, args.runtime_only, args.arch)
+        finalize(source, runtime, args.runtime_only, args.arch)
     else:
-        manifest = verify_assets(source, runtime, args.static_runtime, args.runtime_only, args.arch)
+        manifest = verify_assets(source, runtime, args.runtime_only, args.arch)
         binaries = verify_bundle(args.app.resolve(), args.arch) if args.app else []
         if args.report:
             atomic_json(args.report, dict(platform=f'macos-{args.arch}', runtime=manifest['runtime'],

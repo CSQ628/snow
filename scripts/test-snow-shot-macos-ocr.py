@@ -31,9 +31,9 @@ class MacOSOcrAssets(unittest.TestCase):
             path = self.model / name
             path.write_bytes(name.encode())
             files.append(dict(ocr.descriptor(path), url=f'https://example.invalid/{name}'))
-        self.source = dict(runtime=dict(version='1.0.9'), models=[dict(type='small', id='small-id', files=files)])
+        self.source = dict(runtime=dict(version='1.0.11'), models=[dict(type='small', id='small-id', files=files)])
         ocr.atomic_json(self.model / '.complete.json', dict(schema=1, component='small-id'))
-        self.run = patch.object(ocr, 'run', return_value='snow-ocr-process 1.0.9 macos-aarch64 protocol 5').start()
+        self.run = patch.object(ocr, 'run', return_value='snow-ocr-process 1.0.11 macos-aarch64 protocol 6').start()
         self.addCleanup(patch.stopall)
 
     def test_bundle_data_is_sealed_as_resources_with_stable_lookup_paths(self):
@@ -139,8 +139,7 @@ class MacOSOcrAssets(unittest.TestCase):
         self.assertEqual(result['schema'], 3)
         self.assertEqual(result['models'], self.source['models'])
         self.assertEqual(result['runtime']['delivery'], 'bundled')
-        self.assertEqual(result['runtime']['protocol'], 5)
-        self.assertFalse(result['runtime']['static'])
+        self.assertEqual(result['runtime']['protocol'], 6)
         self.assertNotIn('archive', result['runtime'])
         with (self.runtime / 'snow-ocr-process').open('ab') as binary:
             binary.write(b'new signature')
@@ -152,21 +151,21 @@ class MacOSOcrAssets(unittest.TestCase):
     def test_x64_stage_finalization_and_report_use_the_target_architecture(self):
         for name in ocr.RUNTIME_FILES:
             (self.runtime / name).write_bytes(ocr.X64_HEADER + bytes(24) + name.encode())
-        self.run.return_value = 'snow-ocr-process 1.0.9 macos-x86_64 protocol 5'
+        self.run.return_value = 'snow-ocr-process 1.0.11 macos-x86_64 protocol 6'
         with patch.object(ocr, 'stage_models'):
-            self.command('stage', '--arch', 'x64', '--static-runtime',
+            self.command('stage', '--arch', 'x64',
                          '--worker', self.runtime / 'snow-ocr-process')
-        result = ocr.verify_assets(self.source, self.runtime, static_runtime=True, arch='x64')
+        result = ocr.verify_assets(self.source, self.runtime, arch='x64')
         self.assertEqual(result['runtime']['platform'], 'macos-x64')
-        self.assertEqual(result['runtime']['protocol'], 5)
+        self.assertEqual(result['runtime']['protocol'], 6)
         self.assertEqual(result['models'], self.source['models'])
         self.assertEqual([item['name'] for item in result['runtime']['files']], ['snow-ocr-process'])
         report = self.root / 'x64-report.json'
-        self.command('verify', '--arch', 'x64', '--static-runtime', '--report', report)
+        self.command('verify', '--arch', 'x64', '--report', report)
         self.assertEqual(json.loads(report.read_text())['platform'], 'macos-x64')
         self.assertEqual(json.loads(report.read_text())['bundled_model'], 'small')
         with self.assertRaisesRegex(ValueError, 'thin ARM64'):
-            ocr.verify_assets(self.source, self.runtime, static_runtime=True)
+            ocr.verify_assets(self.source, self.runtime)
 
     def test_x64_rejects_wrong_architecture_and_worker_identity(self):
         with self.assertRaisesRegex(ValueError, 'thin x64'):
@@ -175,7 +174,7 @@ class MacOSOcrAssets(unittest.TestCase):
             (self.runtime / name).write_bytes(ocr.X64_HEADER + bytes(24))
         with self.assertRaisesRegex(ValueError, 'version/protocol'):
             ocr.runtime_manifest(self.source, self.runtime, arch='x64')
-        self.run.return_value = 'snow-ocr-process 1.0.9 macos-x86_64 protocol 5'
+        self.run.return_value = 'snow-ocr-process 1.0.11 macos-x86_64 protocol 6'
         ocr.finalize(self.source, self.runtime, arch='x64')
         manifest = self.runtime / 'assets/ocr/asset-manifest.json'
         value = json.loads(manifest.read_text())
@@ -183,7 +182,7 @@ class MacOSOcrAssets(unittest.TestCase):
         ocr.atomic_json(manifest, value)
         with self.assertRaisesRegex(ValueError, 'finalized runtime bytes'):
             ocr.verify_assets(self.source, self.runtime, arch='x64')
-        (self.runtime / 'libonnxruntime.dylib').write_bytes(ocr.ARM64_HEADER + bytes(24))
+        (self.runtime / 'snow-ocr-process').write_bytes(ocr.ARM64_HEADER + bytes(24))
         with self.assertRaisesRegex(ValueError, 'thin x64'):
             ocr.runtime_manifest(self.source, self.runtime, arch='x64')
 
@@ -226,20 +225,19 @@ class MacOSOcrAssets(unittest.TestCase):
         cache = self.root / 'cache'
         with patch.object(ocr, 'stage_models', side_effect=AssertionError('models must not stage')):
             self.command('stage', '--worker', self.runtime / 'snow-ocr-process',
-                         '--static-runtime', '--runtime-only', '--cache', cache)
+                         '--runtime-only', '--cache', cache)
         self.assertFalse((self.runtime / 'assets/ocr/models').exists())
         self.assertFalse(cache.exists())
-        result = ocr.verify_assets(self.source, self.runtime, static_runtime=True, runtime_only=True)
+        result = ocr.verify_assets(self.source, self.runtime, runtime_only=True)
         self.assertEqual(result['default_model'], 'small')
         self.assertEqual(result['models'], self.source['models'])
-        self.assertTrue(result['runtime']['static'])
         self.assertEqual([item['name'] for item in result['runtime']['files']], ['snow-ocr-process'])
-        self.command('finalize', '--static-runtime', '--runtime-only')
+        self.command('finalize', '--runtime-only')
         report = self.root / 'runtime-only-report.json'
-        self.command('verify', '--static-runtime', '--runtime-only', '--report', report)
+        self.command('verify', '--runtime-only', '--report', report)
         self.assertIsNone(json.loads(report.read_text())['bundled_model'])
         with self.assertRaisesRegex(ValueError, 'Missing or corrupt bundled model'):
-            ocr.verify_assets(self.source, self.runtime, static_runtime=True)
+            ocr.verify_assets(self.source, self.runtime)
 
     def test_runtime_only_finalization_and_verification_reject_model_payload(self):
         ocr.finalize(self.source, self.runtime)
@@ -250,7 +248,6 @@ class MacOSOcrAssets(unittest.TestCase):
         ocr.remove_bundled_models(self.runtime)
         ocr.finalize(self.source, self.runtime, runtime_only=True)
         result = ocr.verify_assets(self.source, self.runtime, runtime_only=True)
-        self.assertFalse(result['runtime']['static'])
         self.assertEqual(len(result['runtime']['files']), 2)
         models = self.runtime / 'assets/ocr/models'
         models.symlink_to(self.root / 'missing-model-directory')
@@ -264,7 +261,7 @@ class MacOSOcrAssets(unittest.TestCase):
         (self.runtime / 'assets/ocr/models').rmdir()
         (self.runtime / 'assets/ocr/models').symlink_to(cached.parent)
         self.command('stage', '--worker', self.runtime / 'snow-ocr-process',
-                     '--static-runtime', '--runtime-only')
+                     '--runtime-only')
         self.assertFalse((self.runtime / 'assets/ocr/models').is_symlink())
         self.assertTrue((cached / 'det.onnx').exists())
 
@@ -278,7 +275,7 @@ class MacOSOcrAssets(unittest.TestCase):
             self.assertEqual((cached / 'models/small-id/det.onnx').read_bytes(), b'det.onnx')
         with self.assertRaisesRegex(ValueError, 'Invalid bundled resource directory'):
             self.command('stage', '--worker', self.runtime / 'snow-ocr-process',
-                         '--static-runtime', '--runtime-only')
+                         '--runtime-only')
         self.assertTrue((cached / 'models/small-id/rec.onnx').is_file())
 
     def test_runtime_only_cleanup_rejects_external_asset_parent_links(self):
@@ -295,7 +292,7 @@ class MacOSOcrAssets(unittest.TestCase):
         self.runtime.symlink_to(cached)
         with self.assertRaisesRegex(ValueError, 'Invalid bundled resource directory'):
             self.command('stage', '--worker', self.runtime / 'snow-ocr-process',
-                         '--static-runtime', '--runtime-only')
+                         '--runtime-only')
         self.assertEqual((cached / 'assets/ocr/models/small-id/det.onnx').read_bytes(), b'det.onnx')
 
     def test_full_staging_rebundles_small_after_runtime_only_staging(self):
@@ -304,11 +301,11 @@ class MacOSOcrAssets(unittest.TestCase):
         for item in self.source['models'][0]['files']:
             ocr.copy_changed(self.model / item['name'], cached / item['name'])
         arguments = ('--worker', self.runtime / 'snow-ocr-process',
-                     '--static-runtime', '--cache', cached.parent)
+                     '--cache', cached.parent)
         self.command('stage', *arguments, '--runtime-only')
         with patch.object(ocr.urllib.request, 'urlopen', side_effect=AssertionError('network')):
             self.command('stage', *arguments)
-        ocr.verify_assets(self.source, self.runtime, static_runtime=True)
+        ocr.verify_assets(self.source, self.runtime)
         for item in self.source['models'][0]['files']:
             self.assertTrue(ocr.valid(self.model / item['name'], item))
 
@@ -417,15 +414,11 @@ class MacOSOcrAssets(unittest.TestCase):
         stage.assert_called_once_with(self.source, ocr.ROOT / 'artifacts',
                                       self.root / 'fetched', all_models=True)
 
-    def test_static_runtime_manifest_contains_only_the_linked_worker(self):
-        (self.runtime / 'libonnxruntime.dylib').unlink()
-        ocr.finalize(self.source, self.runtime, static_runtime=True)
-        result = ocr.verify_assets(self.source, self.runtime, static_runtime=True)
-        self.assertTrue(result['runtime']['static'])
+    def test_cpu_runtime_manifest_contains_only_the_worker(self):
+        ocr.finalize(self.source, self.runtime)
+        result = ocr.verify_assets(self.source, self.runtime)
         self.assertEqual([item['name'] for item in result['runtime']['files']],
                          ['snow-ocr-process'])
-        with self.assertRaises((OSError, ValueError)):
-            ocr.verify_assets(self.source, self.runtime)
 
     def test_missing_model_or_marker_prevents_release(self):
         ocr.finalize(self.source, self.runtime)
@@ -438,7 +431,7 @@ class MacOSOcrAssets(unittest.TestCase):
             ocr.verify_assets(self.source, self.runtime)
 
     def test_previous_protocol_is_rejected(self):
-        self.run.return_value = 'snow-ocr-process 1.0.9 macos-aarch64 protocol 4'
+        self.run.return_value = 'snow-ocr-process 1.0.11 macos-aarch64 protocol 5'
         with self.assertRaisesRegex(ValueError, 'version/protocol'):
             ocr.finalize(self.source, self.runtime)
 
@@ -501,30 +494,12 @@ class MacOSOcrAssets(unittest.TestCase):
         ocr.atomic_json(path, self.source)
         self.assertEqual(before, path.stat().st_mtime_ns)
 
-    def test_development_closure_is_staged_then_removed_after_deployment(self):
-        library = self.root / 'upstream/libonnxruntime.dylib'
-        library.parent.mkdir()
-        library.write_bytes(ocr.ARM64_HEADER + bytes(24))
-        dependency = library.parent / 'libcpuinfo.dylib'
-        dependency.write_bytes(ocr.ARM64_HEADER + bytes(24))
-        def inspect(*args):
-            path = Path(args[-1])
-            if '-D' in args:
-                return f'{path}:\n@rpath/{path.name}'
-            loads = '\n\t@rpath/libcpuinfo.dylib (compatibility version 0.0.0)' if path == library.resolve() else ''
-            return f'{path}:\n\t@rpath/{path.name} (compatibility version 0.0.0){loads}'
-        self.run.side_effect = inspect
-        ocr.stage_native_dependencies(library, self.runtime)
-        self.assertTrue((self.runtime / dependency.name).is_file())
-        ocr.remove_development_libraries(self.runtime)
-        self.assertFalse((self.runtime / dependency.name).exists())
-        self.assertTrue((self.runtime / 'libonnxruntime.dylib').is_file())
 
-    def test_worker_crashpad_dependency_is_staged_without_an_ort_dependency(self):
-        library = self.root / 'upstream/libonnxruntime.dylib'
-        library.parent.mkdir()
-        library.write_bytes(ocr.ARM64_HEADER + bytes(24))
-        dependency = library.parent / 'libz.dylib'
+
+    def test_worker_crashpad_dependency_stages_without_inference_libraries(self):
+        libraries = self.root / 'upstream'
+        libraries.mkdir()
+        dependency = libraries / 'libz.dylib'
         dependency.write_bytes(ocr.ARM64_HEADER + bytes(24))
         worker = self.runtime / 'snow-ocr-process'
         def inspect(*args):
@@ -534,8 +509,9 @@ class MacOSOcrAssets(unittest.TestCase):
             loads = '\n\t@rpath/libz.dylib (compatibility version 1.0.0)' if path == worker.resolve() else ''
             return f'{path}:\n\t@rpath/{path.name} (compatibility version 1.0.0){loads}'
         self.run.side_effect = inspect
-        ocr.stage_native_dependencies(library, self.runtime, worker)
+        ocr.stage_native_dependencies(worker, libraries, self.runtime)
         self.assertEqual((self.runtime / dependency.name).read_bytes(), dependency.read_bytes())
+        self.assertEqual(sorted(p.name for p in self.runtime.glob('*.dylib')), ['libz.dylib'])
         ocr.remove_development_libraries(self.runtime)
         self.assertFalse((self.runtime / dependency.name).exists())
         self.assertTrue(worker.is_file())
@@ -545,8 +521,8 @@ class MacOSOcrAssets(unittest.TestCase):
         versioned.write_bytes(b'temporary library')
         (self.runtime / 'libz.1.dylib').symlink_to(versioned.name)
         (self.runtime / 'libz.dylib').symlink_to('libz.1.dylib')
-        retained = self.runtime / 'libonnxruntime-link.dylib'
-        retained.symlink_to('libonnxruntime.dylib')
+        retained = self.runtime / 'unrelated-link.dylib'
+        retained.symlink_to('unrelated.dylib')
         marker = self.runtime / 'assets/ocr/development-libraries.json'
         ocr.atomic_json(marker, [versioned.name])
 
