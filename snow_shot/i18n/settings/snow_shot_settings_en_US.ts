@@ -2341,6 +2341,10 @@
             <translation>Extended Features Settings</translation>
         </message>
         <message>
+            <source>Fast</source>
+            <translation>Fast</translation>
+        </message>
+        <message>
             <source>Fill Style</source>
             <translation>Fill Style</translation>
         </message>
@@ -2999,6 +3003,10 @@
         <message>
             <source>OCR models &amp; performance</source>
             <translation>OCR models &amp; performance</translation>
+        </message>
+        <message>
+            <source>Off</source>
+            <translation>Off</translation>
         </message>
         <message>
             <source>Only when displayed</source>
@@ -4095,6 +4103,10 @@
         <message>
             <source>Snowflake light</source>
             <translation>Snowflake light</translation>
+        </message>
+        <message>
+            <source>Soft</source>
+            <translation>Soft</translation>
         </message>
         <message>
             <source>Soften all three skin images with blur.</source>

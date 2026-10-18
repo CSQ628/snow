@@ -538,6 +538,13 @@ SettingsItemDefinition screenshotToolbarSizeItem() {
 }
 
 SettingsItemDefinition selectionTransitionAnimationItem() {
+    SettingsSelectDefinition payload;
+    payload.binding = SettingsSelectBinding::SelectionTransitionAnimation;
+    payload.options = {
+        {72, settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Fast"))},
+        {32, settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Soft"))},
+        {0, settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Off"))},
+    };
     return {QStringLiteral("interface.screenshot.selection-transition-animation"),
             settingsText(
                 QT_TRANSLATE_NOOP("SettingsCatalog", "Screenshot selection transition animation")),
@@ -545,7 +552,7 @@ SettingsItemDefinition selectionTransitionAnimationItem() {
                 "SettingsCatalog", "Animate transitions between smart screenshot selections")),
             {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Selection animation"))},
             QStringLiteral("screenshot_ui/selection_transition_animation"),
-            SettingsSwitchDefinition{SettingsSwitchBinding::SelectionTransitionAnimation}};
+            payload};
 }
 
 SettingsItemDefinition colorPickerDisplayModeItem() {
@@ -4878,6 +4885,10 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSelectBinding::ScreenshotToolbarSize:
                         expectedKey = QStringLiteral("screenshot_ui/toolbar_size");
                         break;
+                    case SettingsSelectBinding::SelectionTransitionAnimation:
+                        expectedKey =
+                            QStringLiteral("screenshot_ui/selection_transition_animation");
+                        break;
                     case SettingsSelectBinding::ColorPickerDisplayMode:
                         expectedKey = QStringLiteral("screenshot_ui/color_picker_display_mode");
                         break;
@@ -5042,10 +5053,6 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSwitchBinding::OcrModelHotStart:
                         expectedKey = QStringLiteral("text_recognition/model_hot_start");
-                        break;
-                    case SettingsSwitchBinding::SelectionTransitionAnimation:
-                        expectedKey =
-                            QStringLiteral("screenshot_ui/selection_transition_animation");
                         break;
                     case SettingsSwitchBinding::ScreenshotAreaTypeHint:
                         expectedKey = QStringLiteral("screenshot_ui/area_type_hint_enabled");
