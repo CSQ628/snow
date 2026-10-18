@@ -9508,6 +9508,12 @@ void ScreenshotPinnedWindow::refreshColorSwatch() {
     m_originalClipboardContent.textStyle->backgroundColor = style.background;
     m_originalClipboardContent.textStyle->textColor = style.foreground;
     rebuildTransformedImage();
+    if (m_recognitionTargetReady && m_recognitionSession) {
+        const QPointer<ScreenshotPinnedWindow> lifetime(this);
+        m_recognitionSession->refreshFormattedTarget(m_originalImage, m_formattedTextDocument);
+        if (!lifetime)
+            return;
+    }
     for (int row = 0; row < 3; ++row) {
         if (!m_colorSwatchButtons[row]) {
             auto* button = new ColorSwatchCopyButton(this);

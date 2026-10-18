@@ -181,20 +181,77 @@ void pinnedColorSwatchWindowTests() {
         click(0);
         class Translator final : public QTranslator {
           public:
+            QString colorLabel = QStringLiteral("Translated color:");
+
             QString translate(const char* context, const char* source, const char*,
                               int) const override {
-                return QByteArray(context) == "PinnedColorSwatch" &&
-                               QByteArray(source) == "Copy HEX color"
-                           ? QStringLiteral("Translated copy HEX")
-                           : QString();
+                if (QByteArray(context) != "PinnedColorSwatch")
+                    return {};
+                if (QByteArray(source) == "Color:")
+                    return colorLabel;
+                if (QByteArray(source) == "Copy HEX color")
+                    return QStringLiteral("Translated copy HEX");
+                return {};
             }
         } translator;
         QCoreApplication::installTranslator(&translator);
+        auto removeTranslator =
+            qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
         QEvent language(QEvent::LanguageChange);
         QApplication::sendEvent(&window, &language);
         require(buttons(0)->accessibleName() == QStringLiteral("Translated copy HEX"),
                 "language updates button accessibility");
+        const auto displayedRecognitionText = [&window]() {
+            auto* layer =
+                window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+            if (layer && layer->isVisible() && layer->scene())
+                for (auto* item : layer->scene()->items())
+                    if (auto* text = dynamic_cast<QGraphicsTextItem*>(item))
+                        return text->document()->toPlainText();
+            return QString();
+        };
+        recognition->activate(ScreenshotRecognitionSessionController::Mode::Text);
+        require(displayedRecognitionText().startsWith(translator.colorLabel) &&
+                    recognition->originalText() == displayedRecognitionText(),
+                "opening recognition after a language change uses the refreshed color card");
+        const auto copiedRecognition = recognition->recognitionClipboardMimeData();
+        require(copiedRecognition && copiedRecognition->text() == displayedRecognitionText(),
+                "recognition copies the refreshed color labels");
+        translator.colorLabel = QStringLiteral("Updated color:");
+        QApplication::sendEvent(&window, &language);
+        require(recognition->active() &&
+                    displayedRecognitionText().startsWith(translator.colorLabel),
+                "language changes refresh visible recognition without deactivating it");
+        recognition->beginTextEditing();
+        translator.colorLabel = QStringLiteral("Editing color:");
+        QApplication::sendEvent(&window, &language);
+        const QString originalDraft = recognition->textDraft();
+        require(recognition->editing() && originalDraft.startsWith(translator.colorLabel),
+                "language changes refresh an unedited draft without leaving editing");
+        const QString editedDraft = QStringLiteral("Edited color card");
+        recognition->setTextDraft(editedDraft);
+        translator.colorLabel = QStringLiteral("Latest color:");
+        QApplication::sendEvent(&window, &language);
+        require(recognition->active() && recognition->editing() &&
+                    recognition->textDraft() == editedDraft &&
+                    recognition->originalText().startsWith(translator.colorLabel),
+                "language changes preserve edited drafts and refresh their original text");
+        recognition->undoTextEdit();
+        require(recognition->textDraft() == originalDraft,
+                "language changes preserve the text undo history");
+        recognition->redoTextEdit();
+        require(recognition->textDraft() == editedDraft,
+                "language changes preserve the text redo history");
+        recognition->resetTextEditing();
+        require(recognition->textDraft().startsWith(translator.colorLabel),
+                "reset uses the latest color labels");
+        recognition->endTextEditing();
+        require(displayedRecognitionText().startsWith(translator.colorLabel),
+                "leaving editing restores the refreshed formatted document");
+        recognition->deactivate();
         QCoreApplication::removeTranslator(&translator);
+        removeTranslator.dismiss();
+        QApplication::sendEvent(&window, &language);
         Access::copyOriginalContent(window);
         require(recorded->output->text() == content.originalContent.text,
                 "Copy Original preserves input");
