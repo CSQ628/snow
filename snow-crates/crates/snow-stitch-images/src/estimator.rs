@@ -712,143 +712,70 @@ fn luminance_gradient(frame: &Frame, x: u32, y: u32) -> u16 {
     u16::from(horizontal) + u16::from(vertical)
 }
 
-// Independent scans avoid histogram-reduction overhead for small viewports.
-fn precise_alignment_error(
-    reference: &Frame,
-    incoming: &Frame,
-    axis: StitchAxis,
-    offset: i32,
-) -> f32 {
-    let mut histogram = [0_u64; 256];
-    let mut samples = 0_u64;
-    let width = incoming.width() as i32;
-    let height = incoming.height() as i32;
-    for incoming_y in (1..incoming.height().saturating_sub(1)).step_by(4) {
-        for x in (1..incoming.width().saturating_sub(1)).step_by(4) {
-            let (reference_x, reference_y) = match axis {
-                StitchAxis::Vertical => (x as i32, incoming_y as i32 - offset),
-                StitchAxis::Horizontal => (x as i32 - offset, incoming_y as i32),
-            };
-            if reference_x <= 0
-                || reference_x >= width - 1
-                || reference_y <= 0
-                || reference_y >= height - 1
-            {
-                continue;
-            }
-            let reference_value = luminance_at(reference, reference_x as u32, reference_y as u32);
-            let incoming_value = luminance_at(incoming, x, incoming_y);
-            let reference_gradient =
-                luminance_gradient(reference, reference_x as u32, reference_y as u32);
-            let incoming_gradient = luminance_gradient(incoming, x, incoming_y);
-            if reference_gradient.max(incoming_gradient) < 16 {
-                continue;
-            }
-            let intensity_error = u16::from(reference_value.abs_diff(incoming_value));
-            let gradient_error = reference_gradient.abs_diff(incoming_gradient) / 2;
-            let difference = intensity_error.saturating_add(gradient_error).min(255) as usize;
-            histogram[difference] += 1;
-            samples += 1;
-        }
-    }
-    if samples == 0 {
-        return 1.0;
-    }
-    let target = samples.saturating_mul(3).div_ceil(5);
-    let mut accumulated = 0_u64;
-    for (difference, count) in histogram.into_iter().enumerate() {
-        accumulated += count;
-        if accumulated >= target {
-            return difference as f32 / 255.0;
-        }
-    }
-    1.0
-}
+const REFINEMENT_OFFSETS: usize = (2 * INLIER_TOLERANCE + 1) as usize;
+const REFINEMENT_PATCH_RADIUS: i32 = 4;
+const MAX_REFINEMENT_PATCHES_PER_TILE: usize = 2;
 
-fn precise_alignment_errors(
+fn refinement_tile_errors(
     reference: &Frame,
     incoming: &Frame,
     axis: StitchAxis,
-    strongest_mode: i32,
-    maximum_shift: i32,
-) -> [(i32, f32); (2 * INLIER_TOLERANCE + 1) as usize] {
-    const OFFSETS: usize = (2 * INLIER_TOLERANCE + 1) as usize;
-    let offsets: [i32; OFFSETS] =
-        std::array::from_fn(|index| strongest_mode - INLIER_TOLERANCE + index as i32);
+    offsets: &[i32],
+    observations: &[&MatchObservation],
+) -> Option<[f32; REFINEMENT_OFFSETS]> {
     let width = incoming.width() as i32;
     let height = incoming.height() as i32;
-    // Incoming values are identical for every offset.
-    // Reduce integer histograms across row groups to preserve exact error scores.
-    let histograms = (0..incoming.height().saturating_sub(2).div_ceil(4))
-        .into_par_iter()
-        .with_min_len(16)
-        .fold(
-            || [[0_u64; 256]; OFFSETS],
-            |mut histograms, row| {
-                let y = 1 + row * 4;
-                for x in (1..incoming.width().saturating_sub(1)).step_by(4) {
-                    let incoming_value = luminance_at(incoming, x, y);
-                    let incoming_gradient = luminance_gradient(incoming, x, y);
-                    for (offset, histogram) in offsets.iter().zip(&mut histograms) {
-                        if offset.abs() > maximum_shift {
-                            continue;
-                        }
-                        let (reference_x, reference_y) = match axis {
-                            StitchAxis::Vertical => (x as i32, y as i32 - offset),
-                            StitchAxis::Horizontal => (x as i32 - offset, y as i32),
-                        };
-                        if reference_x <= 0
-                            || reference_x >= width - 1
-                            || reference_y <= 0
-                            || reference_y >= height - 1
-                        {
-                            continue;
-                        }
-                        let reference_x = reference_x as u32;
-                        let reference_y = reference_y as u32;
-                        let reference_value = luminance_at(reference, reference_x, reference_y);
-                        let reference_gradient =
-                            luminance_gradient(reference, reference_x, reference_y);
-                        if reference_gradient.max(incoming_gradient) < 16 {
-                            continue;
-                        }
-                        let intensity_error = u16::from(reference_value.abs_diff(incoming_value));
-                        let gradient_error = reference_gradient.abs_diff(incoming_gradient) / 2;
-                        let difference = intensity_error.saturating_add(gradient_error).min(255);
-                        histogram[usize::from(difference)] += 1;
-                    }
-                }
-                histograms
-            },
-        )
-        .reduce(
-            || [[0_u64; 256]; OFFSETS],
-            |mut left, right| {
-                for (left, right) in left.iter_mut().flatten().zip(right.iter().flatten()) {
-                    *left += right;
-                }
-                left
-            },
-        );
-    std::array::from_fn(|index| {
-        let offset = offsets[index];
-        let histogram = histograms[index];
-        let samples = histogram.iter().sum::<u64>();
-        let target = samples.saturating_mul(3).div_ceil(5);
-        let mut accumulated = 0_u64;
-        let error = if samples == 0 {
-            1.0
-        } else {
-            histogram
-                .into_iter()
-                .position(|count| {
-                    accumulated += count;
-                    accumulated >= target
-                })
-                .map_or(1.0, |difference| difference as f32 / 255.0)
+    let first = *offsets.first()?;
+    let last = *offsets.last()?;
+    let mut sums = [0_u64; REFINEMENT_OFFSETS];
+    let mut samples = 0_u32;
+    for observation in observations.iter().take(MAX_REFINEMENT_PATCHES_PER_TILE) {
+        let x = round_coordinate(observation.incoming_x);
+        let y = round_coordinate(observation.incoming_y);
+        let (left, top, right, bottom) = match axis {
+            StitchAxis::Vertical => (x, y - last, x, y - first),
+            StitchAxis::Horizontal => (x - last, y, x - first, y),
         };
-        (offset, error)
-    })
+        let border = REFINEMENT_PATCH_RADIUS + 1;
+        // Every candidate must use the same full patch, including gradient neighbors.
+        if x < border
+            || y < border
+            || x >= width - border
+            || y >= height - border
+            || left < border
+            || top < border
+            || right >= width - border
+            || bottom >= height - border
+        {
+            continue;
+        }
+        for dy in (-REFINEMENT_PATCH_RADIUS..=REFINEMENT_PATCH_RADIUS).step_by(2) {
+            for dx in (-REFINEMENT_PATCH_RADIUS..=REFINEMENT_PATCH_RADIUS).step_by(2) {
+                let x = (x + dx) as u32;
+                let y = (y + dy) as u32;
+                let incoming_gradient = luminance_gradient(incoming, x, y);
+                // Texture eligibility must not change with the candidate offset.
+                if incoming_gradient < 16 {
+                    continue;
+                }
+                let incoming_value = luminance_at(incoming, x, y);
+                for (index, &offset) in offsets.iter().enumerate() {
+                    let (rx, ry) = match axis {
+                        StitchAxis::Vertical => (x, (y as i32 - offset) as u32),
+                        StitchAxis::Horizontal => ((x as i32 - offset) as u32, y),
+                    };
+                    let value = luminance_at(reference, rx, ry);
+                    let gradient = luminance_gradient(reference, rx, ry);
+                    let error = u16::from(value.abs_diff(incoming_value))
+                        + gradient.abs_diff(incoming_gradient) / 2;
+                    sums[index] += u64::from(error.min(255));
+                }
+                samples += 1;
+            }
+        }
+    }
+    // A tile needs multiple textured points, not a single accidental agreement.
+    (samples >= 4).then(|| sums.map(|sum| sum as f32 / (samples as f32 * 255.0)))
 }
 
 fn refine_motion_offset(
@@ -857,41 +784,65 @@ fn refine_motion_offset(
     axis: StitchAxis,
     strongest_mode: i32,
     maximum_shift: i32,
+    observations: &[MatchObservation],
 ) -> (i32, f32) {
-    let compare = |left: &(i32, f32), right: &(i32, f32)| {
-        left.1
-            .total_cmp(&right.1)
-            .then_with(|| {
-                (left.0 - strongest_mode)
-                    .abs()
-                    .cmp(&(right.0 - strongest_mode).abs())
-            })
-            .then_with(|| left.0.cmp(&right.0))
-    };
-    // Histogram reduction loses on small images and cheap Gray8 scans at 1080p.
-    let minimum_shared_pixels = match incoming.pixel_format() {
-        PixelFormat::Gray8 => 4 * 1024 * 1024,
-        PixelFormat::Rgb8 | PixelFormat::Rgba8 => 1024 * 1024,
-    };
-    let best = if u64::from(incoming.width()) * u64::from(incoming.height()) < minimum_shared_pixels
-    {
-        (strongest_mode - INLIER_TOLERANCE..=strongest_mode + INLIER_TOLERANCE)
-            .into_par_iter()
-            .filter(|offset| offset.abs() <= maximum_shift)
-            .map(|offset| {
-                (
-                    offset,
-                    precise_alignment_error(reference, incoming, axis, offset),
-                )
-            })
-            .min_by(compare)
-    } else {
-        precise_alignment_errors(reference, incoming, axis, strongest_mode, maximum_shift)
-            .into_iter()
-            .filter(|(offset, _)| offset.abs() <= maximum_shift)
-            .min_by(compare)
-    };
-    best.expect("motion refinement range contains its center")
+    let offsets = (strongest_mode - INLIER_TOLERANCE..=strongest_mode + INLIER_TOLERANCE)
+        .filter(|offset| offset.abs() <= maximum_shift)
+        .collect::<Vec<_>>();
+    let mut inliers = observations
+        .iter()
+        .filter(|observation| {
+            (axis.primary_delta(observation.dx, observation.dy) - strongest_mode).abs()
+                <= INLIER_TOLERANCE
+        })
+        .collect::<Vec<_>>();
+    // Preserve the motion hypothesis's spatial support. Fixed UI with zero motion
+    // must not vote on the precision of a scrolling offset. Choose the best two
+    // descriptors per tile, so a dense patch cannot outweigh the rest of the image.
+    inliers.sort_by(|left, right| {
+        left.reference_tile
+            .cmp(&right.reference_tile)
+            .then_with(|| left.distance.total_cmp(&right.distance))
+    });
+    let groups = inliers
+        .chunk_by(|left, right| left.reference_tile == right.reference_tile)
+        .collect::<Vec<_>>();
+    let tile_errors = groups
+        .par_iter()
+        .with_min_len(8)
+        .filter_map(|group| refinement_tile_errors(reference, incoming, axis, &offsets, group))
+        .collect::<Vec<_>>();
+    if tile_errors.len() < MIN_INLIER_TILES as usize {
+        // Preserve the coarse estimate when there is no spatially distributed
+        // precision evidence. 1.0 also requests the existing full-resolution retry.
+        return (strongest_mode, 1.0);
+    }
+    let retained = (tile_errors.len() * 3).div_ceil(4);
+    offsets
+        .into_iter()
+        .enumerate()
+        .map(|(index, offset)| {
+            let mut errors = tile_errors
+                .iter()
+                .map(|errors| errors[index])
+                .collect::<Vec<_>>();
+            errors.sort_by(f32::total_cmp);
+            // As in coarse alignment, trim the worst quarter to tolerate dynamic
+            // patches; normalize each tile first to retain equal spatial influence.
+            let error = errors[..retained].iter().sum::<f32>() / retained as f32;
+            (offset, error)
+        })
+        .min_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| {
+                    (left.0 - strongest_mode)
+                        .abs()
+                        .cmp(&(right.0 - strongest_mode).abs())
+                })
+                .then_with(|| left.0.cmp(&right.0))
+        })
+        .unwrap_or((strongest_mode, 1.0))
 }
 
 fn options_error(message: impl Into<String>) -> StitchError {
@@ -1190,6 +1141,7 @@ impl VerticalMotionEstimator {
                 self.axis,
                 strongest_mode,
                 maximum_shift,
+                &observations,
             );
             let mut refined = if let Some(index) = scored
                 .iter()
@@ -1273,6 +1225,10 @@ impl VerticalMotionEstimator {
 #[cfg(test)]
 #[path = "estimator_optimization_tests.rs"]
 mod optimization_tests;
+
+#[cfg(test)]
+#[path = "estimator_refinement_tests.rs"]
+mod refinement_tests;
 
 #[cfg(test)]
 mod tests {
