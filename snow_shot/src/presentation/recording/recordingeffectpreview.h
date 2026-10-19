@@ -53,7 +53,8 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
                    const QColor& keyboardForeground = QColor(Qt::white), int keyboardSize = 64,
                    const QColor& highlight = QColor(0, 0, 0, 0), bool recordMouseClicks = false,
                    int highlightRadius = 41, uint32_t playbackOverlay = 0,
-                   const QColor& progressBarColor = QColor(22, 119, 255));
+                   const QColor& progressBarColor = QColor(22, 119, 255),
+                   SnowWebcam* webcam = nullptr, int webcamSize = 150, uint32_t webcamShape = 0);
     void setEligible(bool eligible);
     void stopAndClear(bool present = false);
     [[nodiscard]] bool active() const;
@@ -94,6 +95,9 @@ class RecordingEffectPreview final : public QObject, public SnowCanvasCustomRend
     std::shared_ptr<RecordingEffectsFrame> m_playbackFrame;
     bool m_playbackDirty = true;
     bool m_keyboard = false;
+    SnowWebcam* m_webcam = nullptr;
+    int m_webcamSize = 150;
+    uint32_t m_webcamShape = 0;
     bool m_eligible = false;
     bool m_running = false;
     bool m_failed = false;

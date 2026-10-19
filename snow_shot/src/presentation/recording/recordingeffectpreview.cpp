@@ -149,13 +149,15 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
                                        const QColor& keyboardForeground, int keyboardSize,
                                        const QColor& highlight, bool recordMouseClicks,
                                        int highlightRadius, uint32_t playbackOverlay,
-                                       const QColor& progressBarColor) {
+                                       const QColor& progressBarColor, SnowWebcam* webcam,
+                                       int webcamSize, uint32_t webcamShape) {
     if (m_capture == capture && m_output == output && m_trail == trail && m_click == click &&
         m_keyboard == keyboard && m_trailDurationMs == trailDurationMs &&
         m_keyboardBackground == keyboardBackground && m_keyboardForeground == keyboardForeground &&
         m_keyboardSize == keyboardSize && m_highlight == highlight &&
         m_recordMouseClicks == recordMouseClicks && m_highlightRadius == highlightRadius &&
-        m_playbackOverlay == playbackOverlay && m_progressBarColor == progressBarColor) {
+        m_playbackOverlay == playbackOverlay && m_progressBarColor == progressBarColor &&
+        m_webcam == webcam && m_webcamSize == webcamSize && m_webcamShape == webcamShape) {
         return;
     }
     // Clear with the old transform before changing geometry or disabling an effect.
@@ -172,6 +174,9 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     m_highlightRadius = highlightRadius;
     m_recordMouseClicks = recordMouseClicks;
     m_keyboard = keyboard;
+    m_webcam = webcam;
+    m_webcamSize = webcamSize;
+    m_webcamShape = webcamShape;
     m_keyboardSize = keyboardSize;
     m_trailDurationMs = trailDurationMs;
     m_keyboardBackground = keyboardBackground;
@@ -179,7 +184,7 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     m_configurationDirty = true;
     m_failed = false;
     if (trail.alpha() == 0 && click.alpha() == 0 && !keyboard && highlight.alpha() == 0 &&
-        !recordMouseClicks && playbackOverlay == 0) {
+        !recordMouseClicks && playbackOverlay == 0 && !webcam) {
         stopAndClear();
     } else {
         m_configurationTimer.start();
@@ -208,14 +213,20 @@ void RecordingEffectPreview::synchronize() {
         stopAndClear();
         return;
     }
+#ifdef Q_OS_MACOS
+    // Native input uses desktop points; every preview layer uses physical display pixels.
+    const double canvasScale = m_area.devicePixelRatioF();
+#else
+    const double canvasScale = 1.0;
+#endif
     if (m_configurationDirty || m_playbackDirty) {
         clearPlaybackFrame();
         m_playbackDirty = false;
         if (m_playbackOverlay != 0) {
             const RecordingKeyboardFont font;
             m_playbackFrame = takeFrame(snow_recording_effects_playback_preview(
-                static_cast<uint32_t>(m_output.width()), static_cast<uint32_t>(m_output.height()),
-                m_playbackOverlay, rgba(m_progressBarColor), font.family.constData(),
+                static_cast<uint32_t>(m_capture.width()), static_cast<uint32_t>(m_capture.height()),
+                canvasScale, m_playbackOverlay, rgba(m_progressBarColor), font.family.constData(),
                 font.cjkFamily.constData(), font.weight));
             if (m_playbackFrame) {
                 m_area.canvas()->update(frameRegion(*m_playbackFrame));
@@ -227,7 +238,8 @@ void RecordingEffectPreview::synchronize() {
         }
     }
     const bool motionEnabled = m_trail.alpha() != 0 || m_click.alpha() != 0 || m_keyboard ||
-                               m_highlight.alpha() != 0 || m_recordMouseClicks;
+                               m_highlight.alpha() != 0 || m_recordMouseClicks ||
+                               m_webcam != nullptr;
     if (!motionEnabled) {
         m_running = false;
         m_source->stop();
@@ -270,12 +282,11 @@ void RecordingEffectPreview::synchronize() {
                                       nullptr,
                                       nullptr,
                                       0u,
-                                      1.0,
-                                      static_cast<uint32_t>(m_highlightRadius)};
-#ifdef Q_OS_MACOS
-    // Native input uses desktop points; fixed-pixel styles need a display-pixel canvas.
-    config.canvas_scale = m_area.devicePixelRatioF();
-#endif
+                                      canvasScale,
+                                      static_cast<uint32_t>(m_highlightRadius),
+                                      m_webcam,
+                                      static_cast<uint32_t>(m_webcamSize),
+                                      m_webcamShape};
     font.applyTo(config);
     QString error;
     const bool success = m_running ? m_source->configure(config, error)
