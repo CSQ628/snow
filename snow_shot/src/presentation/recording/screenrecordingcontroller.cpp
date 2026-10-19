@@ -696,16 +696,19 @@ struct ScreenRecordingController::Impl {
                              setOption(postProcessingEnabled, value);
                              snow_shot::storage::RecordingSettings().setPostProcessingEnabled(
                                  value);
+                             syncPreview();
                          });
         QObject::connect(palette, &ScreenshotToolPalette::recordingPostProcessingEffectChanged,
                          uiSession->connections.get(), [this](const QString& value) {
                              setOption(postProcessingEffect, value);
                              snow_shot::storage::RecordingSettings().setPostProcessingEffect(value);
+                             syncPreview();
                          });
         QObject::connect(palette, &ScreenshotToolPalette::recordingProgressBarColorChanged,
                          uiSession->connections.get(), [this](const QColor& value) {
                              setOption(progressBarColor, value);
                              snow_shot::storage::RecordingSettings().setProgressBarColor(value);
+                             syncPreview();
                          });
         QObject::connect(palette, &ScreenshotToolPalette::recordingStartDelaySecondsChanged,
                          uiSession->connections.get(), [this](int seconds) {
@@ -2038,7 +2041,12 @@ struct ScreenRecordingController::Impl {
             mouseTrailColor, mouseClickColor, showKeyboard, mouseTrailDurationMs,
             keyboardBackgroundColor, keyboardForegroundColor, keyboardSize,
             mouseHighlightEnabled && showCursor ? mouseHighlightColor : QColor(0, 0, 0, 0),
-            recordMouseClicks, mouseHighlightRadius);
+            recordMouseClicks, mouseHighlightRadius,
+            !postProcessingEnabled ? SNOW_RECORDING_PLAYBACK_OVERLAY_NONE
+            : postProcessingEffect == QStringLiteral("playback_time")
+                ? SNOW_RECORDING_PLAYBACK_OVERLAY_PLAYBACK_TIME
+                : SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR,
+            progressBarColor);
         uiSession->preview->setEligible(true);
     }
 

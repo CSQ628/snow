@@ -27,6 +27,45 @@ struct SnowRecordingEffectsDeleter {
     }
 };
 
+std::shared_ptr<RecordingEffectsFrame> takeFrame(SnowRecordingEffectsFrame* native) {
+    if (native == nullptr) {
+        return {};
+    }
+    auto frame = std::make_shared<RecordingEffectsFrame>();
+    frame->lease = std::shared_ptr<void>(native, [](void* value) {
+        snow_recording_effects_release_frame(static_cast<SnowRecordingEffectsFrame*>(value));
+    });
+    SnowRecordingEffectsFrameInfo info{};
+    if (snow_recording_effects_frame_info(native, &info) == 0) {
+        return {};
+    }
+    frame->generation = info.generation;
+    frame->revision = info.revision;
+    frame->output = QSize(static_cast<int>(info.width), static_cast<int>(info.height));
+    if (info.error_utf8 != nullptr) {
+        frame->error = QString::fromUtf8(info.error_utf8);
+    }
+    const auto appendLayer = [&frame](const SnowRecordingEffectsFrameInfo& layer) {
+        frame->tiles.reserve(frame->tiles.size() + layer.tile_count);
+        for (uint32_t i = 0; i < layer.tile_count; ++i) {
+            const auto& tile = layer.tiles[i];
+            const QRect rect(static_cast<int>(tile.x), static_cast<int>(tile.y),
+                             static_cast<int>(tile.width), static_cast<int>(tile.height));
+            frame->tiles.push_back(
+                {rect,
+                 QImage(tile.rgba_premultiplied, rect.width(), rect.height(),
+                        static_cast<qsizetype>(tile.stride), QImage::Format_RGBA8888_Premultiplied),
+                 QSize(static_cast<int>(layer.width), static_cast<int>(layer.height))});
+        }
+    };
+    appendLayer(info);
+    if (snow_recording_effects_frame_keyboard_info(native, &info) == 0) {
+        return {};
+    }
+    appendLayer(info);
+    return frame;
+}
+
 class NativeRecordingEffectsSource final : public RecordingEffectsSource {
   public:
     // The handle owns the native observers (including the low-level input hooks
@@ -68,43 +107,7 @@ class NativeRecordingEffectsSource final : public RecordingEffectsSource {
     }
     std::shared_ptr<RecordingEffectsFrame> acquire() override {
         auto* native = snow_recording_effects_acquire_frame(m_handle.get());
-        if (native == nullptr) {
-            return {};
-        }
-        auto frame = std::make_shared<RecordingEffectsFrame>();
-        frame->lease = std::shared_ptr<void>(native, [](void* value) {
-            snow_recording_effects_release_frame(static_cast<SnowRecordingEffectsFrame*>(value));
-        });
-        SnowRecordingEffectsFrameInfo info{};
-        if (snow_recording_effects_frame_info(native, &info) == 0) {
-            return {};
-        }
-        frame->generation = info.generation;
-        frame->revision = info.revision;
-        frame->output = QSize(static_cast<int>(info.width), static_cast<int>(info.height));
-        if (info.error_utf8 != nullptr) {
-            frame->error = QString::fromUtf8(info.error_utf8);
-        }
-        const auto appendLayer = [&frame](const SnowRecordingEffectsFrameInfo& layer) {
-            frame->tiles.reserve(frame->tiles.size() + layer.tile_count);
-            for (uint32_t i = 0; i < layer.tile_count; ++i) {
-                const auto& tile = layer.tiles[i];
-                const QRect rect(static_cast<int>(tile.x), static_cast<int>(tile.y),
-                                 static_cast<int>(tile.width), static_cast<int>(tile.height));
-                frame->tiles.push_back(
-                    {rect,
-                     QImage(tile.rgba_premultiplied, rect.width(), rect.height(),
-                            static_cast<qsizetype>(tile.stride),
-                            QImage::Format_RGBA8888_Premultiplied),
-                     QSize(static_cast<int>(layer.width), static_cast<int>(layer.height))});
-            }
-        };
-        appendLayer(info);
-        if (snow_recording_effects_frame_keyboard_info(native, &info) == 0) {
-            return {};
-        }
-        appendLayer(info);
-        return frame;
+        return takeFrame(native);
     }
 
   private:
@@ -145,17 +148,22 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
                                        int trailDurationMs, const QColor& keyboardBackground,
                                        const QColor& keyboardForeground, int keyboardSize,
                                        const QColor& highlight, bool recordMouseClicks,
-                                       int highlightRadius) {
+                                       int highlightRadius, uint32_t playbackOverlay,
+                                       const QColor& progressBarColor) {
     if (m_capture == capture && m_output == output && m_trail == trail && m_click == click &&
         m_keyboard == keyboard && m_trailDurationMs == trailDurationMs &&
         m_keyboardBackground == keyboardBackground && m_keyboardForeground == keyboardForeground &&
         m_keyboardSize == keyboardSize && m_highlight == highlight &&
-        m_recordMouseClicks == recordMouseClicks && m_highlightRadius == highlightRadius) {
+        m_recordMouseClicks == recordMouseClicks && m_highlightRadius == highlightRadius &&
+        m_playbackOverlay == playbackOverlay && m_progressBarColor == progressBarColor) {
         return;
     }
     // Clear with the old transform before changing geometry or disabling an effect.
     clearFrame();
+    clearPlaybackFrame();
     ++m_generation;
+    m_playbackOverlay = playbackOverlay;
+    m_progressBarColor = progressBarColor;
     m_capture = capture;
     m_output = output;
     m_trail = trail;
@@ -171,7 +179,7 @@ void RecordingEffectPreview::configure(const QRect& capture, const QSize& output
     m_configurationDirty = true;
     m_failed = false;
     if (trail.alpha() == 0 && click.alpha() == 0 && !keyboard && highlight.alpha() == 0 &&
-        !recordMouseClicks) {
+        !recordMouseClicks && playbackOverlay == 0) {
         stopAndClear();
     } else {
         m_configurationTimer.start();
@@ -195,11 +203,37 @@ void RecordingEffectPreview::synchronize() {
     SNOW_SHOT_RECORDING_PERF_SCOPE("preview.synchronize");
     const bool enabled = m_eligible && m_area.isVisible() && !m_windowBlocked &&
                          QApplication::activeModalWidget() == nullptr && m_capture.isValid() &&
-                         m_output.isValid() &&
-                         (m_trail.alpha() != 0 || m_click.alpha() != 0 || m_keyboard ||
-                          m_highlight.alpha() != 0 || m_recordMouseClicks);
+                         m_output.isValid();
     if (!enabled) {
         stopAndClear();
+        return;
+    }
+    if (m_configurationDirty || m_playbackDirty) {
+        clearPlaybackFrame();
+        m_playbackDirty = false;
+        if (m_playbackOverlay != 0) {
+            const RecordingKeyboardFont font;
+            m_playbackFrame = takeFrame(snow_recording_effects_playback_preview(
+                static_cast<uint32_t>(m_output.width()), static_cast<uint32_t>(m_output.height()),
+                m_playbackOverlay, rgba(m_progressBarColor), font.family.constData(),
+                font.cjkFamily.constData(), font.weight));
+            if (m_playbackFrame) {
+                m_area.canvas()->update(frameRegion(*m_playbackFrame));
+            } else {
+                if (reportError) {
+                    reportError(QString::fromUtf8(snow_recording_effects_last_error()));
+                }
+            }
+        }
+    }
+    const bool motionEnabled = m_trail.alpha() != 0 || m_click.alpha() != 0 || m_keyboard ||
+                               m_highlight.alpha() != 0 || m_recordMouseClicks;
+    if (!motionEnabled) {
+        m_running = false;
+        m_source->stop();
+        clearFrame();
+        m_readout->dismiss();
+        m_configurationDirty = false;
         return;
     }
     if (m_failed || (m_running && !m_configurationDirty)) {
@@ -276,6 +310,7 @@ void RecordingEffectPreview::stopAndClear(bool present) {
     m_running = false;
     m_source->stop();
     clearFrame();
+    clearPlaybackFrame();
     m_readout->dismiss();
     if (present && m_area.isVisible()) {
         m_area.repaint();
@@ -325,6 +360,15 @@ void RecordingEffectPreview::clearFrame() {
         if (!damage.isEmpty()) {
             m_area.canvas()->update(damage);
         }
+    }
+}
+
+void RecordingEffectPreview::clearPlaybackFrame() {
+    m_playbackDirty = true;
+    if (m_playbackFrame) {
+        const QRegion damage = frameRegion(*m_playbackFrame);
+        m_playbackFrame.reset();
+        m_area.canvas()->update(damage);
     }
 }
 
@@ -432,21 +476,23 @@ void RecordingEffectPreview::renderBeforeCanvas(QPainter& painter,
 }
 
 void RecordingEffectPreview::renderAfterCanvas(QPainter& painter, const SnowCanvasRenderContext&) {
-    if (!m_running || !m_frame || m_frame->output.isEmpty()) {
-        return;
-    }
     painter.setClipRect(m_area.selectionRect().translated(-m_area.canvasGeometry().topLeft()),
                         Qt::IntersectClip);
     const QTransform canvasTransform = painter.transform();
     QSize coordinateSize;
-    for (const auto& tile : m_frame->tiles) {
-        const QSize next = tile.coordinateSize.isEmpty() ? m_frame->output : tile.coordinateSize;
-        if (next != coordinateSize) {
-            painter.setTransform(canvasTransform);
-            painter.setTransform(outputToCanvas(next), true);
-            coordinateSize = next;
+    for (const auto& frame : {m_frame, m_playbackFrame}) {
+        if (!frame) {
+            continue;
         }
-        painter.drawImage(tile.rect.topLeft(), tile.image);
+        for (const auto& tile : frame->tiles) {
+            const QSize next = tile.coordinateSize.isEmpty() ? frame->output : tile.coordinateSize;
+            if (next != coordinateSize) {
+                painter.setTransform(canvasTransform);
+                painter.setTransform(outputToCanvas(next), true);
+                coordinateSize = next;
+            }
+            painter.drawImage(tile.rect.topLeft(), tile.image);
+        }
     }
 }
 

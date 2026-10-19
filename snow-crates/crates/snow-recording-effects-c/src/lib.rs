@@ -308,6 +308,86 @@ pub unsafe extern "C" fn snow_recording_effects_acquire_frame(
     let Some(frame) = frame else {
         return std::ptr::null_mut();
     };
+    lease_frame(frame)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_recording_effects_playback_preview(
+    width: u32,
+    height: u32,
+    overlay: u32,
+    progress_rgba: u32,
+    font_family_utf8: *const c_char,
+    cjk_font_family_utf8: *const c_char,
+    font_weight: u32,
+) -> *mut SnowRecordingEffectsFrame {
+    let render = || -> Result<_, String> {
+        use snow_recording_effects::{KeyboardOverlayFont, PlaybackOverlay};
+        if width == 0 || height == 0 || width > 32768 || height > 32768 {
+            return Err("invalid playback preview dimensions".into());
+        }
+        let overlay = match overlay {
+            1 => PlaybackOverlay::ProgressBar {
+                rgba: progress_rgba.to_be_bytes(),
+            },
+            2 => PlaybackOverlay::PlaybackTime { rgba: [255; 4] },
+            _ => return Err("invalid playback preview overlay".into()),
+        };
+        let rasterizer = if matches!(overlay, PlaybackOverlay::PlaybackTime { .. }) {
+            let font = if font_family_utf8.is_null() {
+                None
+            } else {
+                if cjk_font_family_utf8.is_null() {
+                    return Err("missing playback CJK font family".into());
+                }
+                Some(KeyboardOverlayFont::new(
+                    unsafe { CStr::from_ptr(font_family_utf8) }
+                        .to_str()
+                        .map_err(|e| e.to_string())?,
+                    unsafe { CStr::from_ptr(cjk_font_family_utf8) }
+                        .to_str()
+                        .map_err(|e| e.to_string())?,
+                    font_weight,
+                )?)
+            };
+            Some(snow_recording_effects::keyboard_rasterizer::create(
+                &KeyboardOverlayConfig {
+                    font,
+                    keycap_size: 64,
+                    background_rgba: [0; 4],
+                    text_rgba: [255; 4],
+                    border_rgba: [0; 4],
+                    labels: Default::default(),
+                },
+            )?)
+        } else {
+            None
+        };
+        let output = (width, height);
+        let mut renderer =
+            snow_recording_effects::playback::PlaybackRenderer::new(overlay, output, rasterizer)?;
+        let mut surface = snow_recording_effects::surface::TileSurface::new(output);
+        renderer.draw_zero_preview(&mut surface)?;
+        Ok(PreviewFrame {
+            generation: 0,
+            revision: 0,
+            output,
+            tiles: surface.snapshot(),
+            keyboard_output: output,
+            keyboard_tiles: Vec::new(),
+            error: None,
+        })
+    };
+    match render() {
+        Ok(frame) => lease_frame(Arc::new(frame)),
+        Err(message) => {
+            error(message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+fn lease_frame(frame: Arc<PreviewFrame>) -> *mut SnowRecordingEffectsFrame {
     let tiles = frame
         .tiles
         .iter()
@@ -400,6 +480,37 @@ pub extern "C" fn snow_recording_effects_last_error() -> *const c_char {
 mod tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn playback_preview_validates_options_and_returns_an_owned_static_frame() {
+        let render = |width, height, overlay| unsafe {
+            snow_recording_effects_playback_preview(
+                width,
+                height,
+                overlay,
+                0x1677ffff,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        for (width, height, overlay) in [(0, 480, 1), (640, 0, 1), (32769, 480, 1), (640, 480, 3)] {
+            assert!(render(width, height, overlay).is_null());
+        }
+        for overlay in [1, 2] {
+            let frame = render(640, 480, overlay);
+            assert!(!frame.is_null());
+            let mut info = unsafe { std::mem::zeroed() };
+            assert_eq!(
+                unsafe { snow_recording_effects_frame_info(frame, &mut info) },
+                1
+            );
+            assert_eq!((info.width, info.height), (640, 480));
+            assert!(info.tile_count > 0);
+            assert!(info.error_utf8.is_null());
+            unsafe { snow_recording_effects_release_frame(frame) };
+        }
+    }
+
     #[test]
     fn preview_canvas_scale_preserves_desktop_input_units_and_legacy_configs() {
         let mut raw = valid();

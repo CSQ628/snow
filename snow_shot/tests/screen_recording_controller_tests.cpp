@@ -1430,6 +1430,83 @@ void effectsPreviewPhysicalPixels() {
 }
 #endif
 
+void playbackPreviewAtZero() {
+#ifdef Q_OS_WIN
+    // The offscreen QPA does not initialize OLE like Qt's Windows GUI thread does.
+    require(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)),
+            "playback preview regression must run in the GUI thread's STA apartment");
+    const auto apartment = qScopeGuard([] { CoUninitialize(); });
+#endif
+    auto state = std::make_shared<RecordingEffectTestState>();
+    ScreenRecordingAreaWindow area;
+    area.setRecordingRegion(QRect(40, 40, 640, 480));
+    area.setInputMode(ScreenRecordingAreaWindow::InputMode::PassThrough);
+    RecordingEffectPreview preview(area, std::make_unique<RecordingEffectTestSource>(state));
+    QString previewError;
+    preview.reportError = [&](const QString& error) { previewError = error; };
+    area.show();
+    pumpPreview();
+    const auto configure = [&](uint32_t overlay, const QSize& output) {
+        preview.configure(area.recordingRegion(), output, Qt::transparent, Qt::transparent, false,
+                          500, QColor(0, 0, 0, 204), Qt::white, 64, Qt::transparent, false, 41,
+                          overlay);
+        preview.setEligible(true);
+        pumpPreview();
+        require(previewError.isEmpty(),
+                "zero-second playback preview must initialize without errors");
+    };
+    const auto render = [&] {
+        QImage image(area.canvas()->size(), QImage::Format_RGBA8888_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        preview.renderAfterCanvas(painter, {});
+        return image;
+    };
+    const auto visibleBounds = [](const QImage& image) {
+        QRect bounds;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                if (image.pixelColor(x, y).alpha() != 0)
+                    bounds |= QRect(x, y, 1, 1);
+        return bounds;
+    };
+    for (const QSize output : {QSize(640, 480), QSize(320, 240)}) {
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_PROGRESS_BAR, output);
+        const QImage progress = render();
+        const QRect track = visibleBounds(progress);
+        require(!track.isEmpty() && track.bottom() == progress.height() - 1 &&
+                    progress.pixelColor(track.center()) == QColor(0, 0, 0, 64),
+                "zero-second progress preview must show the empty track at the bottom");
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_PLAYBACK_TIME, output);
+        const QRect time = visibleBounds(render());
+        require(!time.isEmpty() && time.bottom() < track.top(),
+                "switching to zero-second play time must replace the track with a timer badge");
+        require(state->starts == 0 && !state->active,
+                "static playback preview must not start native input observers");
+        preview.setEligible(false);
+        require(visibleBounds(render()).isEmpty(),
+                "starting recording must clear the playback preview");
+        preview.setEligible(true);
+        pumpPreview();
+        require(visibleBounds(render()) == time, "returning to idle must restore zero time");
+        area.hide();
+        require(visibleBounds(render()).isEmpty(), "hiding the area must clear the overlay");
+        area.show();
+        pumpPreview();
+        require(visibleBounds(render()) == time, "showing the area must restore zero time");
+        QDialog modal(&area);
+        modal.setModal(true);
+        modal.show();
+        pumpPreview();
+        require(visibleBounds(render()).isEmpty(), "a modal must suspend the playback preview");
+        modal.close();
+        pumpPreview();
+        require(visibleBounds(render()) == time, "closing a modal must restore zero time");
+        configure(SNOW_RECORDING_PLAYBACK_OVERLAY_NONE, output);
+        require(visibleBounds(render()).isEmpty(), "disabling playback preview must erase it");
+    }
+}
+
 void effectsPreviewLifecycle() {
     for (const qreal dpr : {1.0, 1.25, 1.5, 1.75, 2.0}) {
         const QRect selected(-2001, -1103, 641, 479);
@@ -3605,8 +3682,20 @@ void recordingPostProcessingLifecycle() {
         WindowInputBlockObserver toolbarInput;
         area->installEventFilter(&areaInput);
         toolbar->installEventFilter(&toolbarInput);
+        pumpPreview();
+        const QImage withoutPlayback = previewImage(*area->canvas());
+        const QPoint trackPoint(withoutPlayback.width() / 2, withoutPlayback.height() - 2);
         controls->recordingPostProcessingEnabledChanged(true);
+        pumpPreview();
+        require(previewImage(*area->canvas()).pixelColor(trackPoint) !=
+                    withoutPlayback.pixelColor(trackPoint),
+                "enabling progress bar must immediately display its zero-second track");
         controls->recordingPostProcessingEffectChanged(QStringLiteral("playback_time"));
+        pumpPreview();
+        const QImage withTime = previewImage(*area->canvas());
+        require(withTime != withoutPlayback &&
+                    withTime.pixelColor(trackPoint) == withoutPlayback.pixelColor(trackPoint),
+                "selecting play time must immediately replace the track with the zero timer");
         controls->recordingProgressBarColorChanged(QColor(20, 100, 200, 128));
         require(settings.postProcessingEnabled() &&
                     settings.postProcessingEffect() == QStringLiteral("playback_time") &&
@@ -3619,6 +3708,9 @@ void recordingPostProcessingLifecycle() {
                     controls->recordingPostProcessingEffect() == QStringLiteral("progress_bar") &&
                     controls->recordingProgressBarColor() == QColor(22, 119, 255),
                 "an open toolbar follows externally reset post-processing preferences");
+        pumpPreview();
+        require(previewImage(*area->canvas()) == withoutPlayback,
+                "disabling post processing through settings must clear the preview overlay");
         controls->recordingPostProcessingEnabledChanged(true);
         controls->recordingPostProcessingEffectChanged(QStringLiteral("playback_time"));
         controls->recordingProgressBarColorChanged(QColor(20, 100, 200, 128));
@@ -6136,6 +6228,7 @@ int main(int argc, char** argv) {
                 "key legends must use English names");
         app.removeTranslator(&translator);
         recordingKeyboardFontFollowsApplication();
+        playbackPreviewAtZero();
         effectsPreviewLifecycle();
         areaWindowPaintsInputSurfaceOnlyWhenItIsVisible();
         previewIgnoresEventsOtherThanDialogVisibility();

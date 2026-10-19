@@ -77,6 +77,13 @@ void snow_recording_effects_destroy(SnowRecordingEffects* effects);
 // A complete immutable snapshot. All tile pointers remain valid until release, including after
 // stop.
 SnowRecordingEffectsFrame* snow_recording_effects_acquire_frame(SnowRecordingEffects* effects);
+// Static zero-second playback overlay in export pixels; no observers are started.
+// overlay: 1 = progress bar, 2 = playback time. Release with release_frame.
+// Null font family selects the system UI font.
+SnowRecordingEffectsFrame*
+snow_recording_effects_playback_preview(uint32_t width, uint32_t height, uint32_t overlay,
+                                        uint32_t progress_rgba, const char* font_family_utf8,
+                                        const char* cjk_font_family_utf8, uint32_t font_weight);
 int32_t snow_recording_effects_frame_info(const SnowRecordingEffectsFrame* frame,
                                           SnowRecordingEffectsFrameInfo* info);
 // Both layers use physical display pixels and fixed pixel styles. FrameInfo width/height
