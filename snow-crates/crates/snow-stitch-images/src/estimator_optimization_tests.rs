@@ -86,7 +86,7 @@ fn refinement_release_benchmark() {
                     } else {
                         (&first, &second, -75)
                     };
-                    let evidence = pure_rust_feature_evidence(
+                    let (evidence, _) = pure_rust_feature_evidence(
                         reference,
                         incoming,
                         estimator.layout,
@@ -95,6 +95,7 @@ fn refinement_release_benchmark() {
                         true,
                         &estimator.pyramid_plan,
                         Some(&estimator.sampling),
+                        &mut None,
                     );
                     let expected = refine_motion_offset(
                         reference,

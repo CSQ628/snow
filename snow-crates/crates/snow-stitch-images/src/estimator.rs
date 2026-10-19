@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::OnceLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 
 use rayon::prelude::*;
 
@@ -483,29 +486,40 @@ fn pure_rust_feature_evidence(
     parallel_work: bool,
     pyramid_plan: &crate::orb::PyramidPlan,
     sampling: Option<&SamplingPlan>,
-) -> FeatureEvidence {
+    cached_reference: &mut Option<Vec<BinaryFeature>>,
+) -> (FeatureEvidence, Vec<BinaryFeature>) {
     let feature_perf = crate::perf::Scope::new(crate::perf::Stage::FeatureExtraction);
     let detect = |frame| detect_balanced_rust(frame, layout, max_features, pyramid_plan, sampling);
-    let (reference_features, incoming_features) = if parallel_work {
-        rayon::join(|| detect(reference), || detect(incoming))
+    let incoming_features = if cached_reference.is_some() {
+        detect(incoming)
     } else {
-        (detect(reference), detect(incoming))
+        let (reference_features, incoming_features) = if parallel_work {
+            rayon::join(|| detect(reference), || detect(incoming))
+        } else {
+            (detect(reference), detect(incoming))
+        };
+        *cached_reference = Some(reference_features);
+        incoming_features
     };
+    let reference_features = cached_reference
+        .as_ref()
+        .expect("prepared reference features");
     feature_perf.finish();
     let _perf = crate::perf::Scope::new(crate::perf::Stage::DescriptorMatching);
     let observations = mutual_observations_rust(
-        &reference_features,
+        reference_features,
         &incoming_features,
         layout,
         axis,
         parallel_work,
     );
 
-    FeatureEvidence {
+    let evidence = FeatureEvidence {
         reference_features: reference_features.len() as u32,
         incoming_features: incoming_features.len() as u32,
         observations,
-    }
+    };
+    (evidence, incoming_features)
 }
 
 fn candidate_offsets(
@@ -871,6 +885,29 @@ pub(crate) fn validate_estimator_options(
     Ok(())
 }
 
+/// Prepared data belonging to one stitch accumulator. A duplicate leaves it intact;
+/// every estimated frame replaces `previous_raw`, and accepted motion invalidates
+/// the reference before its pixels or canvas-window position can change.
+/// Only selected descriptors and grayscale planes downsampled 4x on each axis
+/// are retained, not ORB pyramids. Equal references share their grayscale planes.
+#[derive(Default)]
+pub(crate) struct EstimationCache {
+    previous_raw: Option<Arc<GrayImage>>,
+    previous_features: Option<Vec<BinaryFeature>>,
+    previous_full_features: Option<Vec<BinaryFeature>>,
+    reference_gray: Option<Arc<GrayImage>>,
+    reference_features: Option<Vec<BinaryFeature>>,
+    full_reference_features: Option<Vec<BinaryFeature>>,
+}
+
+impl EstimationCache {
+    pub(crate) fn invalidate_reference(&mut self) {
+        self.reference_gray = None;
+        self.reference_features = None;
+        self.full_reference_features = None;
+    }
+}
+
 pub struct VerticalMotionEstimator {
     geometry: Geometry,
     axis: StitchAxis,
@@ -949,6 +986,28 @@ impl VerticalMotionEstimator {
         previous_raw: &Frame,
         incoming: &Frame,
     ) -> Result<MotionEstimate, StitchError> {
+        // Direct callers may supply unrelated frames on every call. Only the
+        // stitch accumulator has the lifecycle needed to reuse prepared data.
+        self.estimate_cached(
+            motion_reference,
+            previous_raw,
+            incoming,
+            &mut EstimationCache::default(),
+        )
+    }
+
+    pub(crate) fn estimate_cached(
+        &mut self,
+        motion_reference: &Frame,
+        previous_raw: &Frame,
+        incoming: &Frame,
+        cache: &mut EstimationCache,
+    ) -> Result<MotionEstimate, StitchError> {
+        // Taking this before early returns also invalidates it when the incoming
+        // frame takes the identical-interior path without preparing grayscale.
+        let previous_gray = cache.previous_raw.take();
+        let previous_features = cache.previous_features.take();
+        let previous_full_features = cache.previous_full_features.take();
         for (name, frame) in [
             ("motion reference", motion_reference),
             ("previous raw frame", previous_raw),
@@ -978,10 +1037,25 @@ impl VerticalMotionEstimator {
             return Ok(MotionEstimate::no_motion(1.0, diagnostics));
         }
 
+        // Composition may reconstruct precisely the last input. In that case
+        // its prepared data is also valid for the new reference. Verify all RGB
+        // pixels: fixed UI, animation, and repainted bands can break this equality.
+        if cache.reference_gray.is_none()
+            && let Some(gray) = &previous_gray
+            && motion_reference.visible_pixels_equal(previous_raw)
+        {
+            cache.reference_gray = Some(Arc::clone(gray));
+            cache.reference_features = previous_features;
+            cache.full_reference_features = previous_full_features;
+        }
+
         let (previous_gray, incoming_gray) = {
             let _perf = crate::perf::Scope::new(crate::perf::Stage::Grayscale);
             (
-                GrayImage::from_frame(previous_raw)?,
+                match previous_gray {
+                    Some(gray) => gray,
+                    None => Arc::new(GrayImage::from_frame(previous_raw)?),
+                },
                 GrayImage::from_frame(incoming)?,
             )
         };
@@ -989,20 +1063,24 @@ impl VerticalMotionEstimator {
             let _perf = crate::perf::Scope::new(crate::perf::Stage::SimilarityMaps);
             SimilarityMap::between(&previous_gray, &incoming_gray, self.layout, self.axis, 0)
         };
-        // The raw comparison is complete. Release its two float planes before
-        // preparing the motion reference or retaining the ORB pyramids.
+        // The raw comparison is complete. Release its planes before ORB unless
+        // they are shared with the cached motion reference.
         drop(previous_gray);
-        let reference_gray = {
+        if cache.reference_gray.is_none() {
             let _perf = crate::perf::Scope::new(crate::perf::Stage::Grayscale);
-            GrayImage::from_frame(motion_reference)?
-        };
+            cache.reference_gray = Some(Arc::new(GrayImage::from_frame(motion_reference)?));
+        }
+        let reference_gray = cache
+            .reference_gray
+            .as_ref()
+            .expect("prepared reference grayscale");
         let zero_alignment = {
             let _perf = crate::perf::Scope::new(crate::perf::Stage::SimilarityMaps);
-            SimilarityMap::between(&reference_gray, &incoming_gray, self.layout, self.axis, 0)
+            SimilarityMap::between(reference_gray, &incoming_gray, self.layout, self.axis, 0)
         };
 
         let max_features = self.options.max_features as usize;
-        let evidence = pure_rust_feature_evidence(
+        let (evidence, incoming_features) = pure_rust_feature_evidence(
             motion_reference,
             incoming,
             self.layout,
@@ -1011,11 +1089,13 @@ impl VerticalMotionEstimator {
             self.parallel_work,
             &self.pyramid_plan,
             Some(&self.sampling),
+            &mut cache.reference_features,
         );
+        cache.previous_features = Some(incoming_features);
         let images = EvaluationImages {
             reference: motion_reference,
             incoming,
-            reference_gray: &reference_gray,
+            reference_gray,
             incoming_gray: &incoming_gray,
             direct: &direct,
             zero_alignment: &zero_alignment,
@@ -1028,7 +1108,7 @@ impl VerticalMotionEstimator {
                     self.geometry.height as usize,
                 )
             });
-            let evidence = pure_rust_feature_evidence(
+            let (evidence, incoming_features) = pure_rust_feature_evidence(
                 motion_reference,
                 incoming,
                 self.layout,
@@ -1037,9 +1117,12 @@ impl VerticalMotionEstimator {
                 self.parallel_work,
                 pyramid,
                 None,
+                &mut cache.full_reference_features,
             );
+            cache.previous_full_features = Some(incoming_features);
             evaluated = self.evaluate(&images, evidence);
         }
+        cache.previous_raw = Some(Arc::new(incoming_gray));
         Ok(self.commit_evaluation(evaluated))
     }
 
