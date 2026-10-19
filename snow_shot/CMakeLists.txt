@@ -722,6 +722,7 @@ set_source_files_properties(
     src/storage/configurationschema.cpp
     PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(snow_shot_storage PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(snow_shot_storage PRIVATE snow_draw_engine_c)
 target_link_libraries(snow_shot_storage PUBLIC
     snow_shot_runtime_activity
     snow_shot_diagnostics
@@ -943,6 +944,19 @@ if(NOT _snow_shot_history_global_pool_call EQUAL -1)
 endif()
 unset(_snow_shot_history_source)
 unset(_snow_shot_history_global_pool_call)
+add_library(snow_shot_file_manager STATIC
+    include/snow_shot/platform/filemanager.h
+    src/platform/filemanager.cpp)
+target_include_directories(snow_shot_file_manager PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(snow_shot_file_manager PUBLIC Qt6::Gui)
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-file-manager-tests tests/file_manager_tests.cpp)
+    target_link_libraries(snow-shot-file-manager-tests PRIVATE snow_shot_file_manager)
+    add_test(NAME snow-shot-file-manager-tests COMMAND snow-shot-file-manager-tests)
+    set_tests_properties(snow-shot-file-manager-tests PROPERTIES LABELS unit
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
 add_library(snow_shot_login_item STATIC
     include/snow_shot/platform/macos/loginitemservice.h
     src/platform/macos/loginitemservice.cpp)
@@ -1133,6 +1147,7 @@ target_include_directories(snow_shot_settings
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/network")
 target_link_libraries(snow_shot_settings PUBLIC
+    snow_shot_file_manager
     snow_shot_main_window_skin
     snow_shot_window_shortcuts
     snow_shot_translation
@@ -2379,6 +2394,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_executable(snow-shot-capture-history-repository-tests
         tests/capture_history_repository_tests.cpp
     )
+
+    add_executable(snow-shot-file-location-repository-tests tests/file_location_repository_tests.cpp)
+    target_link_libraries(snow-shot-file-location-repository-tests PRIVATE snow_shot_storage Qt6::Gui)
+    add_test(NAME snow-shot-file-location-repository-tests COMMAND snow-shot-file-location-repository-tests)
+    set_tests_properties(snow-shot-file-location-repository-tests PROPERTIES LABELS unit
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
     target_link_libraries(snow-shot-capture-history-repository-tests PRIVATE
         snow_shot_storage
@@ -5218,7 +5239,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_include_directories(snow-shot-save-directory-time-variables-tests PRIVATE
         include src/image)
     target_link_libraries(snow-shot-save-directory-time-variables-tests PRIVATE
-        snow_shot_storage snow_shot_image_codec Qt6::Gui)
+        snow_shot_storage snow_shot_image_codec snow_shot_file_manager Qt6::Gui)
     add_test(NAME snow-shot-save-directory-time-variables-tests
         COMMAND snow-shot-save-directory-time-variables-tests -platform offscreen)
     snow_shot_import_offscreen_platform(snow-shot-save-directory-time-variables-tests)
@@ -7622,6 +7643,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-border-fill-icon-tests
         COMMAND snow-shot-generated-icon-pack-tests --border-fill-only -platform offscreen)
     set_tests_properties(snow-shot-border-fill-icon-tests PROPERTIES TIMEOUT 30 LABELS unit)
+    add_test(NAME snow-shot-reveal-icon-tests
+        COMMAND snow-shot-generated-icon-pack-tests --reveal-only -platform offscreen)
+    set_tests_properties(snow-shot-reveal-icon-tests PROPERTIES TIMEOUT 30 LABELS unit
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(
         NAME snow-shot-generated-icon-pack-tests
         COMMAND snow-shot-generated-icon-pack-tests
@@ -9739,6 +9764,21 @@ if(SNOW_SHOT_ENABLE_MCP)
         COMMENT "Staging Snow Shot MCP bridge"
         VERBATIM
     )
+endif()
+
+# The same fixed-frame encoder experiment validates VideoToolbox on macOS.
+if(APPLE AND SNOW_SHOT_BUILD_BENCHMARKS)
+    add_custom_target(snow-shot-recording-encoder-performance-benchmark
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "CARGO_TARGET_DIR=${SNOW_RUST_CARGO_TARGET_DIR}"
+            "FFMPEG_DIR=${SNOW_FFMPEG_ROOT}"
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+            "CARGO_PROFILE_RELEASE_DEBUG=2"
+            "${CARGO_EXECUTABLE}" build --locked --release
+            --target ${SNOW_SHOT_RUST_TARGET}
+            --package snow-recording-export --example recording_encoder_benchmark
+        WORKING_DIRECTORY "${SNOW_SHOT_CAPTURE_CRATES_DIR}"
+        USES_TERMINAL VERBATIM)
 endif()
 
 if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)

@@ -18,6 +18,7 @@
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/shortcuts/menuaccesskey.h"
 #include "snow_shot/presentation/screenshotregiontypeshortcut.h"
+#include "snow_draw_engine.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -716,7 +717,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      QStringLiteral("h264"),
      ConfigurationValueKind::String,
      std::nullopt,
-     {QStringLiteral("h264_hw"), QStringLiteral("h264"), QStringLiteral("h265")}},
+     {QStringLiteral("h264_hw"), QStringLiteral("h265_hw"), QStringLiteral("h264"),
+      QStringLiteral("h265")}},
     {QStringLiteral("screen_recording/video_quality"), 80, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{0, 100, 1}},
     {QStringLiteral("screen_recording/encoding_preset"),
@@ -2104,9 +2106,8 @@ ConfigurationNormalization normalizeWatermarkTemplates(const QJsonValue& value) 
 }
 
 ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
-    // Matches the engine's DRAW_TEMPLATE_SCHEMA_VERSION; the real serialized-template
-    // storage regression detects future engine format changes at this boundary.
-    constexpr int maximumSupportedTemplateVersion = 6;
+    // Use the linked engine's format contract for both explicit edits and loading repairs.
+    const auto maximumSupportedTemplateVersion = snow_draw_template_schema_version();
     if (!value.isArray()) {
         return {};
     }
@@ -2126,7 +2127,7 @@ ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
             error.error != QJsonParseError::NoError ||
             !ConfigurationSchema::parseIntegerVersion(
                 payload.value(QStringLiteral("schemaVersion")), &version) ||
-            version > maximumSupportedTemplateVersion ||
+            static_cast<quint32>(version) > maximumSupportedTemplateVersion ||
             payload.value(QStringLiteral("elements")).toArray().isEmpty() ||
             payload.value(QStringLiteral("selectedIds")).toArray().isEmpty()) {
             changed = true;
