@@ -225,6 +225,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     QRect currentNativeGeometry() const;
     [[nodiscard]] snow_shot::storage::PinnedWindowRecord persistenceSnapshot() const;
     [[nodiscard]] snow_shot::presentation::ImageEditingSource imageEditingSnapshot() const;
+    void checkpointStorage();
     [[nodiscard]] ScreenshotPinnedImageSnapshot stitchingSnapshot();
     [[nodiscard]] ScreenshotPinnedImageSnapshot splittingSnapshot();
     void suspendStorageWrites();

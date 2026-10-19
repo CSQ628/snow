@@ -12,6 +12,9 @@ cmake_minimum_required(VERSION 3.30)
 
 project(snow_shot VERSION ${SNOW_SHOT_VERSION_NUMERIC} LANGUAGES CXX)
 
+add_compile_definitions(SNOW_SHOT_CONFIGURED_STORE_BUILD=${_SNOW_SHOT_CONFIGURED_STORE_BUILD}
+    "SNOW_SHOT_PRIVACY_POLICY_URL=\"${SNOW_SHOT_PRIVACY_POLICY_URL}\"")
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
 include(RustStaticLibrary)
@@ -113,8 +116,37 @@ if(SNOW_SHOT_ENABLE_STRICT_COMPILE)
 endif()
 snow_enable_clang_tidy()
 
+if(WIN32 AND (SNOW_SHOT_BUILD_TESTS OR SNOW_SHOT_DISTRIBUTION_CHANNEL STREQUAL "store"))
+    add_subdirectory(src/platform/windows/explorercommand)
+endif()
+
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowQt.cmake")
 snow_find_qt(COMPONENTS Widgets LinguistTools Svg Network)
+
+add_library(snow_shot_distribution STATIC
+    include/snow_shot/app/distribution.h
+    src/app/distribution.cpp)
+target_include_directories(snow_shot_distribution PUBLIC include)
+target_link_libraries(snow_shot_distribution PUBLIC Qt6::Core)
+# Every Snow Shot target follows the same channel policy. Keep native SDK headers out of
+# the shared policy header so their macros cannot change unrelated callers' C++ tokens.
+link_libraries(snow_shot_distribution)
+
+add_library(snow_shot_store_lifecycle STATIC
+    include/snow_shot/app/storeupdatelifecycle.h
+    src/app/storeupdatelifecycle.cpp)
+target_include_directories(snow_shot_store_lifecycle PUBLIC include)
+target_link_libraries(snow_shot_store_lifecycle PUBLIC Qt6::Core)
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-store-distribution-tests tests/store_distribution_tests.cpp)
+    target_link_libraries(snow-shot-store-distribution-tests PRIVATE snow_shot_store_lifecycle)
+    add_test(NAME snow-shot-store-distribution-tests COMMAND snow-shot-store-distribution-tests)
+    set_tests_properties(snow-shot-store-distribution-tests PROPERTIES LABELS "unit" TIMEOUT 30)
+    add_executable(snow-shot-recording-recovery-tests tests/recording_recovery_tests.cpp)
+    target_link_libraries(snow-shot-recording-recovery-tests PRIVATE Qt6::Core)
+    add_test(NAME snow-shot-recording-recovery-tests COMMAND snow-shot-recording-recovery-tests)
+    set_tests_properties(snow-shot-recording-recovery-tests PROPERTIES LABELS "unit" TIMEOUT 15)
+endif()
 
 add_library(snow_shot_canvas_status_readout STATIC
     include/snow_shot/presentation/canvasstatusreadout.h
@@ -359,6 +391,10 @@ snow_add_rust_executable(snow_ocr_process
 # MCP over stdio and connects to an already running Snow Shot instance through
 # the per-user local endpoint published by the application.
 if(SNOW_SHOT_ENABLE_MCP)
+    set(_snow_shot_mcp_features)
+    if(SNOW_SHOT_DISTRIBUTION_CHANNEL STREQUAL "store")
+        list(APPEND _snow_shot_mcp_features store)
+    endif()
     snow_add_rust_executable(snow_shot_mcp
         PACKAGE snow-shot-mcp
         MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rust/snow-shot-mcp"
@@ -366,6 +402,7 @@ if(SNOW_SHOT_ENABLE_MCP)
         PRODUCTION_PROFILE release-size
         REPRODUCIBLE
         SIZE_OPTIMIZED
+        FEATURES ${_snow_shot_mcp_features}
     )
 endif()
 
@@ -1021,9 +1058,23 @@ add_library(snow_shot_administrator STATIC
 target_include_directories(snow_shot_administrator PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(snow_shot_administrator PUBLIC Qt6::Core Qt6::Network)
 if(WIN32)
-    target_link_libraries(snow_shot_administrator PRIVATE taskschd ole32 oleaut32 advapi32 shell32 uuid comsuppw)
+    target_link_libraries(snow_shot_administrator PRIVATE taskschd ole32 oleaut32 advapi32 shell32 uuid comsuppw windowsapp)
 endif()
 if(SNOW_SHOT_BUILD_TESTS)
+    if(WIN32)
+        add_executable(snow-shot-store-platform-tests
+            tests/store_platform_tests.cpp
+            src/storage/storagedirectorychange.cpp
+            src/platform/windows/autostartregistration.cpp
+            src/platform/windows/shellcontextmenuregistration.cpp
+            src/platform/windows/administratorlaunch.cpp)
+        target_include_directories(snow-shot-store-platform-tests PRIVATE include)
+        target_compile_definitions(snow-shot-store-platform-tests PRIVATE SNOW_SHOT_STORE_BUILD=1)
+        target_link_libraries(snow-shot-store-platform-tests PRIVATE snow_shot_shortcuts
+            Qt6::Core Qt6::Network taskschd ole32 oleaut32 advapi32 shell32 uuid comsuppw windowsapp)
+        add_test(NAME snow-shot-store-platform-tests COMMAND snow-shot-store-platform-tests)
+        set_tests_properties(snow-shot-store-platform-tests PROPERTIES LABELS "unit;windows" TIMEOUT 30)
+    endif()
     add_executable(snow-shot-shell-image-launch-tests tests/shell_image_launch_tests.cpp)
     target_include_directories(snow-shot-shell-image-launch-tests PRIVATE include)
     target_link_libraries(snow-shot-shell-image-launch-tests PRIVATE Qt6::Core)
@@ -1087,7 +1138,8 @@ endif()
 target_sources(snow_shot_settings PRIVATE
     include/snow_shot/presentation/components/clouduploadsettingswidget.h
     src/presentation/components/clouduploadsettingswidget.cpp)
-target_link_libraries(snow_shot_settings PUBLIC snow_shot_permissions snow_shot_login_item)
+target_link_libraries(snow_shot_settings PUBLIC snow_shot_permissions snow_shot_login_item
+    snow_shot_store_lifecycle)
 qt_add_resources(snow_shot_settings "snow_shot_about_assets"
     PREFIX "/snow_shot/about"
     BASE "resources/about"
@@ -1994,6 +2046,9 @@ qt_add_executable(snow_shot
     ${PROJECT_SOURCES}
 )
 snow_shot_link_macos_window_platform(snow_shot)
+if(WIN32 AND SNOW_SHOT_DISTRIBUTION_CHANNEL STREQUAL "store")
+    add_dependencies(snow_shot snow_shot_explorer_command)
+endif()
 if(SNOW_SHOT_BUILD_TESTS)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_MCP_TEST_FIXTURE=1)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_CONTROLLER_LIFETIME_TESTS=1)
@@ -2147,18 +2202,25 @@ if(SNOW_SHOT_BUILD_TESTS)
         set_tests_properties(snow-shot-windows-architecture-tests PROPERTIES
             LABELS "unit;windows" TIMEOUT 120)
         find_program(SNOW_SHOT_INSTALLER_TEST_POWERSHELL NAMES pwsh powershell REQUIRED)
+        add_test(NAME snow-shot-msix-packaging-tests
+            COMMAND "${SNOW_SHOT_INSTALLER_TEST_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/test-snow-shot-msix.ps1")
+        set_tests_properties(snow-shot-msix-packaging-tests PROPERTIES
+            LABELS "unit;windows" TIMEOUT 120)
         add_test(NAME snow-shot-installer-running-app-tests
             COMMAND "${SNOW_SHOT_INSTALLER_TEST_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/test-snow-shot-installer.ps1")
         set_tests_properties(snow-shot-installer-running-app-tests PROPERTIES
             LABELS "unit;windows" TIMEOUT 180)
-        add_test(NAME snow-shot-installer-upgrade-tests
-            COMMAND "${SNOW_SHOT_INSTALLER_TEST_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-                -File "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/test-snow-shot-installer-upgrade.ps1"
-                -HelperPath "$<TARGET_FILE:snow-shot-updater-binary>"
-                -Architecture "${SNOW_WINDOWS_ARCHITECTURE}")
-        set_tests_properties(snow-shot-installer-upgrade-tests PROPERTIES
-            LABELS "unit;windows" TIMEOUT 180)
+        if(TARGET snow-shot-updater-binary)
+            add_test(NAME snow-shot-installer-upgrade-tests
+                COMMAND "${SNOW_SHOT_INSTALLER_TEST_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                    -File "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/test-snow-shot-installer-upgrade.ps1"
+                    -HelperPath "$<TARGET_FILE:snow-shot-updater-binary>"
+                    -Architecture "${SNOW_WINDOWS_ARCHITECTURE}")
+            set_tests_properties(snow-shot-installer-upgrade-tests PROPERTIES
+                LABELS "unit;windows" TIMEOUT 180)
+        endif()
         add_test(NAME snow-shot-installer-i18n-tests
             COMMAND "${SNOW_SHOT_INSTALLER_TEST_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/test-snow-shot-installer-i18n.ps1")
@@ -2647,6 +2709,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
     target_link_libraries(snow-shot-single-instance-coordinator-tests PRIVATE
+        snow_shot_distribution
         Qt6::Core
         Qt6::Network
     )
@@ -7233,6 +7296,8 @@ if(SNOW_SHOT_BUILD_TESTS)
     snow_shot_import_offscreen_platform(snow-shot-selection-presentation-tests)
     add_test(NAME snow-shot-selection-presentation-tests
         COMMAND snow-shot-selection-presentation-tests -platform offscreen)
+    add_test(NAME snow-shot-selection-color-picker-tests
+        COMMAND snow-shot-selection-presentation-tests --picker-drag-only -platform offscreen)
     add_test(NAME snow-shot-toolbar-presenter-lifetime-tests
         COMMAND snow-shot-selection-presentation-tests --toolbar-presenter-lifetime-only -platform offscreen)
     add_executable(snow-shot-selection-wheel-tests
@@ -7272,7 +7337,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-screenshot-canvas-renderer-tests --background-coverage-only -platform offscreen)
     add_test(NAME snow-shot-rectangular-selection-rendering-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --rectangular-selection-rendering-only -platform offscreen)
-    set_tests_properties(snow-shot-selection-presentation-tests
+    set_tests_properties(snow-shot-selection-presentation-tests snow-shot-selection-color-picker-tests
         snow-shot-toolbar-presenter-lifetime-tests snow-shot-overlay-preparation-tests
         snow-shot-background-coverage-tests snow-shot-pointer-presentation-tests
         snow-shot-rectangular-selection-rendering-tests
@@ -8242,6 +8307,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
     add_test(NAME snow-shot-recording-effects-preview-tests
         COMMAND snow-shot-screen-recording-controller-tests --effects-preview-only)
+    add_test(NAME snow-shot-recording-store-preservation-tests
+        COMMAND snow-shot-screen-recording-controller-tests --store-preservation-only -platform offscreen)
+    set_tests_properties(snow-shot-recording-store-preservation-tests PROPERTIES
+        LABELS "unit;windows" TIMEOUT 60)
     set_tests_properties(snow-shot-recording-effects-preview-tests PROPERTIES
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
@@ -8259,8 +8328,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-screen-recording-controller-tests --webcam-preview-only)
     add_test(NAME snow-shot-recording-webcam-settings-tests
         COMMAND snow-shot-screen-recording-controller-tests --webcam-settings-only)
+    add_test(NAME snow-shot-recording-warning-placement-tests
+        COMMAND snow-shot-screen-recording-controller-tests --warnings-only -platform offscreen)
     set_tests_properties(snow-shot-recording-webcam-preview-tests
-        snow-shot-recording-webcam-settings-tests PROPERTIES
+        snow-shot-recording-webcam-settings-tests snow-shot-recording-warning-placement-tests PROPERTIES
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60)
@@ -9854,6 +9925,33 @@ if(SNOW_SHOT_ENABLE_MCP)
         COMMENT "Staging Snow Shot MCP bridge"
         VERBATIM
     )
+endif()
+
+# Synthetic clean sources exercise deferred replay without desktop capture permissions.
+if(SNOW_SHOT_BUILD_BENCHMARKS AND (WIN32 OR APPLE))
+    set(_snow_postprocessing_benchmark_environment)
+    if(WIN32)
+        snow_windows_rust_environment(_snow_postprocessing_benchmark_environment
+            "${SNOW_SHOT_RUST_TARGET}")
+        list(APPEND _snow_postprocessing_benchmark_environment
+            "LIBCLANG_PATH=${SNOW_SHOT_LIBCLANG_DIR}")
+    else()
+        list(APPEND _snow_postprocessing_benchmark_environment
+            "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+            "CARGO_PROFILE_RELEASE_DEBUG=2")
+    endif()
+    add_custom_target(snow-shot-recording-postprocessing-export-performance-benchmark
+        COMMAND "${CMAKE_COMMAND}" -E env ${_snow_postprocessing_benchmark_environment}
+            "CARGO_TARGET_DIR=${SNOW_RUST_CARGO_TARGET_DIR}"
+            "FFMPEG_DIR=${SNOW_FFMPEG_ROOT}"
+            "${CARGO_EXECUTABLE}" build --locked --release
+            --target ${SNOW_SHOT_RUST_TARGET}
+            --package snow-recording-export --features bench-timing
+            --example postprocessing_export_benchmark
+            --example native_effects_compositor_benchmark
+        WORKING_DIRECTORY "${SNOW_SHOT_CAPTURE_CRATES_DIR}"
+        USES_TERMINAL VERBATIM)
+    unset(_snow_postprocessing_benchmark_environment)
 endif()
 
 # The same fixed-frame encoder experiment validates VideoToolbox on macOS.
