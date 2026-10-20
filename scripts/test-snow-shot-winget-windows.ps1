@@ -28,6 +28,8 @@ public static class SnowShotWingetWindowFixture {
     private static extern IntPtr CreateWindowEx(uint extendedStyle, string className, string name,
         uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr data);
     [DllImport("user32.dll")] public static extern bool DestroyWindow(IntPtr window);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern bool EnableWindow(IntPtr window, bool enabled);
     public static void SetRunEnabled(bool enabled) { EnableWindow(runButton, enabled); }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -87,6 +89,7 @@ public static class SnowShotWingetWindowFixture {
 '@
 }
 $windows = [Collections.Generic.List[IntPtr]]::new()
+$foreground = [SnowShotWingetWindowFixture]::GetForegroundWindow()
 try {
     $container = [SnowShotWingetWindowFixture]::Create('Window Dialog', [IntPtr]::Zero, $true)
     $windows.Add($container)
@@ -133,6 +136,9 @@ try {
     }
     Write-Output 'PASS: WinGet owned launch warning discovery and inactive dialog consent with offscreen native windows.'
 } finally {
+    if ($foreground -ne [IntPtr]::Zero) {
+        $null = [SnowShotWingetWindowFixture]::SetForegroundWindow($foreground)
+    }
     for ($index = $windows.Count - 1; $index -ge 0; $index--) {
         $null = [SnowShotWingetWindowFixture]::DestroyWindow($windows[$index])
     }
