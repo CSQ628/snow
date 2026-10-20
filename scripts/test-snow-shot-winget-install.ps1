@@ -54,6 +54,7 @@ function Invoke-WingetBounded([string[]]$Arguments) {
     $stderr = $process.StandardError.ReadToEndAsync()
     $deadline = [DateTime]::UtcNow.AddSeconds(180)
     $dialog = $false
+    $reportedWarnings = [Collections.Generic.HashSet[IntPtr]]::new()
     while (-not $process.WaitForExit(1000)) {
         if ([DateTime]::UtcNow -ge $deadline) { break }
         $process.Refresh()
@@ -74,9 +75,12 @@ function Invoke-WingetBounded([string[]]$Arguments) {
                 if ((Get-FileHash -LiteralPath $cachedInstaller -Algorithm SHA256).Hash -ine $expectedHash) {
                     throw 'Refusing consent: the cached installer hash does not match the manifest.'
                 }
-                Write-Host ([WinGetWindowDiagnostics]::Read($window))
-                [WinGetWindowDiagnostics]::ConfirmVerifiedFile($window, $fileName)
-                Write-Host "Acknowledged Windows launch warning for verified $fileName."
+                if ($reportedWarnings.Add($window)) {
+                    Write-Host ([WinGetWindowDiagnostics]::Read($window))
+                }
+                if ([WinGetWindowDiagnostics]::ConfirmVerifiedFile($window, $fileName)) {
+                    Write-Host "Sent Windows launch consent for verified $fileName."
+                }
                 continue
             }
             if ($title -eq 'Window Dialog') {

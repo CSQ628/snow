@@ -117,7 +117,9 @@ try {
     if (-not $rejected -or [SnowShotWingetWindowFixture]::RunInvoked) {
         throw 'An unrelated installer must never receive consent.'
     }
-    [WinGetWindowDiagnostics]::ConfirmVerifiedFile($consent, $fileName)
+    if (-not [WinGetWindowDiagnostics]::ConfirmVerifiedFile($consent, $fileName)) {
+        throw 'The enabled Run button must accept verified consent.'
+    }
     if (-not [SnowShotWingetWindowFixture]::WaitForRun()) {
         throw 'Verified consent must reach an inactive owned dialog without foreground input.'
     }

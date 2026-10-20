@@ -10,8 +10,10 @@ public static class WinGetWindowDiagnostics {
     [DllImport("user32.dll")] private static extern bool EnumWindows(Callback callback, IntPtr data);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
-    [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr window);
-    [DllImport("user32.dll")] private static extern int GetDlgCtrlID(IntPtr window);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool AttachThreadInput(uint thread, uint other, bool attach);
+    [DllImport("user32.dll")] private static extern IntPtr SetActiveWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr window);
     [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr window, Callback callback, IntPtr data);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
@@ -42,7 +44,7 @@ public static class WinGetWindowDiagnostics {
         EnumChildWindows(window, callback, IntPtr.Zero);
         return string.Join(Environment.NewLine, lines);
     }
-    public static void ConfirmVerifiedFile(IntPtr window, string fileName) {
+    public static bool ConfirmVerifiedFile(IntPtr window, string fileName) {
         if (Read(window).IndexOf(fileName, StringComparison.OrdinalIgnoreCase) < 0)
             throw new InvalidOperationException("The launch warning does not identify the verified installer.");
         IntPtr runButton = IntPtr.Zero;
@@ -54,13 +56,23 @@ public static class WinGetWindowDiagnostics {
         }, IntPtr.Zero);
         if (runButton == IntPtr.Zero)
             throw new InvalidOperationException("Could not acknowledge the verified installer's Run button.");
-        // BM_CLICK can be ignored when the dialog is inactive. Send the button's
-        // BN_CLICKED notification to its parent without requiring foreground input.
-        int command = GetDlgCtrlID(runButton);
-        IntPtr parent = GetParent(runButton);
-        if (command <= 0 || command > 0xffff || parent == IntPtr.Zero ||
-            !PostMessage(parent, 0x0111, new IntPtr(command), runButton))
-            throw new InvalidOperationException("Could not notify the verified installer's Run command.");
+        // BM_CLICK requires an active dialog. Attach its input queue while
+        // activating it; a background warning can otherwise ignore the click.
+        uint currentThread = GetCurrentThreadId();
+        uint owner;
+        uint windowThread = GetWindowThreadProcessId(window, out owner);
+        bool attached = currentThread != windowThread;
+        if (attached && !AttachThreadInput(currentThread, windowThread, true))
+            throw new InvalidOperationException("Could not attach the verified installer's dialog input queue.");
+        try {
+            SetActiveWindow(window);
+            if (!IsWindowEnabled(runButton)) return false;
+            if (!PostMessage(runButton, 0x00F5, IntPtr.Zero, IntPtr.Zero))
+                throw new InvalidOperationException("Could not click the verified installer's Run button.");
+            return true;
+        } finally {
+            if (attached) AttachThreadInput(currentThread, windowThread, false);
+        }
     }
 }
 '@
