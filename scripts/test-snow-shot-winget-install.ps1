@@ -79,6 +79,9 @@ function Invoke-WingetBounded([string[]]$Arguments) {
                     Write-Host ([WinGetWindowDiagnostics]::Read($window))
                     Add-Type -AssemblyName UIAutomationClient
                     Add-Type -AssemblyName UIAutomationTypes
+                    Add-Type -AssemblyName UIAutomationClientSideProviders
+                    [Windows.Automation.ClientSettings]::RegisterClientSideProviderAssembly(
+                        [UIAutomationClientsideProviders.UIAutomationClientSideProviders].Assembly.GetName())
                     $warningElement = [Windows.Automation.AutomationElement]::FromHandle($window)
                     $warningElements = $warningElement.FindAll([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.Condition]::TrueCondition)
                     $runElement = $null
