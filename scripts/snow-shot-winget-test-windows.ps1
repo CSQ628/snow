@@ -68,6 +68,11 @@ public static class WinGetWindowDiagnostics {
         }
     }
     public static bool ConfirmVerifiedFile(IntPtr window, string fileName) {
+        return ConfirmVerifiedFile(window, fileName, TryActivate, IsWindowEnabled,
+            button => PostMessage(button, 0x00F5, IntPtr.Zero, IntPtr.Zero));
+    }
+    public static bool ConfirmVerifiedFile(IntPtr window, string fileName,
+        Func<IntPtr, bool> activate, Func<IntPtr, bool> enabled, Func<IntPtr, bool> click) {
         if (Read(window).IndexOf(fileName, StringComparison.OrdinalIgnoreCase) < 0)
             throw new InvalidOperationException("The launch warning does not identify the verified installer.");
         IntPtr runButton = IntPtr.Zero;
@@ -82,8 +87,8 @@ public static class WinGetWindowDiagnostics {
         // Match the repository's native UI activation path: SetActiveWindow alone
         // cannot activate a background process. BM_CLICK needs the actual dialog
         // in the foreground before its button can dispatch the Run action.
-        if (!TryActivate(window) || !IsWindowEnabled(runButton)) return false;
-        if (!PostMessage(runButton, 0x00F5, IntPtr.Zero, IntPtr.Zero))
+        if (!activate(window) || !enabled(runButton)) return false;
+        if (!click(runButton))
             throw new InvalidOperationException("Could not click the verified installer's Run button.");
         return true;
     }
