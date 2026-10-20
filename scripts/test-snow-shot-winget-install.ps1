@@ -77,9 +77,31 @@ function Invoke-WingetBounded([string[]]$Arguments) {
                 }
                 if ($reportedWarnings.Add($window)) {
                     Write-Host ([WinGetWindowDiagnostics]::Read($window))
-                }
-                if ([WinGetWindowDiagnostics]::ConfirmVerifiedFile($window, $fileName)) {
-                    Write-Host "Sent Windows launch consent for verified $fileName."
+                    Add-Type -AssemblyName UIAutomationClient
+                    Add-Type -AssemblyName UIAutomationTypes
+                    $warningElement = [Windows.Automation.AutomationElement]::FromHandle($window)
+                    $warningElements = $warningElement.FindAll([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.Condition]::TrueCondition)
+                    $runElement = $null
+                    foreach ($entry in $warningElements) {
+                        Write-Host "Warning UIA: $($entry.Current.ControlType.ProgrammaticName) class=$($entry.Current.ClassName) name=$($entry.Current.Name) enabled=$($entry.Current.IsEnabled) offscreen=$($entry.Current.IsOffscreen) bounds=$($entry.Current.BoundingRectangle)"
+                        if ($entry.Current.ControlType -eq [Windows.Automation.ControlType]::Button -and
+                            $entry.Current.Name.Replace('&', '').Trim() -eq 'Run' -and
+                            $entry.Current.IsEnabled -and -not $entry.Current.IsOffscreen) {
+                            $runElement = $entry
+                        }
+                    }
+                    if ([WinGetWindowDiagnostics]::Read($window).IndexOf($fileName, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                        throw 'The launch warning does not identify the verified installer.'
+                    }
+                    if ($runElement) {
+                        $invoke = $runElement.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+                        $invoke.Invoke()
+                        Write-Host "Invoked Windows UI Automation Run for verified $fileName."
+                    } else {
+                        $process.Kill($true)
+                        $process.WaitForExit()
+                        throw 'Diagnostic stop: no visible, enabled UI Automation Run button.'
+                    }
                 }
                 continue
             }
