@@ -113,8 +113,9 @@ function Invoke-WingetBounded([string[]]$Arguments) {
             continue
         }
         if ($process.MainWindowTitle -eq 'Window Dialog') {
-            if ($process.WaitForExit(2000)) { break }
-            Write-Host ([WinGetWindowDiagnostics]::Read($process.MainWindowHandle))
+            $dialogText = [WinGetWindowDiagnostics]::Read($process.MainWindowHandle)
+            if (-not (Test-SnowShotWingetInteractiveDialog $process.MainWindowTitle $dialogText)) { continue }
+            Write-Host $dialogText
             Add-Type -AssemblyName System.Windows.Forms
             $bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds
             $bitmap = [Drawing.Bitmap]::new($bounds.Width, $bounds.Height)

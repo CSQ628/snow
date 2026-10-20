@@ -1,5 +1,15 @@
 #Requires -Version 7.0
 # Desktop preparation for real installation tests, never for normal client provisioning.
+function Test-SnowShotWingetInteractiveDialog([string]$Title, [string]$Contents) {
+    # ShellExecute can expose a window with only this generic caption while its
+    # launch UI is initializing. Keep waiting for consent UI, exit, or the normal
+    # command deadline until there is actual dialog content to diagnose.
+    if ($Title -cne 'Window Dialog') { return $false }
+    $contentLines = @($Contents -split '\r?\n' |
+        Where-Object { $_.Trim() -and $_.Trim() -cne $Title })
+    return $contentLines.Count -gt 0
+}
+
 function Initialize-SnowShotWingetTestDesktop {
     if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows') {
         throw 'Desktop preparation requires a disposable GitHub-hosted Windows runner.'
