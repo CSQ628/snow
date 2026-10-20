@@ -15,6 +15,9 @@ mod gpu_startup;
 pub(crate) mod keyboard_hook;
 pub(crate) mod keyboard_overlay;
 pub(crate) mod keyboard_rasterizer;
+#[cfg(all(test, not(target_os = "macos")))]
+#[path = "macos/schedule.rs"]
+mod macos_schedule;
 pub(crate) mod mouse_hook;
 mod output_schedule;
 mod webcam;

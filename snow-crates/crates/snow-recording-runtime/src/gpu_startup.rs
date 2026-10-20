@@ -195,16 +195,20 @@ mod tests {
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
         let adapter = unsafe { factory.EnumAdapters1(0)? }.cast()?;
         let device = SharedDevice::create(&adapter)?;
+        // The software fixture's 16x16 frames are below AMF's supported encode size.
+        let size = (128, 128);
         let texture = device.texture(
-            16,
-            16,
+            size.0,
+            size.1,
             DXGI_FORMAT_R8G8B8A8_UNORM,
-            D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
         )?;
-        let processor = VideoProcessor::new(device.clone(), (16, 16), (16, 16), 30)?;
+        let processor = VideoProcessor::new(device.clone(), size, size, 30)?;
         let directory = tempfile::tempdir()?;
         for purpose in [ProbePurpose::LiveOutput, ProbePurpose::RecordingSource] {
             let mut config = settings(directory.path().join("unused.mp4"));
+            config.width = size.0;
+            config.height = size.1;
             config.execution_mode = ExportExecutionMode::HardwarePreferred;
             config.prefer_hardware_h264 = true;
             let mut diagnostics = Negotiation::default();
@@ -215,14 +219,14 @@ mod tests {
                 &mut diagnostics,
                 |pts, output| {
                     let _lock = device.lock();
-                    let pixels = vec![pts as u8 * 50; 16 * 16 * 4];
+                    let pixels = vec![pts as u8 * 50; (size.0 * size.1 * 4) as usize];
                     unsafe {
                         device.context().UpdateSubresource(
                             texture.raw(),
                             0,
                             None,
                             pixels.as_ptr().cast(),
-                            64,
+                            size.0 * 4,
                             0,
                         )
                     };
@@ -230,8 +234,8 @@ mod tests {
                         .blit(
                             &[VideoLayer {
                                 texture: texture.clone(),
-                                source: Rect::full((16, 16)),
-                                destination: Rect::full((16, 16)),
+                                source: Rect::full(size),
+                                destination: Rect::full(size),
                                 rotation: 0,
                                 alpha: false,
                             }],

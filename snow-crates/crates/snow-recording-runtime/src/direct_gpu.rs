@@ -1099,10 +1099,11 @@ mod tests {
         let _lock = device.lock();
         let output = (64, 48);
         for source in [output, (128, 96)] {
+            // Capture layers use source coordinates; the compositor owns the resize.
             let layer = downscale_pattern_layer(
                 &device,
                 source,
-                output,
+                source,
                 DownscalePattern::Checkerboard,
                 0,
                 0,
