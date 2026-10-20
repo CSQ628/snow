@@ -43,7 +43,8 @@ function Invoke-WingetBounded([string[]]$Arguments) {
     Write-Host "WinGet: $($Arguments -join ' ')"
     $info = [Diagnostics.ProcessStartInfo]::new($Winget)
     $info.UseShellExecute = $false
-    $info.CreateNoWindow = $true
+    $info.CreateNoWindow = $false
+    $info.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
     foreach ($argument in ($Arguments + @('--disable-interactivity', '--verbose-logs'))) {
@@ -77,36 +78,9 @@ function Invoke-WingetBounded([string[]]$Arguments) {
                 }
                 if ($reportedWarnings.Add($window)) {
                     Write-Host ([WinGetWindowDiagnostics]::Read($window))
-                    Add-Type -AssemblyName UIAutomationClient
-                    Add-Type -AssemblyName UIAutomationTypes
-                    Add-Type -AssemblyName UIAutomationClientSideProviders
-                    $null = [Windows.Automation.AutomationElement]::RootElement
-                    $providerMappings = [UIAutomationClientsideProviders.UIAutomationClientSideProviders].GetField(
-                        'ClientSideProviderDescriptionTable').GetValue($null)
-                    [Windows.Automation.ClientSettings]::RegisterClientSideProviders($providerMappings)
-                    $warningElement = [Windows.Automation.AutomationElement]::FromHandle($window)
-                    $warningElements = $warningElement.FindAll([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.Condition]::TrueCondition)
-                    $runElement = $null
-                    foreach ($entry in $warningElements) {
-                        Write-Host "Warning UIA: $($entry.Current.ControlType.ProgrammaticName) class=$($entry.Current.ClassName) name=$($entry.Current.Name) enabled=$($entry.Current.IsEnabled) offscreen=$($entry.Current.IsOffscreen) bounds=$($entry.Current.BoundingRectangle)"
-                        if ($entry.Current.ControlType -eq [Windows.Automation.ControlType]::Button -and
-                            $entry.Current.Name.Replace('&', '').Trim() -eq 'Run' -and
-                            $entry.Current.IsEnabled -and -not $entry.Current.IsOffscreen) {
-                            $runElement = $entry
-                        }
-                    }
-                    if ([WinGetWindowDiagnostics]::Read($window).IndexOf($fileName, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
-                        throw 'The launch warning does not identify the verified installer.'
-                    }
-                    if ($runElement) {
-                        $invoke = $runElement.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
-                        $invoke.Invoke()
-                        Write-Host "Invoked Windows UI Automation Run for verified $fileName."
-                    } else {
-                        $process.Kill($true)
-                        $process.WaitForExit()
-                        throw 'Diagnostic stop: no visible, enabled UI Automation Run button.'
-                    }
+                }
+                if ([WinGetWindowDiagnostics]::ConfirmVerifiedFile($window, $fileName)) {
+                    Write-Host "Sent Windows launch consent for verified $fileName."
                 }
                 continue
             }
