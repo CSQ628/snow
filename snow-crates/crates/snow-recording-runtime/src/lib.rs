@@ -7,7 +7,11 @@ pub mod error;
 pub mod recording;
 
 pub(crate) mod adapter;
+mod capture_failure;
 mod capture_policy;
+mod capture_queue;
+#[cfg(any(windows, test))]
+mod gpu_startup;
 pub(crate) mod keyboard_hook;
 pub(crate) mod keyboard_overlay;
 pub(crate) mod keyboard_rasterizer;
