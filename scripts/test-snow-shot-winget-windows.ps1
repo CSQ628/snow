@@ -28,6 +28,8 @@ public static class SnowShotWingetWindowFixture {
     private static extern IntPtr CreateWindowEx(uint extendedStyle, string className, string name,
         uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr data);
     [DllImport("user32.dll")] public static extern bool DestroyWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool EnableWindow(IntPtr window, bool enabled);
+    public static void SetRunEnabled(bool enabled) { EnableWindow(runButton, enabled); }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr CreateDialogIndirectParam(IntPtr instance, IntPtr template, IntPtr owner,
         DialogCallback callback, IntPtr data);
@@ -117,6 +119,12 @@ try {
     if (-not $rejected -or [SnowShotWingetWindowFixture]::RunInvoked) {
         throw 'An unrelated installer must never receive consent.'
     }
+    [SnowShotWingetWindowFixture]::SetRunEnabled($false)
+    if ([WinGetWindowDiagnostics]::ConfirmVerifiedFile($consent, $fileName) -or
+        [SnowShotWingetWindowFixture]::RunInvoked) {
+        throw 'A disabled Run button must keep waiting without claiming consent was sent.'
+    }
+    [SnowShotWingetWindowFixture]::SetRunEnabled($true)
     if (-not [WinGetWindowDiagnostics]::ConfirmVerifiedFile($consent, $fileName)) {
         throw 'The enabled Run button must accept verified consent.'
     }
