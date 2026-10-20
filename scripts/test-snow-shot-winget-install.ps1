@@ -21,7 +21,6 @@ if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows'
 $hostArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 if ($hostArchitecture -cne $Architecture) { throw 'WinGet lifecycle validation must run on the matching native Windows host.' }
 $product = Get-SnowShotEdition $Edition $Architecture
-$installerVariant = 'offline'
 $version = Get-SnowShotWingetVersion $Tag
 $previousVersion = if ($SkipUpgrade) { $version } else { Get-SnowShotWingetVersion $PreviousTag }
 if (-not $SkipUpgrade -and $version -eq $previousVersion) { throw 'The upgrade fixture requires two different releases.' }
@@ -38,13 +37,13 @@ Start-Transcript -Path (Join-Path $output 'installation.log')
 $app = $null
 $reputationPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
 $savedReputationPolicy = $null
+$savedAttachmentPolicy = $null
 . (Join-Path $PSScriptRoot 'snow-shot-winget-test-windows.ps1')
 function Invoke-WingetBounded([string[]]$Arguments) {
     Write-Host "WinGet: $($Arguments -join ' ')"
     $info = [Diagnostics.ProcessStartInfo]::new($Winget)
     $info.UseShellExecute = $false
-    $info.CreateNoWindow = $false
-    $info.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+    $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
     foreach ($argument in ($Arguments + @('--disable-interactivity', '--verbose-logs'))) {
@@ -55,38 +54,16 @@ function Invoke-WingetBounded([string[]]$Arguments) {
     $stderr = $process.StandardError.ReadToEndAsync()
     $deadline = [DateTime]::UtcNow.AddSeconds(180)
     $dialog = $false
-    $reportedWarnings = [Collections.Generic.HashSet[IntPtr]]::new()
     while (-not $process.WaitForExit(1000)) {
         if ([DateTime]::UtcNow -ge $deadline) { break }
         $process.Refresh()
         # Process.MainWindowHandle excludes owned dialogs, including launch warnings.
         foreach ($window in [WinGetWindowDiagnostics]::ForProcess($process.Id)) {
             $title = [WinGetWindowDiagnostics]::Title($window)
-            if ($AllowUnrecognizedRelease -and $title -eq 'Open File - Security Warning' -and
-                $Arguments[0] -in @('install', 'upgrade')) {
-                $manifestIndex = [Array]::IndexOf($Arguments, '--manifest')
-                if ($manifestIndex -lt 0) { throw 'Installer consent requires a validated local manifest.' }
-                $manifest = Get-Content -LiteralPath (Join-Path $Arguments[$manifestIndex + 1] "$($product.Winget).installer.yaml") -Raw
-                $packageVersion = [regex]::Match($manifest, "(?m)^PackageVersion: '([^']+)'$").Groups[1].Value
-                $nativeEntry = [regex]::Match($manifest, "(?ms)^  - Architecture: $Architecture\r?\n(?<entry>.*?)(?=^  - Architecture: |\z)").Groups['entry'].Value
-                $expectedHash = [regex]::Match($nativeEntry, '(?m)^    InstallerSha256: ([A-Fa-f0-9]{64})$').Groups[1].Value
-                if (-not $expectedHash) { throw 'The manifest has no matching native installer.' }
-                $fileName = "$($product.Product)-$packageVersion-windows-$Architecture-$installerVariant.exe"
-                $cachedInstaller = Join-Path $env:TEMP "WinGet/$($product.Winget).$packageVersion/$fileName"
-                if ((Get-FileHash -LiteralPath $cachedInstaller -Algorithm SHA256).Hash -ine $expectedHash) {
-                    throw 'Refusing consent: the cached installer hash does not match the manifest.'
-                }
-                if ($reportedWarnings.Add($window)) {
-                    Write-Host ([WinGetWindowDiagnostics]::Read($window))
-                }
-                if ([WinGetWindowDiagnostics]::ConfirmVerifiedFile($window, $fileName)) {
-                    Write-Host "Sent Windows launch consent for verified $fileName."
-                }
-                continue
-            }
-            if ($title -eq 'Window Dialog') {
+            if ($title -in @('Window Dialog', 'Open File - Security Warning')) {
                 $dialogText = [WinGetWindowDiagnostics]::Read($window)
-                if (-not (Test-SnowShotWingetInteractiveDialog $title $dialogText)) { continue }
+                if ($title -eq 'Window Dialog' -and
+                    -not (Test-SnowShotWingetInteractiveDialog $title $dialogText)) { continue }
                 Write-Host $dialogText
                 Add-Type -AssemblyName System.Windows.Forms
                 $bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -151,6 +128,7 @@ try {
         $savedReputationPolicy = @{ Present = ($null -ne $property); Value = if ($property) { $property.Value } else { 0 } }
         if (-not (Test-Path -LiteralPath $reputationPolicy)) { $null = New-Item -Path $reputationPolicy -Force }
         $null = New-ItemProperty -LiteralPath $reputationPolicy -Name EnableSmartScreen -Value 0 -PropertyType DWord -Force
+        $savedAttachmentPolicy = Enable-SnowShotWingetTestAttachmentConsent
         Write-Host 'Temporarily allowing unsigned release fixtures in this disposable VM; hash verification remains enabled.'
     }
     & $Winget settings --enable LocalManifestFiles
@@ -255,6 +233,7 @@ try {
     Write-Output "PASS: real native $Architecture WinGet install, detection, upgrade when requested, uninstall, reinstall, and data preservation."
 } finally {
     if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id }
+    if ($savedAttachmentPolicy) { Restore-SnowShotWingetTestAttachmentConsent $savedAttachmentPolicy }
     if ($savedReputationPolicy) {
         if ($savedReputationPolicy.Present) {
             $null = New-ItemProperty -LiteralPath $reputationPolicy -Name EnableSmartScreen `

@@ -75,7 +75,7 @@ try {
     Require (Test-SnowShotWingetInteractiveDialog 'Window Dialog' "Window Dialog`nCannot launch this app.`nClose") `
         'An interactive launch failure must still fail unattended installation.'
     Require (-not (Test-SnowShotWingetInteractiveDialog 'Open File - Security Warning' 'Run')) `
-        'The verified installer security warning has its own consent handling.'
+        'The security warning must be diagnosed separately from the generic shell container.'
 
     foreach ($hostCase in @(
         @{ Environment = ''; OS = 'Windows' },
