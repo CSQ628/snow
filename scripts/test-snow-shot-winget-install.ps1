@@ -38,43 +38,7 @@ Start-Transcript -Path (Join-Path $output 'installation.log')
 $app = $null
 $reputationPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
 $savedReputationPolicy = $null
-Add-Type @'
-using System;
-using System.Text;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-public static class WinGetWindowDiagnostics {
-    private delegate bool Callback(IntPtr window, IntPtr data);
-    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr window, Callback callback, IntPtr data);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
-    [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
-    public static string Read(IntPtr window) {
-        var lines = new List<string>();
-        Callback callback = (child, data) => {
-            var text = new StringBuilder(2048);
-            GetWindowText(child, text, text.Capacity);
-            if (text.Length > 0) lines.Add(text.ToString());
-            return true;
-        };
-        callback(window, IntPtr.Zero);
-        EnumChildWindows(window, callback, IntPtr.Zero);
-        return string.Join(Environment.NewLine, lines);
-    }
-    public static void ConfirmVerifiedFile(IntPtr window, string fileName) {
-        if (Read(window).IndexOf(fileName, StringComparison.OrdinalIgnoreCase) < 0)
-            throw new InvalidOperationException("The launch warning does not identify the verified installer.");
-        IntPtr runButton = IntPtr.Zero;
-        EnumChildWindows(window, (child, data) => {
-            var text = new StringBuilder(2048);
-            GetWindowText(child, text, text.Capacity);
-            if (text.ToString().Replace("&", "").Trim() == "Run") runButton = child;
-            return true;
-        }, IntPtr.Zero);
-        if (runButton == IntPtr.Zero || !PostMessage(runButton, 0x00F5, IntPtr.Zero, IntPtr.Zero))
-            throw new InvalidOperationException("Could not acknowledge the verified installer's Run button.");
-    }
-}
-'@
+. (Join-Path $PSScriptRoot 'snow-shot-winget-test-windows.ps1')
 function Invoke-WingetBounded([string[]]$Arguments) {
     Write-Host "WinGet: $($Arguments -join ' ')"
     $info = [Diagnostics.ProcessStartInfo]::new($Winget)
@@ -94,53 +58,58 @@ function Invoke-WingetBounded([string[]]$Arguments) {
     while (-not $process.WaitForExit(1000)) {
         if ([DateTime]::UtcNow -ge $deadline) { break }
         $process.Refresh()
-        if ($AllowUnrecognizedRelease -and $process.MainWindowTitle -eq 'Open File - Security Warning' -and
-            $Arguments[0] -in @('install', 'upgrade')) {
-            $manifestIndex = [Array]::IndexOf($Arguments, '--manifest')
-            if ($manifestIndex -lt 0) { throw 'Installer consent requires a validated local manifest.' }
-            $manifest = Get-Content -LiteralPath (Join-Path $Arguments[$manifestIndex + 1] "$($product.Winget).installer.yaml") -Raw
-            $packageVersion = [regex]::Match($manifest, "(?m)^PackageVersion: '([^']+)'$").Groups[1].Value
-            $nativeEntry = [regex]::Match($manifest, "(?ms)^  - Architecture: $Architecture\r?\n(?<entry>.*?)(?=^  - Architecture: |\z)").Groups['entry'].Value
-            $expectedHash = [regex]::Match($nativeEntry, '(?m)^    InstallerSha256: ([A-Fa-f0-9]{64})$').Groups[1].Value
-            if (-not $expectedHash) { throw 'The manifest has no matching native installer.' }
-            $fileName = "$($product.Product)-$packageVersion-windows-$Architecture-$installerVariant.exe"
-            $cachedInstaller = Join-Path $env:TEMP "WinGet/$($product.Winget).$packageVersion/$fileName"
-            if ((Get-FileHash -LiteralPath $cachedInstaller -Algorithm SHA256).Hash -ine $expectedHash) {
-                throw 'Refusing consent: the cached installer hash does not match the manifest.'
+        # Process.MainWindowHandle excludes owned dialogs, including launch warnings.
+        foreach ($window in [WinGetWindowDiagnostics]::ForProcess($process.Id)) {
+            $title = [WinGetWindowDiagnostics]::Title($window)
+            if ($AllowUnrecognizedRelease -and $title -eq 'Open File - Security Warning' -and
+                $Arguments[0] -in @('install', 'upgrade')) {
+                $manifestIndex = [Array]::IndexOf($Arguments, '--manifest')
+                if ($manifestIndex -lt 0) { throw 'Installer consent requires a validated local manifest.' }
+                $manifest = Get-Content -LiteralPath (Join-Path $Arguments[$manifestIndex + 1] "$($product.Winget).installer.yaml") -Raw
+                $packageVersion = [regex]::Match($manifest, "(?m)^PackageVersion: '([^']+)'$").Groups[1].Value
+                $nativeEntry = [regex]::Match($manifest, "(?ms)^  - Architecture: $Architecture\r?\n(?<entry>.*?)(?=^  - Architecture: |\z)").Groups['entry'].Value
+                $expectedHash = [regex]::Match($nativeEntry, '(?m)^    InstallerSha256: ([A-Fa-f0-9]{64})$').Groups[1].Value
+                if (-not $expectedHash) { throw 'The manifest has no matching native installer.' }
+                $fileName = "$($product.Product)-$packageVersion-windows-$Architecture-$installerVariant.exe"
+                $cachedInstaller = Join-Path $env:TEMP "WinGet/$($product.Winget).$packageVersion/$fileName"
+                if ((Get-FileHash -LiteralPath $cachedInstaller -Algorithm SHA256).Hash -ine $expectedHash) {
+                    throw 'Refusing consent: the cached installer hash does not match the manifest.'
+                }
+                Write-Host ([WinGetWindowDiagnostics]::Read($window))
+                [WinGetWindowDiagnostics]::ConfirmVerifiedFile($window, $fileName)
+                Write-Host "Acknowledged Windows launch warning for verified $fileName."
+                continue
             }
-            Write-Host ([WinGetWindowDiagnostics]::Read($process.MainWindowHandle))
-            [WinGetWindowDiagnostics]::ConfirmVerifiedFile($process.MainWindowHandle, $fileName)
-            Write-Host "Acknowledged Windows launch warning for verified $fileName."
-            continue
-        }
-        if ($process.MainWindowTitle -eq 'Window Dialog') {
-            $dialogText = [WinGetWindowDiagnostics]::Read($process.MainWindowHandle)
-            if (-not $reportedLaunchWindow) {
-                $reportedLaunchWindow = $true
-                Write-Host "Launch window Win32 text: $dialogText"
+            if ($title -eq 'Window Dialog') {
+                $dialogText = [WinGetWindowDiagnostics]::Read($window)
+                if (-not $reportedLaunchWindow) {
+                    $reportedLaunchWindow = $true
+                    Write-Host "Launch window Win32 text: $dialogText"
+                    try {
+                        Add-Type -AssemblyName UIAutomationClient
+                        Add-Type -AssemblyName UIAutomationTypes
+                        $element = [Windows.Automation.AutomationElement]::FromHandle($window)
+                        $elements = $element.FindAll([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.Condition]::TrueCondition)
+                        foreach ($entry in $elements) {
+                            Write-Host "Launch UIA: $($entry.Current.ControlType.ProgrammaticName) class=$($entry.Current.ClassName) name=$($entry.Current.Name) offscreen=$($entry.Current.IsOffscreen)"
+                        }
+                    } catch { Write-Host "Launch UIA diagnostics failed: $_" }
+                }
+                if (-not (Test-SnowShotWingetInteractiveDialog $title $dialogText)) { continue }
+                Write-Host $dialogText
+                Add-Type -AssemblyName System.Windows.Forms
+                $bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+                $bitmap = [Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
+                $graphics = [Drawing.Graphics]::FromImage($bitmap)
                 try {
-                    Add-Type -AssemblyName UIAutomationClient
-                    Add-Type -AssemblyName UIAutomationTypes
-                    $element = [Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
-                    $elements = $element.FindAll([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.Condition]::TrueCondition)
-                    foreach ($entry in $elements) {
-                        Write-Host "Launch UIA: $($entry.Current.ControlType.ProgrammaticName) class=$($entry.Current.ClassName) name=$($entry.Current.Name) offscreen=$($entry.Current.IsOffscreen)"
-                    }
-                } catch { Write-Host "Launch UIA diagnostics failed: $_" }
+                    $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size)
+                    $bitmap.Save((Join-Path $output 'blocking-dialog.png'), [Drawing.Imaging.ImageFormat]::Png)
+                } finally { $graphics.Dispose(); $bitmap.Dispose() }
+                $dialog = $true
+                break
             }
-            if (-not (Test-SnowShotWingetInteractiveDialog $process.MainWindowTitle $dialogText)) { continue }
-            Write-Host $dialogText
-            Add-Type -AssemblyName System.Windows.Forms
-            $bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $bitmap = [Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
-            $graphics = [Drawing.Graphics]::FromImage($bitmap)
-            try {
-                $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size)
-                $bitmap.Save((Join-Path $output 'blocking-dialog.png'), [Drawing.Imaging.ImageFormat]::Png)
-            } finally { $graphics.Dispose(); $bitmap.Dispose() }
-            $dialog = $true
-            break
         }
+        if ($dialog) { break }
         if ([DateTime]::UtcNow -ge $deadline) { break }
     }
     if (-not $process.HasExited) {
