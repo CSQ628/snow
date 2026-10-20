@@ -54,7 +54,6 @@ function Invoke-WingetBounded([string[]]$Arguments) {
     $stderr = $process.StandardError.ReadToEndAsync()
     $deadline = [DateTime]::UtcNow.AddSeconds(180)
     $dialog = $false
-    $reportedLaunchWindow = $false
     while (-not $process.WaitForExit(1000)) {
         if ([DateTime]::UtcNow -ge $deadline) { break }
         $process.Refresh()
@@ -82,19 +81,6 @@ function Invoke-WingetBounded([string[]]$Arguments) {
             }
             if ($title -eq 'Window Dialog') {
                 $dialogText = [WinGetWindowDiagnostics]::Read($window)
-                if (-not $reportedLaunchWindow) {
-                    $reportedLaunchWindow = $true
-                    Write-Host "Launch window Win32 text: $dialogText"
-                    try {
-                        Add-Type -AssemblyName UIAutomationClient
-                        Add-Type -AssemblyName UIAutomationTypes
-                        $element = [Windows.Automation.AutomationElement]::FromHandle($window)
-                        $elements = $element.FindAll([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.Condition]::TrueCondition)
-                        foreach ($entry in $elements) {
-                            Write-Host "Launch UIA: $($entry.Current.ControlType.ProgrammaticName) class=$($entry.Current.ClassName) name=$($entry.Current.Name) offscreen=$($entry.Current.IsOffscreen)"
-                        }
-                    } catch { Write-Host "Launch UIA diagnostics failed: $_" }
-                }
                 if (-not (Test-SnowShotWingetInteractiveDialog $title $dialogText)) { continue }
                 Write-Host $dialogText
                 Add-Type -AssemblyName System.Windows.Forms
