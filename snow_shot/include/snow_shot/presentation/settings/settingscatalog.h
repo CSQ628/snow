@@ -175,6 +175,7 @@ enum class SettingsSwitchBinding {
     McpEnabled,
     AutoStartAtBoot,
     LaunchAsAdministrator,
+    DrawingDeleteTextAfterCursor,
     DrawingRememberLastUsedTool,
     DrawingAlwaysShowFirstToolbarGroupButton,
 };

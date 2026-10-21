@@ -1007,6 +1007,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
     case SettingsSwitchBinding::LaunchAsAdministrator:
         return !app::distribution::isStoreManaged() &&
                storage::SystemSettings().launchAsAdministrator();
+    case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
+        return storage::DrawingSettings().deleteTextAfterCursor();
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
         return storage::DrawingSettings().rememberLastUsedTool();
     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
@@ -1210,6 +1212,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard) {
         return storage::ScreenshotSettings().setCopyImageFileToClipboard(value);
     }
+    if (binding == SettingsSwitchBinding::DrawingDeleteTextAfterCursor) {
+        return storage::DrawingSettings().setDeleteTextAfterCursor(value);
+    }
     if (binding == SettingsSwitchBinding::DrawingRememberLastUsedTool) {
         return storage::DrawingSettings().setRememberLastUsedTool(value);
     }
@@ -1395,6 +1400,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::McpEnabled:
     case SettingsSwitchBinding::AutoStartAtBoot:
     case SettingsSwitchBinding::LaunchAsAdministrator:
+    case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
         return false;
@@ -2733,6 +2739,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("drawing/quick_selection_disabled_tools"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("drawing/quick_selection_disabled_tools"))},
+            {QStringLiteral("drawing/delete_text_after_cursor"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("drawing/delete_text_after_cursor"))},
             {QStringLiteral("drawing/remember_last_used_tool"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("drawing/remember_last_used_tool"))},

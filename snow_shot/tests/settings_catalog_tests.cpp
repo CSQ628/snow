@@ -602,9 +602,9 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 292,
+    require(itemIds.size() == 293,
             qPrintable(QStringLiteral(
-                           "catalog must contain 292 shared settings on every platform; found %1")
+                           "catalog must contain 293 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
@@ -1055,6 +1055,23 @@ void builtInCatalogIsCompleteAndValid() {
                       QStringLiteral("drawing.always-show-first-toolbar-group-button")});
     const auto& drawingSettingsSection =
         *catalog.section(QStringLiteral("screenshots"), QStringLiteral("drawing-settings"));
+    const auto* deleteTextAfterCursor =
+        catalog.item({QStringLiteral("screenshots"), QStringLiteral("drawing-settings"),
+                      QStringLiteral("drawing.delete-text-after-cursor")});
+    require(
+        deleteTextAfterCursor != nullptr &&
+            deleteTextAfterCursor->title.translated() ==
+                QStringLiteral("Delete text after the cursor") &&
+            deleteTextAfterCursor->configurationKey ==
+                QStringLiteral("drawing/delete_text_after_cursor") &&
+            std::get<settings::SettingsSwitchDefinition>(deleteTextAfterCursor->payload).binding ==
+                settings::SettingsSwitchBinding::DrawingDeleteTextAfterCursor &&
+            !storage::ConfigurationSchema::defaultValue(deleteTextAfterCursor->configurationKey)
+                 .toBool() &&
+            drawingSettingsSection.items.at(0).id ==
+                QStringLiteral("drawing.quick-selection-disabled-tools") &&
+            drawingSettingsSection.items.at(1).id == deleteTextAfterCursor->id,
+        "the default-off Delete text switch must immediately follow quick selection");
     require(
         firstToolbarGroupButton != nullptr &&
             firstToolbarGroupButton->configurationKey ==
@@ -1064,9 +1081,9 @@ void builtInCatalogIsCompleteAndValid() {
                 settings::SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton &&
             !storage::ConfigurationSchema::defaultValue(firstToolbarGroupButton->configurationKey)
                  .toBool() &&
-            drawingSettingsSection.items.size() == 5 &&
-            drawingSettingsSection.items.at(1).id == rememberLastUsedTool->id &&
-            drawingSettingsSection.items.at(2).id == firstToolbarGroupButton->id,
+            drawingSettingsSection.items.size() == 6 &&
+            drawingSettingsSection.items.at(2).id == rememberLastUsedTool->id &&
+            drawingSettingsSection.items.at(3).id == firstToolbarGroupButton->id,
         "the default-off first toolbar group button switch must follow Remember last used tool");
     const auto& paletteRegistry = settings::builtInSettingsRegistry();
     for (const auto binding : {settings::SettingsColorPaletteBinding::StrokeColors,
