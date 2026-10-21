@@ -6328,17 +6328,17 @@ void ScreenshotPinnedWindow::copyRenderedImage(std::shared_ptr<ScreenshotExportA
     if (copyFile) {
         if (!artifact->requestClipboardFile(
                 this, format, filenameFormat, encoding,
-                [this, current, finish, copyError, committed](std::unique_ptr<QMimeData> mime,
-                                                              QString error) {
+                [this, current, finish, copyError,
+                 committed](ScreenshotExportClipboardResult prepared) {
                     if (!current())
                         return;
-                    if (!mime) {
-                        copyError(error);
+                    if (!prepared.succeeded()) {
+                        copyError(prepared.error);
                         finish();
                         return;
                     }
-                    m_clipboardCommit = ScreenshotClipboardService::commitMimeData(
-                        QApplication::clipboard(), this, mime.release(), committed);
+                    m_clipboardCommit = ScreenshotClipboardService::commit(
+                        QApplication::clipboard(), this, std::move(prepared.payload), committed);
                     if (!m_clipboardCommit.isValid()) {
                         copyError(
                             translatePinnedText("The pinned image copy could not be started"));
