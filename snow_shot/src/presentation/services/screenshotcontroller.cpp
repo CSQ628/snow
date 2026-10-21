@@ -3861,7 +3861,7 @@ void ScreenshotController::Impl::pinClipboardContentToScreen() {
     for (int attempt = 0; attempt < 2; ++attempt) {
         const auto revision = screenshotClipboardRevision();
         const auto* mime = QApplication::clipboard()->mimeData();
-        paths = ScreenshotClipboardContentReader::localFilePaths(mime);
+        paths = ScreenshotClipboardContentReader::filePathsForImport(mime);
         filePlacement = snapshotScreenshotClipboardPlacement(QApplication::clipboard());
         fileAppearance = snapshotScreenshotClipboardAppearance(QApplication::clipboard());
         if (revision == screenshotClipboardRevision())
@@ -4522,7 +4522,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
