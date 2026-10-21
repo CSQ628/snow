@@ -1462,7 +1462,7 @@ SettingsItemDefinition screenshotCopyFileItem() {
         QStringLiteral("screenshot.copy-image-file-to-clipboard"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Copy image file to clipboard"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Write the image to a file and copy that file to the clipboard"),
+                          "Copy both the image and its exported file to the clipboard"),
         QStringLiteral("screenshot/copy_image_file_to_clipboard"),
         SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard);
 }
@@ -2791,7 +2791,7 @@ QVector<SettingsItemDefinition> pinToScreenShortcutItems() {
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen,
                           QStringLiteral("flip_horizontal"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Flip horizontally"),
-                          []() { return outlined_icons::Swap(); }),
+                          []() { return custom_outlined_icons::FlipHorizontal(); }),
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen, QStringLiteral("flip_vertical"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Flip vertically"),
                           []() { return custom_outlined_icons::FlipVertical(); }),
@@ -4034,8 +4034,9 @@ QVector<SettingsPageDefinition> builtInPages() {
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
              {QStringLiteral("text-translation"),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Translation services")),
-              settingsText(QT_TRANSLATE_NOOP(
-                  "SettingsCatalog", "Custom DeepL, Baidu, and Youdao-compatible services")),
+              settingsText(
+                  QT_TRANSLATE_NOOP("SettingsCatalog",
+                                    "Custom DeepL, DeepLX, Baidu, and Youdao-compatible services")),
               SettingsSectionReset::TextTranslationConfigurations,
               {{QStringLiteral("api.text-translation"),
                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Translation Configurations")),

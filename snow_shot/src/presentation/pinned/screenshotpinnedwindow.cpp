@@ -3811,8 +3811,8 @@ void ScreenshotPinnedWindow::createContextMenu() {
                 QStringLiteral("screenshotPinnedRotateCounterClockwiseAction"));
             connect(rotateCounterClockwise, &QAction::triggered, this,
                     [this]() { executeImageCommand(QStringLiteral("rotate_counterclockwise")); });
-            QAction* flipHorizontal =
-                processMenu->addItem(tr("Flip horizontally"), outlined_icons::Swap());
+            QAction* flipHorizontal = processMenu->addItem(tr("Flip horizontally"),
+                                                           custom_outlined_icons::FlipHorizontal());
             setActionTranslationSource(flipHorizontal, "Flip horizontally");
             flipHorizontal->setObjectName(QStringLiteral("screenshotPinnedFlipHorizontalAction"));
             connect(flipHorizontal, &QAction::triggered, this,
@@ -6330,17 +6330,17 @@ void ScreenshotPinnedWindow::copyRenderedImage(std::shared_ptr<ScreenshotExportA
     if (copyFile) {
         if (!artifact->requestClipboardFile(
                 this, format, filenameFormat, encoding,
-                [this, current, finish, copyError, committed](std::unique_ptr<QMimeData> mime,
-                                                              QString error) {
+                [this, current, finish, copyError,
+                 committed](ScreenshotExportClipboardResult prepared) {
                     if (!current())
                         return;
-                    if (!mime) {
-                        copyError(error);
+                    if (!prepared.succeeded()) {
+                        copyError(prepared.error);
                         finish();
                         return;
                     }
-                    m_clipboardCommit = ScreenshotClipboardService::commitMimeData(
-                        QApplication::clipboard(), this, mime.release(), committed);
+                    m_clipboardCommit = ScreenshotClipboardService::commit(
+                        QApplication::clipboard(), this, std::move(prepared.payload), committed);
                     if (!m_clipboardCommit.isValid()) {
                         copyError(
                             translatePinnedText("The pinned image copy could not be started"));
@@ -6754,7 +6754,7 @@ void ScreenshotPinnedWindow::loadClipboardContent() {
         return;
     }
     const QStringList paths =
-        ScreenshotClipboardContentReader::localFilePaths(m_clipboard->mimeData());
+        ScreenshotClipboardContentReader::filePathsForImport(m_clipboard->mimeData());
     if (!paths.isEmpty()) {
         requestContentReplacement(paths);
     } else {
@@ -7147,7 +7147,7 @@ void ScreenshotPinnedWindow::printContent() {
                 {{QStringLiteral("request_kind"), QStringLiteral("pinned")},
                  {QStringLiteral("operation"), QString::number(replacement)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,

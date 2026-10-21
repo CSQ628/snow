@@ -1908,6 +1908,10 @@
             <translation>将应用设置以 zip 归档形式复制到剪贴板</translation>
         </message>
         <message>
+            <source>Copy both the image and its exported file to the clipboard</source>
+            <translation>将图像及其导出的文件同时复制到剪贴板</translation>
+        </message>
+        <message>
             <source>Copy color</source>
             <translation>复制颜色</translation>
         </message>
@@ -1992,8 +1996,8 @@
             <translation>自定义 AI 模型</translation>
         </message>
         <message>
-            <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
-            <translation>自定义兼容 DeepL、百度和有道的服务</translation>
+            <source>Custom DeepL, DeepLX, Baidu, and Youdao-compatible services</source>
+            <translation>自定义兼容 DeepL、DeepLX、百度和有道的服务</translation>
         </message>
         <message>
             <source>Custom Models</source>
@@ -4660,10 +4664,6 @@
             <translation>Windows 右键菜单</translation>
         </message>
         <message>
-            <source>Write the image to a file and copy that file to the clipboard</source>
-            <translation>将图像写入文件并将该文件复制到剪贴板</translation>
-        </message>
-        <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
             <translation>Zip 压缩包 (*.zip);;所有文件 (*.*)</translation>
         </message>
@@ -5281,6 +5281,10 @@ Unavailable: %2</source>
             <translation>DeepL</translation>
         </message>
         <message>
+            <source>DeepLX</source>
+            <translation>DeepLX</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>删除</translation>
         </message>
@@ -5315,6 +5319,10 @@ Unavailable: %2</source>
         <message>
             <source>No translation configurations added</source>
             <translation>尚未添加翻译配置</translation>
+        </message>
+        <message>
+            <source>Optional access token sent as a Bearer token.</source>
+            <translation>可选的访问令牌，以 Bearer 令牌形式发送。</translation>
         </message>
         <message>
             <source>Optional for servers that do not require authentication.</source>

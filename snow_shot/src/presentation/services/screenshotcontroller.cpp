@@ -109,7 +109,7 @@
 #include "../recording/screenshotrecordingworkflow.h"
 #include "../capture/windowcaptureexclusion.h"
 #include "../capture/windowinputtransparency.h"
-#include "../capture/screenshotcapturemodalcloser.h"
+#include "../capture/screenshotcaptureinputblockers.h"
 
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
@@ -1769,7 +1769,7 @@ void ScreenshotController::Impl::startHistoryEdit(const QString& recordId) {
         m_captureWorkflow == nullptr || m_historyService == nullptr) {
         return;
     }
-    if (!snow_shot::presentation::closeActiveCaptureModalWindows()) {
+    if (!snow_shot::presentation::closeCaptureInputBlockers()) {
         return;
     }
 
@@ -3861,7 +3861,7 @@ void ScreenshotController::Impl::pinClipboardContentToScreen() {
     for (int attempt = 0; attempt < 2; ++attempt) {
         const auto revision = screenshotClipboardRevision();
         const auto* mime = QApplication::clipboard()->mimeData();
-        paths = ScreenshotClipboardContentReader::localFilePaths(mime);
+        paths = ScreenshotClipboardContentReader::filePathsForImport(mime);
         filePlacement = snapshotScreenshotClipboardPlacement(QApplication::clipboard());
         fileAppearance = snapshotScreenshotClipboardAppearance(QApplication::clipboard());
         if (revision == screenshotClipboardRevision())
@@ -4522,7 +4522,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -5237,25 +5237,25 @@ void ScreenshotController::Impl::saveArtifactForCopy(
     const bool scheduled = artifact->requestClipboardFile(
         &owner, output.file.format, output.file.filenameFormat, output.file.encoding,
         [receiver, artifact, generation, historySource, historyCandidate,
-         scrolling](std::unique_ptr<QMimeData> mime, QString error) mutable {
+         scrolling](ScreenshotExportClipboardResult prepared) mutable {
             if (receiver.isNull() || receiver->m_impl == nullptr ||
                 !receiver->m_impl->imageExportCurrent(generation))
                 return;
             auto& impl = *receiver->m_impl;
-            if (!mime) {
+            if (!prepared.succeeded()) {
                 if (impl.imageExportNotificationCurrent(generation)) {
                     impl.m_messages->error(
                         QString::fromLatin1(kCopyMessageKey),
                         QCoreApplication::translate("ScreenshotController",
                                                     "The screenshot could not be copied: %1")
-                            .arg(error));
+                            .arg(prepared.error));
                 }
                 impl.completeCopyExport(false, generation, historySource, historyCandidate,
                                         scrolling, artifact);
                 return;
             }
-            const auto handle = impl.m_clipboardScope.commitMimeData(
-                QApplication::clipboard(), receiver, mime.release(),
+            const auto handle = impl.m_clipboardScope.commit(
+                QApplication::clipboard(), receiver, std::move(prepared.payload),
                 [receiver, artifact, generation, historySource, historyCandidate,
                  scrolling](ScreenshotClipboardCommitResult commit) mutable {
                     if (receiver.isNull() || receiver->m_impl == nullptr ||
@@ -5884,7 +5884,7 @@ bool ScreenshotController::Impl::canBeginCapture() const {
 
 bool ScreenshotController::Impl::beginCapture(PendingSelectionAction action,
                                               ScreenshotCaptureWorkflow::StartMode mode) {
-    if (!canBeginCapture() || !snow_shot::presentation::closeActiveCaptureModalWindows()) {
+    if (!canBeginCapture() || !snow_shot::presentation::closeCaptureInputBlockers()) {
         return false;
     }
 

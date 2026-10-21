@@ -1908,6 +1908,10 @@
             <translation>將應用程式設定以 zip 封存檔形式複製到剪貼簿</translation>
         </message>
         <message>
+            <source>Copy both the image and its exported file to the clipboard</source>
+            <translation>將影像及其匯出的檔案同時複製到剪貼簿</translation>
+        </message>
+        <message>
             <source>Copy color</source>
             <translation>複製色彩</translation>
         </message>
@@ -1992,8 +1996,8 @@
             <translation>自訂 AI 模型</translation>
         </message>
         <message>
-            <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
-            <translation>自訂相容 DeepL、百度和有道的服務</translation>
+            <source>Custom DeepL, DeepLX, Baidu, and Youdao-compatible services</source>
+            <translation>自訂相容 DeepL、DeepLX、百度和有道的服務</translation>
         </message>
         <message>
             <source>Custom Models</source>
@@ -4660,10 +4664,6 @@
             <translation>Windows 右鍵選單</translation>
         </message>
         <message>
-            <source>Write the image to a file and copy that file to the clipboard</source>
-            <translation>將影像寫入檔案並將該檔案複製到剪貼簿</translation>
-        </message>
-        <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
             <translation>Zip 壓縮檔 (*.zip);;所有檔案 (*.*)</translation>
         </message>
@@ -5281,6 +5281,10 @@ Unavailable: %2</source>
             <translation>DeepL</translation>
         </message>
         <message>
+            <source>DeepLX</source>
+            <translation>DeepLX</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>刪除</translation>
         </message>
@@ -5315,6 +5319,10 @@ Unavailable: %2</source>
         <message>
             <source>No translation configurations added</source>
             <translation>尚未新增翻譯設定</translation>
+        </message>
+        <message>
+            <source>Optional access token sent as a Bearer token.</source>
+            <translation>選填的存取權杖，以 Bearer 權杖形式傳送。</translation>
         </message>
         <message>
             <source>Optional for servers that do not require authentication.</source>

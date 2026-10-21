@@ -154,6 +154,11 @@ add_library(snow_shot_canvas_status_readout STATIC
     src/presentation/components/canvasstatusreadout.cpp)
 target_include_directories(snow_shot_canvas_status_readout PUBLIC include)
 target_link_libraries(snow_shot_canvas_status_readout PUBLIC Qt6::Widgets)
+
+add_library(snow_shot_recording_effects_source STATIC
+    src/presentation/recording/recordingeffectssource.cpp
+    src/presentation/recording/recordingeffectssource.h)
+target_link_libraries(snow_shot_recording_effects_source PUBLIC Qt6::Gui snow_recording_effects_c)
 if(APPLE)
     add_library(snow_shot_macos_clipboard STATIC src/platform/macos/imageclipboard.mm)
     target_link_libraries(snow_shot_macos_clipboard PUBLIC Qt6::Gui
@@ -2077,6 +2082,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_MCP_TEST_FIXTURE=1)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_CONTROLLER_LIFETIME_TESTS=1)
     target_sources(snow_shot PRIVATE tests/screenshot_controller_lifetime_tests.cpp
+        tests/screenshot_controller_clipboard_tests.cpp
         tests/mcp_application_lifecycle_tests.cpp)
     snow_shot_import_offscreen_platform(snow_shot)
 endif()
@@ -3584,6 +3590,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-system-tray-controller-tests --group-refresh-only -platform offscreen)
     add_test(NAME snow-shot-tray-menu-position-tests
         COMMAND snow-shot-system-tray-controller-tests --menu-position-only -platform offscreen)
+    add_test(NAME snow-shot-tray-capture-input-tests
+        COMMAND snow-shot-system-tray-controller-tests --capture-input-only -platform offscreen)
+    set_tests_properties(snow-shot-tray-capture-input-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30 SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-tray-menu-selection-tests
         COMMAND snow-shot-system-tray-controller-tests --configured-menu-only -platform offscreen)
     add_test(NAME snow-shot-tray-fullscreen-suppression-tests
@@ -4157,15 +4169,16 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-capture-workflow-tests
     )
 
-    add_executable(snow-shot-capture-modal-closer-tests
-        tests/screenshot_capture_modal_closer_tests.cpp
-        src/presentation/capture/screenshotcapturemodalcloser.h
+    add_executable(snow-shot-capture-input-blockers-tests
+        tests/screenshot_capture_input_blockers_tests.cpp
+        src/presentation/capture/screenshotcaptureinputblockers.h
     )
-    target_link_libraries(snow-shot-capture-modal-closer-tests PRIVATE Qt6::Widgets)
-    snow_shot_import_offscreen_platform(snow-shot-capture-modal-closer-tests)
-    add_test(NAME snow-shot-capture-modal-closer-tests
-        COMMAND snow-shot-capture-modal-closer-tests)
-    set_tests_properties(snow-shot-capture-modal-closer-tests PROPERTIES
+    target_link_libraries(snow-shot-capture-input-blockers-tests PRIVATE Qt6::Widgets)
+    snow_shot_import_offscreen_platform(snow-shot-capture-input-blockers-tests)
+    add_test(NAME snow-shot-capture-input-blockers-tests
+        COMMAND snow-shot-capture-input-blockers-tests)
+    set_tests_properties(snow-shot-capture-input-blockers-tests PROPERTIES
+        TIMEOUT 30
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
@@ -5682,6 +5695,13 @@ if(SNOW_SHOT_BUILD_TESTS)
     snow_shot_import_offscreen_platform(snow-shot-clipboard-content-tests)
     add_test(NAME snow-shot-clipboard-mime-data-tests
              COMMAND snow-shot-clipboard-content-tests --mime-data-only)
+    add_test(NAME snow-shot-clipboard-import-routing-tests
+             COMMAND snow-shot-clipboard-content-tests --import-routing-only)
+    set_tests_properties(snow-shot-clipboard-import-routing-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-clipboard-embedded-images-tests
              COMMAND snow-shot-clipboard-content-tests --embedded-images-only)
     set_tests_properties(snow-shot-clipboard-embedded-images-tests PROPERTIES
@@ -6733,6 +6753,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-global-canvas-tests
         tests/global_canvas_tests.cpp
+        tests/global_canvas_laser_tests.cpp
         src/presentation/services/screenshotcanvascolorsampler.cpp
         src/presentation/services/screenshotcanvascolorsamplerwindow.cpp
         include/snow_shot/presentation/globalcanvascontroller.h
@@ -6799,6 +6820,21 @@ if(SNOW_SHOT_BUILD_TESTS)
             LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 30)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-global-canvas-tests)
+    foreach(_laser_scale IN ITEMS 1 1.25 1.5 2)
+        add_test(NAME snow-shot-global-canvas-laser-${_laser_scale}-tests
+            COMMAND snow-shot-global-canvas-tests --laser-pointer-only -platform offscreen)
+        set_tests_properties(snow-shot-global-canvas-laser-${_laser_scale}-tests PROPERTIES
+            LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 30
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT};QT_SCALE_FACTOR=${_laser_scale}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+    if(WIN32)
+        add_test(NAME snow-shot-global-canvas-laser-native-tests
+            COMMAND snow-shot-global-canvas-tests --laser-native-only -platform windows)
+        set_tests_properties(snow-shot-global-canvas-laser-native-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(NAME snow-shot-global-canvas-magnifier-availability-tests
         COMMAND snow-shot-global-canvas-tests --magnifier-availability-only -platform offscreen)
     set_tests_properties(snow-shot-global-canvas-magnifier-availability-tests PROPERTIES
@@ -11002,6 +11038,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-screenshot-controller-lifetime-tests PROPERTIES
         LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 30
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    add_test(NAME snow-shot-screenshot-controller-clipboard-tests
+        COMMAND snow_shot --clipboard-pin-tests)
+    set_tests_properties(snow-shot-screenshot-controller-clipboard-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 30
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
     add_test(NAME snow-shot-pinned-controlled-interaction-tests
         COMMAND snow-shot-pinned-window-tests --controlled-interaction-only -platform offscreen)
     add_test(NAME snow-shot-pinned-pointer-routing-tests
@@ -12596,6 +12637,9 @@ foreach(_snow_target IN LISTS _snow_readout_consumers)
     endif()
     if("${_snow_sources}" MATCHES "(screenshot(pinnedwindow|overlaywindow|recognitionwindow|canvascolorsamplerwindow)|globalcanvascontroller|screenrecordingareawindow)\\.cpp")
         target_link_libraries(${_snow_target} PRIVATE snow_shot_crosshair_cursor)
+    endif()
+    if("${_snow_sources}" MATCHES "(globalcanvascontroller|recordingeffectpreview)\\.cpp")
+        target_link_libraries(${_snow_target} PRIVATE snow_shot_recording_effects_source)
     endif()
 endforeach()
 

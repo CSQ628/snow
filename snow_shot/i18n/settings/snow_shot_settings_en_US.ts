@@ -1908,6 +1908,10 @@
             <translation>Copy application settings as a zip archive to the clipboard</translation>
         </message>
         <message>
+            <source>Copy both the image and its exported file to the clipboard</source>
+            <translation>Copy both the image and its exported file to the clipboard</translation>
+        </message>
+        <message>
             <source>Copy color</source>
             <translation>Copy color</translation>
         </message>
@@ -1992,8 +1996,8 @@
             <translation>Custom AI models</translation>
         </message>
         <message>
-            <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
-            <translation>Custom DeepL, Baidu, and Youdao-compatible services</translation>
+            <source>Custom DeepL, DeepLX, Baidu, and Youdao-compatible services</source>
+            <translation>Custom DeepL, DeepLX, Baidu, and Youdao-compatible services</translation>
         </message>
         <message>
             <source>Custom Models</source>
@@ -4660,10 +4664,6 @@
             <translation>Windows context menu</translation>
         </message>
         <message>
-            <source>Write the image to a file and copy that file to the clipboard</source>
-            <translation>Write the image to a file and copy that file to the clipboard</translation>
-        </message>
-        <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
             <translation>Zip archives (*.zip);;All files (*.*)</translation>
         </message>
@@ -5281,6 +5281,10 @@ Unavailable: %2</translation>
             <translation>DeepL</translation>
         </message>
         <message>
+            <source>DeepLX</source>
+            <translation>DeepLX</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>Delete</translation>
         </message>
@@ -5315,6 +5319,10 @@ Unavailable: %2</translation>
         <message>
             <source>No translation configurations added</source>
             <translation>No translation configurations added</translation>
+        </message>
+        <message>
+            <source>Optional access token sent as a Bearer token.</source>
+            <translation>Optional access token sent as a Bearer token.</translation>
         </message>
         <message>
             <source>Optional for servers that do not require authentication.</source>
