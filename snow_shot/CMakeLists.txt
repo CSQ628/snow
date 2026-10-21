@@ -18,6 +18,7 @@ add_compile_definitions(SNOW_SHOT_CONFIGURED_STORE_BUILD=${_SNOW_SHOT_CONFIGURED
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
 include(RustStaticLibrary)
+include(SnowShotSourceDependencies)
 snow_configure_windows_architecture()
 snow_detect_rust_target(SNOW_SHOT_RUST_TARGET)
 
@@ -603,6 +604,23 @@ if(NOT EXISTS "${SNOW_SHOT_ADQT_DIR}/packages/ant_design_qt")
 endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+# Recording input validation and both MCP catalogs share one reviewed contract.
+# Check at configure time as well as in tests, including builds with MCP disabled.
+set(_snow_mcp_contract_generator
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_mcp_capabilities.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_snow_mcp_contract_generator}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mcp-capabilities.source.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mcp-capabilities.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mcp-capabilities-mini.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/snow_shot/app/mcp/recordingoptioncontracts.h")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${_snow_mcp_contract_generator}" --check
+    COMMAND_ERROR_IS_FATAL ANY)
+add_custom_target(snow_shot_check_mcp_capabilities
+    COMMAND "${Python3_EXECUTABLE}" "${_snow_mcp_contract_generator}" --check
+    VERBATIM)
 
 set(SNOW_SHOT_ICON_MANIFEST
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons.manifest.json"
@@ -1797,6 +1815,12 @@ set(PROJECT_HEADERS
 )
 
 add_library(snow_shot_print STATIC src/presentation/services/screenshotprintservice.cpp)
+snow_shot_register_source_capability(print
+    FULL_TARGET snow_shot_print MINI_TARGET snow_shot_print_mini)
+snow_shot_source_requires(print SOURCES
+    src/presentation/services/screenshotcontroller.cpp
+    src/presentation/pinned/screenshotpinnedwindow.cpp
+    src/presentation/imageediting/imageeditingexportcontroller.cpp)
 target_include_directories(snow_shot_print PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(snow_shot_print PUBLIC Qt6::Widgets PRIVATE Qt6::Concurrent snow_shot_diagnostics)
 if(WIN32)
@@ -2439,7 +2463,6 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-scrolling-interval-settings-tests PROPERTIES
         LABELS "unit" TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-    # Flaky by design: the async policy mutation settles on timers, and
     add_test(NAME snow-shot-pin-to-screen-storage-tests
         COMMAND snow-shot-application-storage-tests --pin-shortcuts-only)
     set_tests_properties(snow-shot-pin-to-screen-storage-tests PROPERTIES LABELS "unit")
@@ -2448,14 +2471,8 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-translation-confidence-storage-tests PROPERTIES
         LABELS "unit" TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-    # CPU contention from parallel tests can stretch the settling window.
-    # The test must not run in parallel with other tests (RUN_SERIAL), and
-    # intermittent failures are tolerated via the retry launcher.
     add_test(NAME snow-shot-application-storage-tests
-        COMMAND ${CMAKE_COMMAND}
-            -DTEST_COMMAND=$<TARGET_FILE:snow-shot-application-storage-tests>
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_flaky_test_with_retry.cmake
-    )
+        COMMAND snow-shot-application-storage-tests)
     add_test(NAME snow-shot-auto-save-execution-storage-tests
         COMMAND snow-shot-application-storage-tests --auto-save-after-execution-only)
     set_tests_properties(snow-shot-auto-save-execution-storage-tests PROPERTIES
@@ -2463,6 +2480,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-storage-quit-lifetime-tests
         COMMAND snow-shot-application-storage-tests --quit-lifetime-only)
+    set_tests_properties(snow-shot-storage-quit-lifetime-tests PROPERTIES
+        ENVIRONMENT "QT_FATAL_WARNINGS=1")
     add_test(NAME snow-shot-draw-template-storage-tests
         COMMAND snow-shot-application-storage-tests --draw-template-only)
     add_test(NAME snow-shot-watermark-content-storage-tests
@@ -2736,6 +2755,18 @@ if(SNOW_SHOT_BUILD_TESTS)
             -DSNOW_SHOT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_storage_boundary.cmake
     )
+    add_test(NAME snow-shot-storage-boundary-policy-tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/storage_boundary_tests.py")
+    set_tests_properties(snow-shot-storage-boundary-policy-tests PROPERTIES LABELS "unit" TIMEOUT 30)
+    add_test(NAME snow-shot-test-runner-policy-tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/test-test-runner-policy.py")
+    set_tests_properties(snow-shot-test-runner-policy-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-shot-source-dependency-contract-tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_dependency_contract_tests.py")
+    set_tests_properties(snow-shot-source-dependency-contract-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-shot-mcp-capability-generation-tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/mcp_capability_generation_tests.py")
+    set_tests_properties(snow-shot-mcp-capability-generation-tests PROPERTIES LABELS "unit" TIMEOUT 30)
 
     add_executable(snow-shot-screenshot-result-compositor-tests
         tests/screenshot_result_compositor_tests.cpp
@@ -3900,7 +3931,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/selection/screenshotselectionparams.cpp
         src/presentation/selection/screenshotselectionsettingsstore.cpp
     )
-    target_link_libraries(snow-shot-selection-effects-tests PRIVATE snow_shot_storage Qt6::Widgets)
+    target_link_libraries(snow-shot-selection-effects-tests PRIVATE
+        snow_shot_storage snow_draw_engine_qt_canvas Qt6::Widgets)
     add_test(NAME snow-shot-selection-effects-tests COMMAND snow-shot-selection-effects-tests)
     add_executable(snow-shot-direct-capture-workflow-tests
         tests/direct_capture_workflow_tests.cpp
@@ -4118,6 +4150,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     target_link_libraries(snow-shot-capture-workflow-tests PRIVATE
         Qt6::Gui
+        snow_draw_engine_qt_canvas
     )
     add_test(
         NAME snow-shot-capture-workflow-tests
@@ -4258,7 +4291,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     target_link_libraries(snow-shot-selection-geometry-tests PRIVATE
         snow_shot_storage
-        snow_canvas_image
+        snow_draw_engine_qt_canvas
         ant_design_qt
         Qt6::Gui
     )
@@ -4320,6 +4353,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_link_libraries(snow-shot-selection-export-workflow-tests PRIVATE
         snow_shot_diagnostics
         snow_shot_image_codec
+        snow_draw_engine_qt_canvas
         Qt6::Gui
     )
     if(WIN32)
@@ -4501,41 +4535,43 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
-    add_executable(snow-shot-scrolling-preview-benchmark
-        tests/scrolling_preview_benchmark.cpp
-        include/snow_shot/presentation/screenshotscrollingtypes.h
-        include/snow_shot/presentation/screenshotscrollingthumbnailwidget.h
-        src/presentation/capture/screenshotscrollingthumbnailwidget.cpp
-    )
-    target_compile_definitions(snow-shot-scrolling-preview-benchmark PRIVATE
-        SNOW_SHOT_BENCH_INTERNALS=1
-    )
-    target_include_directories(snow-shot-scrolling-preview-benchmark PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    )
-    target_link_libraries(snow-shot-scrolling-preview-benchmark PRIVATE
-        snow_canvas_image
-        ant_design_qt
-        Qt6::Widgets
-    )
-    snow_shot_import_offscreen_platform(snow-shot-scrolling-preview-benchmark)
-
-    add_executable(snow-shot-scrolling-result-async-benchmark
-        tests/scrolling_result_async_benchmark.cpp
-    )
-    target_include_directories(snow-shot-scrolling-result-async-benchmark PRIVATE
-        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-stitch-images-c/include"
-    )
-    target_link_libraries(snow-shot-scrolling-result-async-benchmark PRIVATE
-        snow_stitch_images_c
-        snow_shot_image_codec
-        Qt6::Widgets
-    )
-    if(WIN32)
-        target_link_libraries(snow-shot-scrolling-result-async-benchmark PRIVATE
-            Ntdll
-            Ws2_32
+    if(SNOW_APPS_BUILD_BENCHMARKS)
+        add_executable(snow-shot-scrolling-preview-benchmark
+            tests/scrolling_preview_benchmark.cpp
+            include/snow_shot/presentation/screenshotscrollingtypes.h
+            include/snow_shot/presentation/screenshotscrollingthumbnailwidget.h
+            src/presentation/capture/screenshotscrollingthumbnailwidget.cpp
         )
+        target_compile_definitions(snow-shot-scrolling-preview-benchmark PRIVATE
+            SNOW_SHOT_BENCH_INTERNALS=1
+        )
+        target_include_directories(snow-shot-scrolling-preview-benchmark PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        )
+        target_link_libraries(snow-shot-scrolling-preview-benchmark PRIVATE
+            snow_canvas_image
+            ant_design_qt
+            Qt6::Widgets
+        )
+        snow_shot_import_offscreen_platform(snow-shot-scrolling-preview-benchmark)
+
+        add_executable(snow-shot-scrolling-result-async-benchmark
+            tests/scrolling_result_async_benchmark.cpp
+        )
+        target_include_directories(snow-shot-scrolling-result-async-benchmark PRIVATE
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-stitch-images-c/include"
+        )
+        target_link_libraries(snow-shot-scrolling-result-async-benchmark PRIVATE
+            snow_stitch_images_c
+            snow_shot_image_codec
+            Qt6::Widgets
+        )
+        if(WIN32)
+            target_link_libraries(snow-shot-scrolling-result-async-benchmark PRIVATE
+                Ntdll
+                Ws2_32
+            )
+        endif()
     endif()
 
     # This test is intentionally Qt-free; swap in the Qt-free dialog guard so
@@ -5086,7 +5122,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests
     )
     set_tests_properties(snow-shot-pinned-window-tests PROPERTIES
-        LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 180
+        LABELS "interactive;e2e;windows" RUN_SERIAL TRUE
         ENVIRONMENT "QT_QPA_PLATFORM=windows")
     snow_shot_import_offscreen_platform(snow-shot-pinned-window-tests)
     add_test(NAME snow-shot-image-editing-tests
@@ -5305,7 +5341,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-pinned-thumbnail-recreation-tests
         COMMAND snow-shot-pinned-window-tests --thumbnail-recreation-only)
     add_test(NAME snow-shot-pinned-thumbnail-reentry-tests
-        COMMAND snow-shot-pinned-window-tests --thumbnail-reentry-only)
+        COMMAND snow-shot-pinned-window-tests --thumbnail-reentry-only -platform offscreen)
     add_test(NAME snow-shot-pinned-middle-click-tests
         COMMAND snow-shot-pinned-window-tests --middle-click-only)
     add_test(NAME snow-shot-pinned-middle-click-offscreen-tests
@@ -5346,7 +5382,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests --translation-only)
     add_test(
         NAME snow-shot-pinned-movement-shortcut-tests
-        COMMAND snow-shot-pinned-window-tests --movement-shortcut-only
+        COMMAND snow-shot-pinned-window-tests --movement-shortcut-only -platform offscreen
     )
     add_test(
         NAME snow-shot-pinned-drawing-shortcut-toggle-tests
@@ -5575,7 +5611,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     target_include_directories(snow-shot-file-pin-batch-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include")
-    target_link_libraries(snow-shot-file-pin-batch-tests PRIVATE snow_shot_storage snow_shot_image_codec Qt6::Widgets
+    target_link_libraries(snow-shot-file-pin-batch-tests PRIVATE snow_shot_storage snow_shot_image_codec ant_design_qt Qt6::Widgets
         ${SNOW_SELECTED_FILES_LIBRARIES})
     if(APPLE)
         target_link_libraries(snow-shot-file-pin-batch-tests PRIVATE snow_shot_rust_ffi_selector)
@@ -5743,6 +5779,14 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-pinned-recognition-shortcut-tests
         COMMAND snow-shot-pinned-window-tests --recognition-shortcut-only)
+    # QR shortcut/payload semantics use the isolated Qt clipboard. Native clipboard
+    # publication and recognition surfaces have their own dedicated registrations.
+    add_test(NAME snow-shot-pinned-qr-copy-tests
+        COMMAND snow-shot-pinned-window-tests --qr-copy-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-qr-copy-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-pinned-recognition-shortcut-offscreen-tests
         COMMAND snow-shot-pinned-window-tests --recognition-shortcut-only -platform offscreen)
     add_test(NAME snow-shot-pinned-mouse-recognition-tests
@@ -5898,6 +5942,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+    # The aggregate executes every legacy scenario; the focused aliases above
+    # retain their shorter deadline. Do not overwrite the aggregate in that group.
+    set_tests_properties(snow-shot-pinned-window-tests PROPERTIES TIMEOUT 180)
 
     add_executable(snow-shot-clipboard-preparation-tests
         tests/screenshot_clipboard_preparation_tests.cpp
@@ -6581,18 +6628,20 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "unit"
     )
     set_tests_properties(snow-shot-screenshot-selection-toolbar-hover-tests PROPERTIES
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
     )
     if(WIN32)
-        set_tests_properties(snow-shot-screenshot-selection-toolbar-hover-tests PROPERTIES
+        add_test(NAME snow-shot-screenshot-selection-toolbar-native-tests
+            COMMAND snow-shot-screenshot-selection-toolbar-hover-tests -platform windows)
+        set_tests_properties(snow-shot-screenshot-selection-toolbar-native-tests PROPERTIES
             ENVIRONMENT
                 "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QWindowsIntegrationPlugin>"
-        )
-    else()
-        set_tests_properties(snow-shot-screenshot-selection-toolbar-hover-tests PROPERTIES
-            ENVIRONMENT
-                "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 60
         )
     endif()
 
@@ -6838,21 +6887,16 @@ if(SNOW_SHOT_BUILD_TESTS)
                 snow_draw_engine_qt_canvas
                 comctl32
         )
-        # Flaky by design: drives a real hover animation over native toolbar
-        # surfaces; parallel test load can steal the frame budget and stall
-        # the hover transition. The test must not run in parallel with other
-        # tests (RUN_SERIAL), and intermittent failures are tolerated via
-        # the retry launcher.
         add_test(
             NAME snow-shot-screenshot-toolbar-fill-color-hover-tests
-            COMMAND ${CMAKE_COMMAND}
-                -DTEST_COMMAND=$<TARGET_FILE:snow-shot-screenshot-toolbar-fill-color-hover-tests>
-                -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_flaky_test_with_retry.cmake
+            COMMAND snow-shot-screenshot-toolbar-fill-color-hover-tests
         )
         set_tests_properties(
             snow-shot-screenshot-toolbar-fill-color-hover-tests
             PROPERTIES
+                LABELS "interactive;windows"
                 RUN_SERIAL TRUE
+                TIMEOUT 90
                 ENVIRONMENT
                     "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QWindowsIntegrationPlugin>"
                 ENVIRONMENT_MODIFICATION
@@ -7671,28 +7715,23 @@ if(SNOW_SHOT_BUILD_TESTS)
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
-    # The forward and reverse drag tests drive a native toolbar through real
-    # hardware-style drag sequences and assert final HWND positions within a
-    # few pixels. They are flaky by design under machine load: parallel tests
-    # compete for the input queue and DWM frame budget, shifting the settled
-    # position. They must not run in parallel with other tests (RUN_SERIAL),
-    # and intermittent failures are tolerated via the retry launcher.
-    add_test(
-        NAME snow-shot-floating-toolbar-drag-tests
-        COMMAND ${CMAKE_COMMAND}
-            -DTEST_COMMAND=$<TARGET_FILE:snow-shot-floating-toolbar-drag-tests>
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_flaky_test_with_retry.cmake
-    )
-    add_test(
-        NAME snow-shot-floating-toolbar-reverse-drag-tests
-        COMMAND ${CMAKE_COMMAND}
-            "-DTEST_COMMAND=$<TARGET_FILE:snow-shot-floating-toolbar-drag-tests>;--reverse-hardware-drag-only"
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_flaky_test_with_retry.cmake
-    )
-    add_test(
-        NAME snow-shot-floating-toolbar-seam-straddle-drag-tests
-        COMMAND snow-shot-floating-toolbar-drag-tests --seam-straddle-drag-only
-    )
+    add_test(NAME snow-shot-floating-toolbar-drag-tests
+        COMMAND snow-shot-floating-toolbar-drag-tests)
+    if(WIN32)
+        add_test(NAME snow-shot-floating-toolbar-hardware-drag-tests
+            COMMAND snow-shot-floating-toolbar-drag-tests --hardware-drag-only)
+        add_test(NAME snow-shot-floating-toolbar-reverse-drag-tests
+            COMMAND snow-shot-floating-toolbar-drag-tests --reverse-hardware-drag-only)
+        add_test(NAME snow-shot-floating-toolbar-seam-straddle-drag-tests
+            COMMAND snow-shot-floating-toolbar-drag-tests --seam-straddle-drag-only)
+        set_tests_properties(
+            snow-shot-floating-toolbar-hardware-drag-tests
+            snow-shot-floating-toolbar-reverse-drag-tests
+            snow-shot-floating-toolbar-seam-straddle-drag-tests
+            PROPERTIES LABELS "interactive;windows" RUN_SERIAL TRUE SKIP_RETURN_CODE 77
+            TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=windows"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_test(
         NAME snow-shot-floating-toolbar-action-layout-tests
         COMMAND snow-shot-floating-toolbar-drag-tests --action-layout-only
@@ -7734,15 +7773,6 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
-    set_tests_properties(snow-shot-floating-toolbar-reverse-drag-tests PROPERTIES
-        RUN_SERIAL TRUE
-        ENVIRONMENT_MODIFICATION
-            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
-    )
-    set_tests_properties(snow-shot-floating-toolbar-seam-straddle-drag-tests PROPERTIES
-        ENVIRONMENT_MODIFICATION
-            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
-    )
     set_tests_properties(snow-shot-floating-toolbar-action-layout-tests PROPERTIES
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
@@ -7753,14 +7783,6 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     if(NOT WIN32)
         set_tests_properties(snow-shot-floating-toolbar-drag-tests PROPERTIES
-            ENVIRONMENT
-                "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
-        )
-        set_tests_properties(snow-shot-floating-toolbar-reverse-drag-tests PROPERTIES
-            ENVIRONMENT
-                "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
-        )
-        set_tests_properties(snow-shot-floating-toolbar-seam-straddle-drag-tests PROPERTIES
             ENVIRONMENT
                 "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         )
@@ -8234,9 +8256,6 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_link_libraries(snow-shot-screen-recording-controller-tests PRIVATE user32 dwmapi gdi32)
         target_sources(snow-shot-screen-recording-controller-tests PRIVATE
             tests/screen_recording_toolbar_display_tests.cpp)
-        add_test(NAME snow-shot-screen-recording-toolbar-display-tests
-            COMMAND snow-shot-screen-recording-controller-tests
-                --native-toolbar-display-only -platform windows)
         add_test(NAME snow-shot-screen-recording-toolbar-ready-display-tests
             COMMAND snow-shot-screen-recording-controller-tests
                 --native-toolbar-ready-display-only -platform windows)
@@ -8247,8 +8266,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 30
             ENVIRONMENT "QT_QPA_PLATFORM=windows"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SNOW_FFMPEG_ROOT}/bin")
-        set_tests_properties(snow-shot-screen-recording-toolbar-display-tests
-            snow-shot-screen-recording-toolbar-ready-display-tests PROPERTIES
+        set_tests_properties(snow-shot-screen-recording-toolbar-ready-display-tests PROPERTIES
             LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 30 SKIP_RETURN_CODE 77
             ENVIRONMENT "QT_QPA_PLATFORM=windows"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -8645,19 +8663,18 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(
         NAME snow-shot-recognition-window-tests
-        COMMAND snow-shot-recognition-window-tests
+        COMMAND snow-shot-recognition-window-tests -platform offscreen
     )
+    set_tests_properties(snow-shot-recognition-window-tests PROPERTIES
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(WIN32)
-        set_tests_properties(snow-shot-recognition-window-tests PROPERTIES
+        add_test(NAME snow-shot-recognition-native-surface-tests
+            COMMAND snow-shot-recognition-window-tests --native-surface-only -platform windows)
+        set_tests_properties(snow-shot-recognition-native-surface-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 60
             ENVIRONMENT
                 "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QWindowsIntegrationPlugin>"
-            ENVIRONMENT_MODIFICATION
-                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
-        )
-    else()
-        set_tests_properties(snow-shot-recognition-window-tests PROPERTIES
-            ENVIRONMENT
-                "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         )
@@ -11201,6 +11218,13 @@ if(WIN32)
         src/platform/windows/captureexclusioncomposition.cpp)
     target_link_libraries(snow_shot_capture_exclusion_composition
         PUBLIC Qt6::Widgets PRIVATE Qt6::GuiPrivate user32 gdi32)
+
+    snow_shot_register_source_capability(capture_exclusion_composition
+        FULL_TARGET snow_shot_capture_exclusion_composition
+        MINI_TARGET snow_shot_capture_exclusion_composition)
+    snow_shot_source_requires(capture_exclusion_composition SOURCES
+        src/platform/windows/windowchrome.cpp
+        tests/window_capture_exclusion_tests.cpp)
 endif()
 
 # Overlay and recording hosts share widget controls and their custom icon pack.
@@ -11275,12 +11299,7 @@ foreach(_target IN LISTS _overlay_widget_targets)
         target_sources(${_target} PRIVATE src/platform/windows/windowchrome.cpp)
         target_link_libraries(${_target} PRIVATE dwmapi user32)
     endif()
-    # The platform helper owns composition and native alpha hit-testing for all
-    # opted-in windows; consumers do not depend on Qt's platform headers.
     get_target_property(_sources ${_target} SOURCES)
-    if(WIN32 AND _sources MATCHES "(windowchrome|window_capture_exclusion_tests)\\.cpp")
-        target_link_libraries(${_target} PRIVATE snow_shot_capture_exclusion_composition)
-    endif()
     if(NOT "${_target}" STREQUAL "snow_shot" AND
        _sources MATCHES "(screenshotoverlaywindow|screenrecordingareawindow).cpp" AND
        NOT _sources MATCHES "snowshoticons.cpp")
@@ -12296,15 +12315,6 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
 endif()
 
-# Controllers and their focused fixtures compile the same sources independently.
-get_property(_snow_print_consumers DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
-foreach(_snow_print_consumer IN LISTS _snow_print_consumers)
-    get_target_property(_snow_print_sources ${_snow_print_consumer} SOURCES)
-    if(_snow_print_sources MATCHES "screenshot(pinnedwindow|controller)\\.cpp")
-        target_link_libraries(${_snow_print_consumer} PRIVATE snow_shot_print)
-    endif()
-endforeach()
-
 if(SNOW_SHOT_BUILD_TESTS)
     target_sources(snow-shot-pinned-window-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../test-support/fonts/recording_test_fonts.qrc")
@@ -12729,3 +12739,11 @@ if(SNOW_APPS_BUILD_BENCHMARKS AND TARGET snow-shot-pinned-window-tests)
         TIMEOUT 240 ENVIRONMENT "${_image_editing_environment}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    include(SnowShotTestResources)
+endif()
+
+# All focused fixtures and edition clones now exist. Resolve their source-owned
+# capabilities before the deferred Mini audit inspects the completed link graphs.
+snow_shot_resolve_source_dependencies()

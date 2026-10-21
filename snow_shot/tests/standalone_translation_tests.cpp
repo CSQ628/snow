@@ -12,6 +12,8 @@
 #include "widgets/modal.h"
 #include "widgets/input_text_edit.h"
 #include "widgets/select.h"
+#include "widgets/button.h"
+#include "widgets/context_menu.h"
 
 #include <QAction>
 #include <QApplication>
@@ -60,6 +62,26 @@ class FakeCaptureBackend final : public SelectedTextCaptureBackend {
 void flushEvents() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QCoreApplication::processEvents();
+}
+
+void triggerTranslationMenuAction(TranslationPageWidget& page, const QString& actionName) {
+    auto* trigger = page.findChild<adqt::widgets::AdButton*>(QStringLiteral("translationActions"));
+    require(trigger != nullptr && trigger->isVisible(),
+            "the translation action trigger is visible");
+    trigger->click();
+    adqt::widgets::AdContextMenu* activeMenu = nullptr;
+    for (auto* menu : page.findChildren<adqt::widgets::AdContextMenu*>(
+             QStringLiteral("translationActionsMenu"))) {
+        if (menu->isPopupVisible() && !menu->isRetiring()) {
+            activeMenu = menu;
+            break;
+        }
+    }
+    require(activeMenu != nullptr, "opening translation actions creates a live popup session");
+    auto* action = activeMenu->findChild<QAction*>(actionName);
+    require(action != nullptr && action->isEnabled(),
+            "the live translation copy action is enabled");
+    action->trigger();
 }
 
 int visibleTranslationWindows() {
@@ -371,8 +393,6 @@ void pageActionsAndLifecycle() {
     auto* controller = page->findChild<TranslationPageController*>();
     auto* result =
         page->findChild<adqt::widgets::AdTextEdit*>(QStringLiteral("translationResultText"));
-    auto* copy = page->findChild<QAction*>(QStringLiteral("translationCopy"));
-    auto* copyClose = page->findChild<QAction*>(QStringLiteral("translationCopyAndClose"));
     waitUntil([&] { return server.streams.size() == 1; }, "standalone starts translation");
     server.delta(0, QStringLiteral("translated result"));
     waitUntil([&] { return result->toPlainText() == QStringLiteral("translated result"); },
@@ -385,7 +405,7 @@ void pageActionsAndLifecycle() {
                     QDir(snapshotDirectory).filePath(QStringLiteral("standalone-translation.png"))),
                 "save standalone page rendering");
     }
-    copy->trigger();
+    triggerTranslationMenuAction(*page, QStringLiteral("translationCopy"));
     require(qApp->clipboard()->text() == QStringLiteral("translated result") && modal->isOpen(),
             "copy preserves standalone window");
     styles::ThemeManager::instance().setThemeMode(styles::ThemeMode::Dark);
@@ -410,7 +430,7 @@ void pageActionsAndLifecycle() {
     LanguageManager::instance().languageChanged(QStringLiteral("en_US"), QLocale(QLocale::English));
     flushEvents();
     QPointer<TranslationPageWidget> oldPage = page;
-    copyClose->trigger();
+    triggerTranslationMenuAction(*page, QStringLiteral("translationCopyAndClose"));
     require(!modal->isOpen() && existingMain.isVisible() && !controller->active(),
             "copy-and-close closes only standalone and deactivates streaming page");
     waitUntil([&] { return server.disconnected(0); }, "closing cancels translation stream");
