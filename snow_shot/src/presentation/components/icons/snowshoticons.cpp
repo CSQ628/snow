@@ -947,23 +947,21 @@ SOFTWARE.
      std::string_view("flip-horizontal"),
      std::string_view(
          R"ADQT_SVG_80(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="__ADQT_SLOT_PRIMARY__">
-  <path d="M104 768L392 256v512H104zm816 0L632 256v512h288z" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="72" stroke-linejoin="round"/>
-  <path d="M484 96h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V104a8 8 0 0 1 8-8zm0 320h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V424a8 8 0 0 1 8-8zm0 320h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V744a8 8 0 0 1 8-8z"/>
+  <path d="M144 352L304 192h96v640H144V352zm736 0L720 192h-96v640h256V352z" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="72" stroke-linejoin="round"/>
 </svg>
 )ADQT_SVG_80"),
-     std::string_view("1541ffe423417b561d46c8253ae8765424da6f706aeed9d20c5527227e39dfc7"),
+     std::string_view("addbf3e2ee9975b3d60f8a4e48ecb69674163676e93cb2f662ae7cb27ad453ce"),
      IconColorModel::Monochrome, IconFit::Contain,
      IconStaticColors{std::string_view(""), std::string_view(""), std::string_view("")}, false},
     {std::string_view("snow-shot"), std::string_view("outlined"), std::string_view("flip-vertical"),
      std::string_view(
          R"ADQT_SVG_81(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="__ADQT_SLOT_PRIMARY__">
   <g transform="rotate(90 512 512)">
-    <path d="M104 768L392 256v512H104zm816 0L632 256v512h288z" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="72" stroke-linejoin="round"/>
-    <path d="M484 96h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V104a8 8 0 0 1 8-8zm0 320h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V424a8 8 0 0 1 8-8zm0 320h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V744a8 8 0 0 1 8-8z"/>
+    <path d="M144 352L304 192h96v640H144V352zm736 0L720 192h-96v640h256V352z" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="72" stroke-linejoin="round"/>
   </g>
 </svg>
 )ADQT_SVG_81"),
-     std::string_view("fadfdc31f2dfc65b0d3fd81c5b5dd7063993162eeeb23d700737fdf86c5af5b6"),
+     std::string_view("2edc8faf54e005df487aa29f480b2d3ed69db9cf0b25b338c6277ba2531d7715"),
      IconColorModel::Monochrome, IconFit::Contain,
      IconStaticColors{std::string_view(""), std::string_view(""), std::string_view("")}, false},
     {std::string_view("snow-shot"), std::string_view("outlined"),
@@ -2338,7 +2336,7 @@ SOFTWARE.
 
 constexpr IconPack kStaticPack{
     std::string_view("snow-shot"), std::string_view("Snow Shot project-owned static SVG assets"),
-    std::string_view("c522f97f9242590f32be63d9ac8616acc0afedb201887d8b84b8b4237ce5c12f"), kEntries,
+    std::string_view("6cc6bf951f0a46c601c951ec89f3d8c4035439607715c74e4257cbb45941e8be"), kEntries,
     sizeof(kEntries) / sizeof(kEntries[0])};
 
 } // namespace

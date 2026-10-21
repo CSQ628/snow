@@ -311,7 +311,7 @@ void ocrTranslateIconUsesTheSuppliedProjectAsset() {
             "OCR Translate should render the supplied project asset with its primary color");
 }
 
-void flipIconsShowMirroredShapesAndTheCorrectAxis() {
+void flipIconsShowMirroredShapesWithoutDividers() {
     namespace icons = snow_shot::presentation::icons::custom;
     for (const QColor tint : {QColor(31, 31, 31), QColor(240, 240, 240), QColor(22, 119, 255)}) {
         const auto colors = adqt::icons::IconColors::primary(tint);
@@ -335,23 +335,27 @@ void flipIconsShowMirroredShapesAndTheCorrectAxis() {
         }
         const QImage horizontal = render(horizontalRef, QSize(64, 64)).toImage();
         const QImage vertical = render(verticalRef, QSize(64, 64)).toImage();
-        require(horizontal.pixelColor(32, 8).alpha() > 0 &&
-                    horizontal.pixelColor(32, 22).alpha() == 0 &&
-                    horizontal.pixelColor(32, 32).alpha() > 0 &&
-                    vertical.pixelColor(8, 32).alpha() > 0 &&
-                    vertical.pixelColor(22, 32).alpha() == 0 &&
-                    vertical.pixelColor(32, 32).alpha() > 0,
-                "horizontal flipping needs a dashed vertical axis; vertical flipping needs a "
-                "dashed horizontal axis");
-        require(horizontal.pixelColor(24, 32).alpha() > 0 &&
-                    horizontal.pixelColor(39, 32).alpha() > 0 &&
+        require(opaquePixelCount(horizontal, QRect(29, 0, 6, 64)) == 0 &&
+                    opaquePixelCount(vertical, QRect(0, 29, 64, 6)) == 0,
+                "flip icons should leave the space between mirrored shapes free of dividers");
+        require(horizontal.pixelColor(25, 32).alpha() > 0 &&
+                    horizontal.pixelColor(38, 32).alpha() > 0 &&
                     horizontal.pixelColor(20, 40).alpha() == 0 &&
                     horizontal.pixelColor(43, 40).alpha() == 0 &&
-                    vertical.pixelColor(31, 24).alpha() > 0 &&
-                    vertical.pixelColor(31, 39).alpha() > 0 &&
+                    vertical.pixelColor(31, 25).alpha() > 0 &&
+                    vertical.pixelColor(31, 38).alpha() > 0 &&
                     vertical.pixelColor(23, 20).alpha() == 0 &&
                     vertical.pixelColor(23, 43).alpha() == 0,
-                "both icons should retain two outlined mirrored shapes beside their axis");
+                "both icons should retain two outlined mirrored panels in the correct orientation");
+        require(horizontal.pixelColor(10, 14).alpha() == 0 &&
+                    horizontal.pixelColor(53, 14).alpha() == 0 &&
+                    horizontal.pixelColor(22, 12).alpha() > 0 &&
+                    horizontal.pixelColor(41, 12).alpha() > 0 &&
+                    vertical.pixelColor(49, 10).alpha() == 0 &&
+                    vertical.pixelColor(49, 53).alpha() == 0 &&
+                    vertical.pixelColor(51, 22).alpha() > 0 &&
+                    vertical.pixelColor(51, 41).alpha() > 0,
+                "the clipped outer corners should visibly reverse across the reflection direction");
     }
 }
 
@@ -873,7 +877,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         if (application.arguments().contains(QStringLiteral("--flip-icons-only"))) {
-            flipIconsShowMirroredShapesAndTheCorrectAxis();
+            flipIconsShowMirroredShapesWithoutDividers();
             return 0;
         }
         cropIconsFollowAntDesign();
@@ -927,7 +931,7 @@ int main(int argc, char** argv) {
         miniLogoPreservesTheWordmarkAndAddsRoundedVectorLettering();
         ocrTranslateIconUsesTheSuppliedProjectAsset();
         scrollingIconsUseTheRequestedOrientations();
-        flipIconsShowMirroredShapesAndTheCorrectAxis();
+        flipIconsShowMirroredShapesWithoutDividers();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

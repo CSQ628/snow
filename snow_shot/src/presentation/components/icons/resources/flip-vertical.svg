@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="currentColor" data-adqt-slot="primary">
   <g transform="rotate(90 512 512)">
-    <path d="M104 768L392 256v512H104zm816 0L632 256v512h288z" fill="none" stroke="currentColor" stroke-width="72" stroke-linejoin="round" data-adqt-slot="primary"/>
-    <path d="M484 96h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V104a8 8 0 0 1 8-8zm0 320h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V424a8 8 0 0 1 8-8zm0 320h56a8 8 0 0 1 8 8v176a8 8 0 0 1-8 8h-56a8 8 0 0 1-8-8V744a8 8 0 0 1 8-8z"/>
+    <path d="M144 352L304 192h96v640H144V352zm736 0L720 192h-96v640h256V352z" fill="none" stroke="currentColor" stroke-width="72" stroke-linejoin="round" data-adqt-slot="primary"/>
   </g>
 </svg>
