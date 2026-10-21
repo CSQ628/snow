@@ -26,21 +26,21 @@ void deleteTextAfterCursorDefaultsPersistsAndResets(const QString& configuration
     settings::BuiltInSettingsBackend backend(shortcuts);
     constexpr auto binding = settings::SettingsSwitchBinding::DrawingDeleteTextAfterCursor;
     const QString key = QStringLiteral("drawing/delete_text_after_cursor");
-    require(backend.switchEnabled(binding) && !backend.switchValue(binding) &&
-                !storage::DrawingSettings().deleteTextAfterCursor() &&
-                !storage::ConfigurationSchema::defaultValue(key).toBool(),
-            "Delete text after the cursor must default to disabled");
-    require(backend.applySwitchValue(binding, true) && backend.switchValue(binding) &&
-                storage::DrawingSettings().deleteTextAfterCursor(),
+    require(backend.switchEnabled(binding) && backend.switchValue(binding) &&
+                storage::DrawingSettings().deleteTextAfterCursor() &&
+                storage::ConfigurationSchema::defaultValue(key).toBool(),
+            "Delete text after the cursor must default to enabled");
+    require(backend.applySwitchValue(binding, false) && !backend.switchValue(binding) &&
+                !storage::DrawingSettings().deleteTextAfterCursor(),
             "the backend must apply and read the forward Delete preference");
     require(storage::ApplicationStorage::instance().configuration().flushNow().success,
             "the forward Delete preference must be flushable");
     storage::ConfigurationStore reloaded(configurationPath, true, true, 60000);
-    require(reloaded.value(key).toBool(), "the forward Delete preference must survive reload");
+    require(!reloaded.value(key).toBool(),
+            "the disabled forward Delete preference must survive reload");
     require(backend.resetSection(settings::SettingsSectionReset::DrawingQuickSelection) &&
-                !backend.switchValue(binding) &&
-                !storage::DrawingSettings().deleteTextAfterCursor(),
-            "resetting annotation settings must restore whole-element Delete");
+                backend.switchValue(binding) && storage::DrawingSettings().deleteTextAfterCursor(),
+            "resetting annotation settings must restore forward Delete");
 }
 
 void rememberLastUsedToolDefaultsPersistsAndResets(const QString& configurationPath) {

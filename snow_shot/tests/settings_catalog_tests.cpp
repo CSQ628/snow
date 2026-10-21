@@ -1066,12 +1066,12 @@ void builtInCatalogIsCompleteAndValid() {
                 QStringLiteral("drawing/delete_text_after_cursor") &&
             std::get<settings::SettingsSwitchDefinition>(deleteTextAfterCursor->payload).binding ==
                 settings::SettingsSwitchBinding::DrawingDeleteTextAfterCursor &&
-            !storage::ConfigurationSchema::defaultValue(deleteTextAfterCursor->configurationKey)
-                 .toBool() &&
+            storage::ConfigurationSchema::defaultValue(deleteTextAfterCursor->configurationKey)
+                .toBool() &&
             drawingSettingsSection.items.at(0).id ==
                 QStringLiteral("drawing.quick-selection-disabled-tools") &&
             drawingSettingsSection.items.at(1).id == deleteTextAfterCursor->id,
-        "the default-off Delete text switch must immediately follow quick selection");
+        "the default-on Delete text switch must immediately follow quick selection");
     require(
         firstToolbarGroupButton != nullptr &&
             firstToolbarGroupButton->configurationKey ==
