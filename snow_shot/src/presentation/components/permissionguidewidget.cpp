@@ -214,9 +214,17 @@ void PermissionGuideWidget::retranslate() {
                                         "Turn on microphone access for ‘%1’ in System Settings."))
                 .arg(m_application.name);
     } else if (!bundled) {
+#ifdef Q_OS_LINUX
+        instruction = guideText(QT_TRANSLATE_NOOP(
+            "PermissionGuide",
+            "Screen recording, remote desktop, global shortcuts, and screen reading are granted "
+            "by the desktop portal when Snow Shot asks. Allow those prompts to capture, scroll, "
+            "use hotkeys, and read selected text."));
+#else
         instruction = guideText(
             QT_TRANSLATE_NOOP("PermissionGuide",
                               "Open the installed application to add it to the permissions list."));
+#endif
     } else if (m_fallback) {
         instruction = guideText(QT_TRANSLATE_NOOP("PermissionGuide",
                                                   "Drag ‘%1’ into the permissions list in System "

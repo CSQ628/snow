@@ -8,10 +8,14 @@
 function(snow_shot_offscreen_qpa_environment out_variable)
     if(QT_FEATURE_static)
         set(${out_variable} "QT_QPA_PLATFORM=offscreen" PARENT_SCOPE)
-    else()
+    elseif(TARGET Qt6::QOffscreenIntegrationPlugin)
         set(${out_variable}
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>"
             PARENT_SCOPE)
+    else()
+        # The system Qt installation already places the offscreen plugin on the
+        # default plugin search path, so no explicit path is required.
+        set(${out_variable} "QT_QPA_PLATFORM=offscreen" PARENT_SCOPE)
     endif()
 endfunction()
 

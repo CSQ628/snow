@@ -146,6 +146,7 @@ impl AudioControlHandle {
     /// Publish backend readiness even when a silent endpoint emits no packets.
     pub fn set_source_status(&self, source: AudioSourceKind, status: AudioSourceStatus) {
         let meter = &self.0.sources[source_index(source)].meter;
+        #[allow(deprecated)]
         let _ = meter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
             if AudioSourceStatus::from_word(old) == status {
                 return None;
@@ -245,6 +246,7 @@ impl AudioControlHandle {
             .as_millis()
             .min(u128::from(TIME_MAX)) as u64;
         let meter = &self.0.sources[source_index(source)].meter;
+        #[allow(deprecated)]
         let _ = meter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
             if !self.metering_enabled(source) {
                 return None;

@@ -4,6 +4,11 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QProcess>
+#include <QUrl>
+#ifdef Q_OS_LINUX
+#include <QDBusConnection>
+#include <QDBusMessage>
+#endif
 
 namespace snow_shot::platform {
 
@@ -39,6 +44,15 @@ bool revealInFileManager(const QString& path, const FileManagerLauncher& launche
     process.setNativeArguments(nativeArguments);
 #endif
     return process.startDetached();
+#elif defined(Q_OS_LINUX)
+    QDBusMessage message = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.FileManager1"), QStringLiteral("/org/freedesktop/FileManager1"),
+        QStringLiteral("org.freedesktop.FileManager1"), QStringLiteral("ShowItems"));
+    message << QStringList{QUrl::fromLocalFile(file.absoluteFilePath()).toString()} << QString();
+    const QDBusMessage reply = QDBusConnection::sessionBus().call(message);
+    if (reply.type() != QDBusMessage::ErrorMessage)
+        return true;
+    return openDirectory(file.absolutePath());
 #else
     return openDirectory(file.absolutePath());
 #endif

@@ -666,7 +666,87 @@ mod platform {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::*;
+    use std::time::Duration;
+
+    pub struct Observer {
+        worker: Option<std::thread::JoinHandle<()>>,
+        recorder: Option<crate::linux_input::Recorder>,
+    }
+
+    impl Drop for Observer {
+        fn drop(&mut self) {
+            self.recorder.take();
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    impl Observer {
+        pub fn start(
+            sender: Sender<KeyObservation>,
+            generation: Arc<AtomicU64>,
+        ) -> Result<Self, String> {
+            let mut recorder = crate::linux_input::Recorder::start()?;
+            let events = recorder.take_events();
+            let worker = std::thread::Builder::new()
+                .name("snow-key-adapter".into())
+                .spawn(move || {
+                    let mut pressed = [0u8; 256];
+                    while let Ok(event) = events.recv_timeout(Duration::from_millis(200)) {
+                        if !matches!(event.kind, 2 | 3) {
+                            continue;
+                        }
+                        let down = event.kind == 2;
+                        if (event.detail as usize) < pressed.len() {
+                            pressed[event.detail as usize] = u8::from(down);
+                        }
+                        let observation = KeyObservation {
+                            at: event.at,
+                            key: modifier_key(event.keysym).unwrap_or(event.detail as u16),
+                            scan: event.keysym,
+                            down,
+                            layout: 0,
+                            pressed,
+                            alt_gr: false,
+                            generation: generation.load(Ordering::Acquire),
+                        };
+                        if sender.try_send(observation).is_err() {
+                            generation.fetch_add(1, Ordering::AcqRel);
+                        }
+                    }
+                })
+                .map_err(|error| error.to_string())?;
+            Ok(Self {
+                worker: Some(worker),
+                recorder: Some(recorder),
+            })
+        }
+    }
+
+    fn modifier_key(keysym: u32) -> Option<u16> {
+        match keysym {
+            0xffe3 => Some(0xa2),
+            0xffe4 => Some(0xa3),
+            0xffe9 => Some(0xa4),
+            0xffea => Some(0xa5),
+            0xffe1 => Some(0xa0),
+            0xffe2 => Some(0xa1),
+            0xffeb => Some(0x5b),
+            0xffec => Some(0x5c),
+            _ => None,
+        }
+    }
+
+    pub fn printable_label(_: u16, observation: &KeyObservation) -> Option<String> {
+        crate::linux_input::keysym_name(observation.scan)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod platform {
     use super::*;
     pub struct Observer;

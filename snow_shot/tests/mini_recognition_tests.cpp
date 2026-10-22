@@ -1,4 +1,5 @@
 #include "snow_shot/app/edition.h"
+#include "snow_shot/qtdatastreamversion.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
@@ -182,7 +183,7 @@ void legacyPinPayloadsRetainOnlySupportedRecognition() {
     for (const quint8 translationVersion : {quint8(1), quint8(2)}) {
         QByteArray bytes;
         QDataStream stream(&bytes, QIODevice::WriteOnly);
-        stream.setVersion(QDataStream::Qt_6_11);
+        stream.setVersion(snow_shot::kQDataStreamVersion);
         ScreenshotOcrLine line;
         line.text = QStringLiteral("Legacy local text");
         line.confidence = 0.99;

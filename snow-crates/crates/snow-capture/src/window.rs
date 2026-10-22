@@ -7,6 +7,7 @@ use crate::error::{CaptureError, CaptureResult};
 pub enum WindowId {
     Windows { handle: isize },
     MacOS { id: u32 },
+    Linux { id: u64 },
 }
 pub(crate) type WindowKey = WindowId;
 impl WindowId {
@@ -15,6 +16,9 @@ impl WindowId {
     }
     pub const fn from_macos_id(id: u32) -> Self {
         Self::MacOS { id }
+    }
+    pub const fn from_linux_id(id: u64) -> Self {
+        Self::Linux { id }
     }
     pub fn windows_handle(self) -> CaptureResult<isize> {
         match self {
@@ -32,10 +36,19 @@ impl WindowId {
             )),
         }
     }
+    pub fn linux_id(self) -> CaptureResult<u64> {
+        match self {
+            Self::Linux { id } => Ok(id),
+            _ => Err(CaptureError::InvalidTarget(
+                "expected a Linux window identity".into(),
+            )),
+        }
+    }
     pub fn session_id(&self) -> String {
         match self {
             Self::Windows { handle } => format!("windows:{:016x}", *handle as usize as u64),
             Self::MacOS { id } => format!("macos:{id}"),
+            Self::Linux { id } => format!("linux:{id:016x}"),
         }
     }
     pub(crate) const fn key(&self) -> WindowKey {

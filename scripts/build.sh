@@ -1,5 +1,8 @@
 #!/bin/bash
 set -euo pipefail
+if [[ "$(uname -s)" == Linux ]]; then
+    exec "$(cd "$(dirname "$0")" && pwd)/build-linux.sh" "$@"
+fi
 source "$(dirname "$0")/snow-build-environment.sh"
 if [[ "${1:-}" == --help ]]; then
     echo 'Usage: build.sh [macOS-preset] [--target TARGET] [--parallel JOBS] [--clean] [--skip-bootstrap] [-- CMAKE_OPTIONS...]'

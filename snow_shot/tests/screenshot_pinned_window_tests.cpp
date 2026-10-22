@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/imageeditingdocument.h"
+#include "snow_shot/qtdatastreamversion.h"
 #include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/app/supportedpinfiles.h"
 #include "angle_wheel_host_test_support.h"
@@ -1775,7 +1776,7 @@ void pinnedSelectionRendersCachedOcrInCanvasCoordinates(bool restoreFromStorage 
                         "the pinned snapshot should serialize its cached recognition results");
                 QByteArray expectedPayload;
                 QDataStream expected(&expectedPayload, QIODevice::WriteOnly);
-                expected.setVersion(QDataStream::Qt_6_11);
+                expected.setVersion(snow_shot::kQDataStreamVersion);
                 const auto saved = window->recognitionSnapshot();
                 expected << saved.key << quint8(1) << quint8(saved.table.has_value())
                          << quint8(saved.qr.has_value()) << saved.text->error
@@ -1791,7 +1792,7 @@ void pinnedSelectionRendersCachedOcrInCanvasCoordinates(bool restoreFromStorage 
                 require(record.recognitionResults == expectedPayload,
                         "persisted recognition must keep the Qt 6.11 binary format");
                 QDataStream payload(record.recognitionResults);
-                payload.setVersion(QDataStream::Qt_6_11);
+                payload.setVersion(snow_shot::kQDataStreamVersion);
                 QString savedKey;
                 quint8 hasText = 0, hasTable = 0, hasQr = 0;
                 QString savedError;
@@ -3661,7 +3662,7 @@ void pinnedRecognitionModelsSurviveTransferAndRestart() {
     require(invalid.isEmpty(), "oversized model entry arrays are rejected");
     QByteArray oversized;
     QDataStream stream(&oversized, QIODevice::WriteOnly);
-    stream.setVersion(QDataStream::Qt_6_11);
+    stream.setVersion(snow_shot::kQDataStreamVersion);
     stream << QStringLiteral("oversized") << quint8(0) << quint8(0) << quint8(0)
            << persistence::kRecognitionModelPayloadMarker
            << persistence::kRecognitionModelPayloadVersion
@@ -3753,7 +3754,7 @@ void pinnedLatexSurvivesTransferAndRestart() {
     legacy.recognitionResults = {};
     legacy.restorePersistentState = true;
     QDataStream stream(&legacy.persistedRecognitionResults, QIODevice::WriteOnly);
-    stream.setVersion(QDataStream::Qt_6_11);
+    stream.setVersion(snow_shot::kQDataStreamVersion);
     stream << key << quint8(0) << quint8(0) << quint8(0) << quint32(0x4C415458) << quint8(1)
            << source << true;
     QPointer<ScreenshotPinnedWindow> window(new ScreenshotPinnedWindow);
@@ -3855,7 +3856,7 @@ void restoredInvalidOcrDoesNotSuppressRecognition() {
         auto config = cachedOcrPinConfig(&recognition);
         const auto presentation = config.recognitionResults.text->presentation;
         QDataStream stream(&config.persistedRecognitionResults, QIODevice::WriteOnly);
-        stream.setVersion(QDataStream::Qt_6_11);
+        stream.setVersion(snow_shot::kQDataStreamVersion);
         stream << config.recognitionResults.key << quint8(1) << quint8(0) << quint8(0)
                << (trailingBytes ? QString() : QStringLiteral("Recognition failed"))
                << presentation->selection << qint64(trailingBytes ? 0 : 1);

@@ -1329,7 +1329,11 @@ fn native_window_id(value: isize) -> Result<WindowId, String> {
             .map(WindowId::from_macos_id)
             .ok_or_else(|| "invalid macOS window ID".into())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        Ok(WindowId::from_linux_id(value as u64))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         Ok(WindowId::from_windows_handle(value))
     }

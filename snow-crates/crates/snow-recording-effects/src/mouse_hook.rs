@@ -477,7 +477,138 @@ mod platform {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::*;
+    use crossbeam_channel::Sender;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    use std::time::Duration;
+
+    pub struct MouseHookObserver {
+        worker: Option<std::thread::JoinHandle<()>>,
+        recorder: Option<crate::linux_input::Recorder>,
+        generation: Arc<AtomicU64>,
+    }
+
+    impl Drop for MouseHookObserver {
+        fn drop(&mut self) {
+            self.recorder.take();
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    impl MouseHookObserver {
+        pub fn generation(&self) -> u64 {
+            self.generation.load(Ordering::Acquire)
+        }
+        pub fn start(
+            region: (i32, i32, u32, u32),
+            sender: Sender<MouseClickObservation>,
+        ) -> Result<Self, String> {
+            Self::start_with_movement(region, sender, None)
+        }
+        pub fn start_with_movement(
+            region: (i32, i32, u32, u32),
+            sender: Sender<MouseClickObservation>,
+            movement: Option<(
+                Sender<MouseMovement>,
+                crossbeam_channel::Receiver<MouseMovement>,
+            )>,
+        ) -> Result<Self, String> {
+            let mut recorder = crate::linux_input::Recorder::start()?;
+            let events = recorder.take_events();
+            let generation = Arc::new(AtomicU64::new(0));
+            let shared = Arc::clone(&generation);
+            let worker = std::thread::Builder::new()
+                .name("snow-mouse-adapter".into())
+                .spawn(move || {
+                    let mut held = [false; 5];
+                    let mut continuity = 0u64;
+                    let mut was_inside = false;
+                    while let Ok(event) = events.recv_timeout(Duration::from_millis(200)) {
+                        let x = event.x - region.0;
+                        let y = event.y - region.1;
+                        let inside =
+                            x >= 0 && y >= 0 && x < region.2 as i32 && y < region.3 as i32;
+                        let button = match event.detail {
+                            1 if matches!(event.kind, 4 | 5) => Some(ObservedMouseButton::Left),
+                            3 if matches!(event.kind, 4 | 5) => Some(ObservedMouseButton::Right),
+                            2 if matches!(event.kind, 4 | 5) => Some(ObservedMouseButton::Middle),
+                            8 if matches!(event.kind, 4 | 5) => Some(ObservedMouseButton::Button4),
+                            9 if matches!(event.kind, 4 | 5) => Some(ObservedMouseButton::Button5),
+                            _ => None,
+                        };
+                        let down = event.kind == 4;
+                        if let Some(button) = button.filter(|button| {
+                            if down {
+                                inside
+                            } else {
+                                held[*button as usize]
+                            }
+                        }) {
+                            held[button as usize] = down;
+                            if sender
+                                .try_send(MouseClickObservation {
+                                    at: event.at,
+                                    x,
+                                    y,
+                                    button,
+                                    down,
+                                    modifiers: modifier_sides(event.state),
+                                })
+                                .is_err()
+                            {
+                                shared.fetch_add(1, Ordering::AcqRel);
+                                held = [false; 5];
+                            }
+                        }
+                        if event.kind == 6
+                            && let Some((movement_sender, drain)) = &movement
+                        {
+                            if was_inside && !inside {
+                                continuity += 1;
+                            }
+                            was_inside = inside;
+                            let movement = MouseMovement {
+                                at: event.at,
+                                position: inside.then_some((x, y)),
+                                continuity,
+                            };
+                            if let Err(crossbeam_channel::TrySendError::Full(movement)) =
+                                movement_sender.try_send(movement)
+                            {
+                                let _ = drain.try_recv();
+                                let _ = movement_sender.try_send(movement);
+                            }
+                        }
+                    }
+                })
+                .map_err(|error| error.to_string())?;
+            Ok(Self {
+                worker: Some(worker),
+                recorder: Some(recorder),
+                generation,
+            })
+        }
+    }
+
+    fn modifier_sides(state: u16) -> [bool; 8] {
+        let mut sides = [false; 8];
+        sides[0] = state & 4 != 0;
+        sides[2] = state & 8 != 0;
+        sides[4] = state & 1 != 0;
+        sides[6] = state & 64 != 0;
+        sides
+    }
+
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod platform {
     use crossbeam_channel::Sender;
 

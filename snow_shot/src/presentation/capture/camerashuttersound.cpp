@@ -63,6 +63,23 @@ void playCameraShutterSound() {
         static_cast<void>(sendMediaControlCommand(QStringLiteral("close %1").arg(alias)));
     });
 }
-#elif !defined(Q_OS_MACOS)
+#elif defined(Q_OS_LINUX)
+#include <QProcess>
+void playCameraShutterSound() {
+    QString path = QDir(QCoreApplication::applicationDirPath())
+                       .filePath(QStringLiteral("audios/camera_shutter.mp3"));
+#ifdef SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE
+    if (!QFileInfo(path).isFile())
+        path = QStringLiteral(SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE);
+#endif
+    if (!QFileInfo(path).isFile())
+        return;
+    if (QProcess::startDetached(QStringLiteral("pw-play"), {path}))
+        return;
+    QProcess::startDetached(QStringLiteral("ffplay"),
+                            {QStringLiteral("-nodisp"), QStringLiteral("-autoexit"),
+                             QStringLiteral("-loglevel"), QStringLiteral("quiet"), path});
+}
+#else
 void playCameraShutterSound() {}
 #endif

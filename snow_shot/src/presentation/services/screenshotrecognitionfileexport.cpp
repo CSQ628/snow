@@ -88,7 +88,7 @@ QByteArray tableWorkbook(const ScreenshotTableDocument& document) {
         mz_zip_file entry{};
         entry.filename = name;
         entry.compression_method = MZ_COMPRESS_METHOD_DEFLATE;
-        return mz_zip_writer_add_buffer(writer, bytes.constData(),
+        return mz_zip_writer_add_buffer(writer, const_cast<char*>(bytes.constData()),
                                         static_cast<int32_t>(bytes.size()), &entry) == MZ_OK;
     };
     constexpr auto spreadsheetNamespace =

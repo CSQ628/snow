@@ -2081,6 +2081,12 @@ SettingsActionState BuiltInSettingsBackend::actionState(SettingsActionBinding bi
 #else
         return {false, false};
 #endif
+    case SettingsActionBinding::OpenDesktopPermissions:
+#ifdef Q_OS_LINUX
+        return {true, false};
+#else
+        return {false, false};
+#endif
     case SettingsActionBinding::RestartAsAdministrator: {
         const auto state = platform::windows::administratorPresentation(
             platform::windows::administratorState(), storage::SystemSettings().autoStartAtBoot(),
@@ -2128,6 +2134,15 @@ bool BuiltInSettingsBackend::triggerAction(SettingsActionBinding binding, const 
 #else
         return false;
 #endif
+    case SettingsActionBinding::OpenDesktopPermissions:
+        emit operationMessage(
+            QCoreApplication::translate(
+                "SettingsCatalog",
+                "Allow the desktop portal prompts for screen recording, remote desktop, global "
+                "shortcuts, and screen reading. Those grants cover capture, scrolling, hotkeys, "
+                "and selected text."),
+            false);
+        return true;
     case SettingsActionBinding::RestartAsAdministrator: {
         emit synchronized();
         const auto result = platform::windows::restartAsAdministrator(

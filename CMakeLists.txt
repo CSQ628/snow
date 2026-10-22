@@ -145,6 +145,25 @@ snow_workspace_configure_paths()
 if(SNOW_APPS_BUILD_ANT_DESIGN_QT OR SNOW_APPS_BUILD_DRAW_ENGINE OR
    SNOW_APPS_BUILD_IMAGE_VIEWER OR SNOW_APPS_BUILD_SNOW_SHOT)
     snow_find_qt(COMPONENTS Core Gui GLOBAL)
+    if(UNIX AND NOT APPLE)
+        # Linux Qt ships platform plugin CMake configs but does not load them
+        # automatically. Import the plugins the workspace references so
+        # generator expressions like $<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>
+        # resolve during test registration. The configs live inside the Qt6Gui
+        # cmake directory, so point CMake at them explicitly.
+        set(_snow_qt_plugin_dir "${Qt6Gui_DIR}")
+        if(NOT _snow_qt_plugin_dir)
+            get_filename_component(_snow_qt_plugin_dir "${Qt6_DIR}/../Qt6Gui" ABSOLUTE)
+        endif()
+        foreach(_snow_qt_plugin IN ITEMS
+                QOffscreenIntegrationPlugin QXcbIntegrationPlugin
+                QWaylandIntegrationPlugin QWaylandEglClientBufferPlugin QSvgPlugin)
+            set("Qt6${_snow_qt_plugin}_DIR" "${_snow_qt_plugin_dir}")
+            find_package("Qt6${_snow_qt_plugin}" CONFIG QUIET)
+        endforeach()
+        unset(_snow_qt_plugin)
+        unset(_snow_qt_plugin_dir)
+    endif()
 endif()
 snow_workspace_configure_options()
 

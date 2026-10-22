@@ -17,9 +17,8 @@ pub struct CaptureOptions {
     pub workload: CaptureWorkload,
     /// Packed 8-bit pixel layout returned by capture sessions.
     pub output_pixel_format: CapturePixelFormat,
-    /// Session-scoped macOS ScreenCaptureKit exclusions. Other backends ignore
-    /// these filters; display and region targets accept them while independent
-    /// window targets reject them.
+    /// Windows and macOS omit these windows from the captured image. Linux uses
+    /// them to record the window under the region instead of the overlay.
     pub excluded_windows: Arc<[u32]>,
     pub excluded_processes: Arc<[i32]>,
     /// Record a per-stage timing breakdown inside participating backends and

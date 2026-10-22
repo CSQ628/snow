@@ -140,8 +140,12 @@ if(SNOW_IMAGE_CODEC_PNG)
     set(CMAKE_REQUIRED_LIBRARIES "${_snow_image_required_libraries}")
     unset(_snow_image_required_libraries)
     if(NOT SNOW_IMAGE_HAS_ZLIB_NG_COMPAT)
-        message(FATAL_ERROR
-            "PNG support requires zlib-ng compatibility mode. Configure through the repository vcpkg overlay.")
+        if(UNIX AND NOT APPLE)
+            list(APPEND SNOW_IMAGE_PRIVATE_DEFINITIONS "ZLIBNG_VERSION=\"system-zlib\"")
+        else()
+            message(FATAL_ERROR
+                "PNG support requires zlib-ng compatibility mode. Configure through the repository vcpkg overlay.")
+        endif()
     endif()
     add_library(SnowImage_png_jump OBJECT src/codecs/png_jump.c src/codecs/png_jump.h)
     target_link_libraries(SnowImage_png_jump PRIVATE PNG::PNG)
@@ -162,12 +166,30 @@ if(SNOW_IMAGE_CODEC_PNG)
 endif()
 
 if(SNOW_IMAGE_CODEC_JPEG)
-    find_package(libjpeg-turbo 3.1 CONFIG REQUIRED)
+    find_package(libjpeg-turbo 3.1 CONFIG QUIET)
+    if(libjpeg-turbo_FOUND)
+        list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES
+            $<IF:$<TARGET_EXISTS:libjpeg-turbo::jpeg>,libjpeg-turbo::jpeg,libjpeg-turbo::jpeg-static>
+            $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
+        )
+    elseif(UNIX AND NOT APPLE)
+        # Ubuntu's libjpeg-turbo ships pkg-config metadata instead of the
+        # libjpeg-turbo CMake package required by the vcpkg overlay.
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(JPEG REQUIRED IMPORTED_TARGET libjpeg)
+        pkg_check_modules(TURBOJPEG QUIET IMPORTED_TARGET libturbojpeg)
+        list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES PkgConfig::JPEG)
+        if(TARGET PkgConfig::TURBOJPEG)
+            list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES PkgConfig::TURBOJPEG)
+        endif()
+    else()
+        find_package(libjpeg-turbo 3.1 CONFIG REQUIRED)
+        list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES
+            $<IF:$<TARGET_EXISTS:libjpeg-turbo::jpeg>,libjpeg-turbo::jpeg,libjpeg-turbo::jpeg-static>
+            $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
+        )
+    endif()
     list(APPEND SNOW_IMAGE_SOURCES src/codecs/jpeg_codec.cpp src/codecs/jpeg_codec.h)
-    list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES
-        $<IF:$<TARGET_EXISTS:libjpeg-turbo::jpeg>,libjpeg-turbo::jpeg,libjpeg-turbo::jpeg-static>
-        $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
-    )
     list(APPEND SNOW_IMAGE_PRIVATE_DEFINITIONS SNOW_IMAGE_HAS_JPEG=1)
 endif()
 
@@ -197,9 +219,17 @@ if(SNOW_IMAGE_CODEC_SVG)
 endif()
 
 if(SNOW_IMAGE_CODEC_HEIF)
-    find_package(libheif CONFIG REQUIRED)
+    find_package(libheif CONFIG QUIET)
+    if(TARGET heif)
+        list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES heif)
+    elseif(UNIX AND NOT APPLE)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(HEIF REQUIRED IMPORTED_TARGET libheif)
+        list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES PkgConfig::HEIF)
+    else()
+        message(FATAL_ERROR "libheif is required but no CMake package or pkg-config file was found.")
+    endif()
     list(APPEND SNOW_IMAGE_SOURCES src/codecs/heif_codec.cpp src/codecs/heif_codec.h)
-    list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES heif)
     list(APPEND SNOW_IMAGE_PRIVATE_DEFINITIONS SNOW_IMAGE_HAS_HEIF=1)
 endif()
 

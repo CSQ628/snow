@@ -26,10 +26,17 @@ unset(_snow_qt_deprecation_length)
 
 macro(snow_find_qt)
     get_property(SNOW_QT_VERSION GLOBAL PROPERTY SNOW_QT_VERSION)
-    find_package(Qt6 "${SNOW_QT_VERSION}" EXACT REQUIRED ${ARGN})
-    if(NOT Qt6_VERSION VERSION_EQUAL SNOW_QT_VERSION)
-        message(FATAL_ERROR
-            "The resolved Qt ${Qt6_VERSION} does not match the audited Qt ${SNOW_QT_VERSION} kit")
+    if(UNIX AND NOT APPLE)
+        # The audited 6.12 pin is the macOS and Windows kit. Linux uses the distro Qt.
+        find_package(Qt6 REQUIRED ${ARGN})
+        set_property(GLOBAL PROPERTY SNOW_QT_VERSION "${Qt6_VERSION}")
+        set(SNOW_QT_VERSION "${Qt6_VERSION}")
+    else()
+        find_package(Qt6 "${SNOW_QT_VERSION}" EXACT REQUIRED ${ARGN})
+        if(NOT Qt6_VERSION VERSION_EQUAL SNOW_QT_VERSION)
+            message(FATAL_ERROR
+                "The resolved Qt ${Qt6_VERSION} does not match the audited Qt ${SNOW_QT_VERSION} kit")
+        endif()
     endif()
     # Directory definitions cover project-owned targets and Qt-generated resource
     # targets without changing the imported dependencies' compile interfaces.

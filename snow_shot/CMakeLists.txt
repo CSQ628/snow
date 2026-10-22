@@ -68,8 +68,18 @@ endif()
 if(APPLE)
     set(SNOW_SELECTED_FILES_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/selectedfiles.mm)
     set(SNOW_SELECTED_FILES_LIBRARIES "-framework AppKit" "-framework ApplicationServices")
+elseif(UNIX)
+    set(SNOW_SELECTED_FILES_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/linux/selectedfiles.cpp)
 else()
     set(SNOW_SELECTED_FILES_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/windows/selectedfiles.cpp)
+endif()
+
+if(UNIX AND NOT APPLE)
+    set(SNOW_SHOT_WINDOW_CHROME_SOURCE src/platform/linux/windowchrome.cpp)
+    set(SNOW_SHOT_SCROLL_INPUT_SOURCE src/platform/linux/scrollinput.cpp)
+else()
+    set(SNOW_SHOT_WINDOW_CHROME_SOURCE src/platform/windows/windowchrome.cpp)
+    set(SNOW_SHOT_SCROLL_INPUT_SOURCE src/platform/windows/scrollinput.cpp)
 endif()
 
 set(SNOW_PINNED_PLATFORM_SOURCES)
@@ -121,7 +131,12 @@ if(WIN32 AND (SNOW_SHOT_BUILD_TESTS OR SNOW_SHOT_DISTRIBUTION_CHANNEL STREQUAL "
 endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowQt.cmake")
-snow_find_qt(COMPONENTS Widgets LinguistTools Svg Network)
+set(_snow_shot_qt_components Widgets LinguistTools Svg Network)
+if(UNIX AND NOT APPLE)
+    list(APPEND _snow_shot_qt_components DBus PrintSupport)
+    find_package(X11 REQUIRED COMPONENTS Xtst)
+endif()
+snow_find_qt(COMPONENTS ${_snow_shot_qt_components})
 
 add_library(snow_shot_distribution STATIC
     include/snow_shot/app/distribution.h
@@ -207,6 +222,11 @@ elseif(APPLE)
         Qt6::QCocoaIntegrationPlugin
         Qt6::QMacStylePlugin
         Qt6::QSecureTransportBackendPlugin)
+elseif(UNIX)
+    list(APPEND _snow_shot_static_qt_plugins
+        Qt6::QXcbIntegrationPlugin
+        Qt6::QWaylandIntegrationPlugin
+        Qt6::QWaylandEglClientBufferPlugin)
 endif()
 
 if(SNOW_SHOT_QT_STATIC)
@@ -358,9 +378,11 @@ endif()
 # objdetect's cv::barcode detector covers EAN/UPC 1-D symbologies; text
 # recognition lives in the standalone OCR process. Pin the config package to
 # the manifest-installed copy: the Rust OpenCV crates export a user-level
-# OpenCV_DIR that would otherwise shadow it.
-set(OpenCV_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4" CACHE PATH
-    "OpenCV package configuration directory" FORCE)
+# OpenCV_DIR that would otherwise shadow it. Linux uses the distro package.
+if(VCPKG_TARGET_TRIPLET)
+    set(OpenCV_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4" CACHE PATH
+        "OpenCV package configuration directory" FORCE)
+endif()
 find_package(OpenCV CONFIG REQUIRED)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/FetchSnowShotQrModels.cmake")
 snow_shot_fetch_qr_models(SNOW_SHOT_QR_MODELS_DIR)
@@ -725,6 +747,8 @@ target_link_libraries(snow_shot_memory_optimization PUBLIC snow_shot_runtime_act
 if(APPLE)
     target_sources(snow_shot_memory_optimization PRIVATE src/platform/macos/memoryoptimization.cpp)
     target_link_libraries(snow_shot_memory_optimization PRIVATE Qt6::Gui)
+elseif(UNIX)
+    target_sources(snow_shot_memory_optimization PRIVATE src/platform/linux/memoryoptimization.cpp)
 else()
     target_sources(snow_shot_memory_optimization PRIVATE src/platform/windows/memoryoptimization.cpp)
 endif()
@@ -974,6 +998,9 @@ elseif(APPLE)
     list(APPEND SNOW_SHOT_GLOBAL_SHORTCUT_SOURCES
         src/platform/macos/globalshortcutbackend.cpp
         src/platform/macos/focusedfullscreenwindow.mm)
+elseif(UNIX)
+    list(APPEND SNOW_SHOT_GLOBAL_SHORTCUT_SOURCES
+        src/platform/linux/linuxglobalshortcutbackend.cpp)
 endif()
 list(APPEND SNOW_SHOT_SETTINGS_SOURCES ${SNOW_SHOT_GLOBAL_SHORTCUT_SOURCES})
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/components/screenshothistorypagewidget.cpp"
@@ -991,6 +1018,9 @@ add_library(snow_shot_file_manager STATIC
     src/platform/filemanager.cpp)
 target_include_directories(snow_shot_file_manager PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(snow_shot_file_manager PUBLIC Qt6::Gui)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(snow_shot_file_manager PUBLIC Qt6::DBus)
+endif()
 if(SNOW_SHOT_BUILD_TESTS)
     add_executable(snow-shot-file-manager-tests tests/file_manager_tests.cpp)
     target_link_libraries(snow-shot-file-manager-tests PRIVATE snow_shot_file_manager)
@@ -1056,14 +1086,21 @@ if(APPLE)
             LABELS "unit;macos" TIMEOUT 30)
     endif()
 endif()
-add_library(snow_shot_administrator STATIC
-    src/platform/windows/autostartregistration.cpp
-    src/platform/windows/shellcontextmenuregistration.cpp
-    src/platform/windows/administratorlaunch.cpp)
-target_include_directories(snow_shot_administrator PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(snow_shot_administrator PUBLIC Qt6::Core Qt6::Network)
 if(WIN32)
+    add_library(snow_shot_administrator STATIC
+        src/platform/windows/autostartregistration.cpp
+        src/platform/windows/shellcontextmenuregistration.cpp
+        src/platform/windows/administratorlaunch.cpp)
+    target_include_directories(snow_shot_administrator PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(snow_shot_administrator PUBLIC Qt6::Core Qt6::Network)
     target_link_libraries(snow_shot_administrator PRIVATE taskschd ole32 oleaut32 advapi32 shell32 uuid comsuppw windowsapp)
+elseif(UNIX AND NOT APPLE)
+    add_library(snow_shot_administrator STATIC
+        src/platform/linux/autostartregistration.cpp
+        src/platform/linux/shellcontextmenuregistration.cpp
+        src/platform/linux/administratorlaunch.cpp)
+    target_include_directories(snow_shot_administrator PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(snow_shot_administrator PUBLIC Qt6::Core Qt6::Network)
 endif()
 if(SNOW_SHOT_BUILD_TESTS)
     if(WIN32)
@@ -1087,10 +1124,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-shell-image-launch-tests PROPERTIES LABELS "unit" TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
-    add_executable(snow-shot-administrator-launch-tests tests/administrator_launch_tests.cpp)
-    target_link_libraries(snow-shot-administrator-launch-tests PRIVATE snow_shot_administrator)
-    add_test(NAME snow-shot-administrator-launch-tests COMMAND snow-shot-administrator-launch-tests)
-    set_tests_properties(snow-shot-administrator-launch-tests PROPERTIES LABELS "unit;windows" TIMEOUT 30)
+    if(WIN32)
+        add_executable(snow-shot-administrator-launch-tests tests/administrator_launch_tests.cpp)
+        target_link_libraries(snow-shot-administrator-launch-tests PRIVATE snow_shot_administrator)
+        add_test(NAME snow-shot-administrator-launch-tests COMMAND snow-shot-administrator-launch-tests)
+        set_tests_properties(snow-shot-administrator-launch-tests PROPERTIES LABELS "unit;windows" TIMEOUT 30)
+    endif()
 
     add_executable(snow-shot-startup-registration-report-tests
         tests/startup_registration_report_tests.cpp)
@@ -1156,6 +1195,9 @@ target_compile_definitions(snow_shot_settings PRIVATE
     SNOW_SHOT_QQ_GROUP_3_URL="${SNOW_SHOT_QQ_GROUP_3_URL}"
 )
 target_link_libraries(snow_shot_settings PRIVATE snow_shot_image_codec Qt6::Svg Qt6::Network snow_shot_administrator)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(snow_shot_settings PRIVATE Qt6::DBus X11::X11)
+endif()
 add_library(snow_shot_global_mouse STATIC
     include/snow_shot/presentation/globalmousemanager.h
     include/snow_shot/presentation/globalmousegesture.h
@@ -1171,6 +1213,10 @@ if(WIN32)
         src/platform/windows/globalmousebackend.cpp
         src/platform/windows/globalmousebackend_p.h)
     target_link_libraries(snow_shot_global_mouse PRIVATE dwmapi user32)
+endif()
+if(UNIX AND NOT APPLE)
+    target_sources(snow_shot_global_mouse PRIVATE src/platform/linux/globalmousebackend.cpp)
+    target_link_libraries(snow_shot_global_mouse PRIVATE X11::X11 X11::Xtst)
 endif()
 if(APPLE)
     enable_language(OBJCXX)
@@ -1813,6 +1859,9 @@ elseif(APPLE)
     target_sources(snow_shot_print PRIVATE src/platform/macos/nativeprint.mm)
     target_compile_options(snow_shot_print PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_link_libraries(snow_shot_print PRIVATE "-framework AppKit")
+elseif(UNIX)
+    target_sources(snow_shot_print PRIVATE src/platform/linux/nativeprint.cpp)
+    target_link_libraries(snow_shot_print PRIVATE Qt6::PrintSupport)
 else()
     target_sources(snow_shot_print PRIVATE src/presentation/services/nativeprintunsupported.cpp)
 endif()
@@ -1823,11 +1872,11 @@ target_link_libraries(snow_shot_export_naming PUBLIC Qt6::Gui)
 if(APPLE)
     target_sources(snow_shot_export_naming PRIVATE src/platform/macos/screenshotwindownames.mm)
     target_link_libraries(snow_shot_export_naming PRIVATE "-framework AppKit" "-framework CoreGraphics")
+elseif(UNIX)
+    target_sources(snow_shot_export_naming PRIVATE src/platform/linux/screenshotwindownames.cpp)
 else()
     target_sources(snow_shot_export_naming PRIVATE src/platform/windows/screenshotwindownames.cpp)
-    if(WIN32)
-        target_link_libraries(snow_shot_export_naming PRIVATE dwmapi version)
-    endif()
+    target_link_libraries(snow_shot_export_naming PRIVATE dwmapi version)
 endif()
 
 set(SNOW_SHOT_IMAGE_EDITING_SOURCES
@@ -1864,9 +1913,9 @@ set(PROJECT_CXX_SOURCES
     src/app/main.cpp
     src/app/singleinstancecoordinator.cpp
     src/platform/physicalcursor.cpp
-    src/platform/windows/windowchrome.cpp
+    ${SNOW_SHOT_WINDOW_CHROME_SOURCE}
     src/platform/windows/windowcursorrefresh.h
-    src/platform/windows/scrollinput.cpp
+    ${SNOW_SHOT_SCROLL_INPUT_SOURCE}
     src/presentation/components/contentcardwidget.cpp
     src/presentation/components/maincontentheaderwidget.cpp
     src/presentation/components/sidebarwidget.cpp
@@ -2077,7 +2126,7 @@ endif()
 target_compile_definitions(snow_shot PRIVATE
     SNOW_SHOT_API_BASE_URL=\"${SNOW_SHOT_API_BASE_URL}\"
 )
-if(WIN32)
+if(SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE)
     target_compile_definitions(snow_shot PRIVATE
         SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE=\"${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}\"
     )
@@ -2842,7 +2891,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         add_executable(snow-shot-window-chrome-tests
             tests/window_chrome_tests.cpp
             include/snow_shot/platform/windows/windowchrome.h
-            src/platform/windows/windowchrome.cpp
+            ${SNOW_SHOT_WINDOW_CHROME_SOURCE}
         )
         target_compile_definitions(snow-shot-window-chrome-tests PRIVATE NOMINMAX)
         target_include_directories(snow-shot-window-chrome-tests PRIVATE
@@ -2864,7 +2913,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
         add_executable(snow-shot-window-cursor-refresh-tests
             tests/window_cursor_refresh_tests.cpp
-            src/platform/windows/windowchrome.cpp
+            ${SNOW_SHOT_WINDOW_CHROME_SOURCE}
             src/platform/windows/windowcursorrefresh.h
         )
         target_compile_definitions(snow-shot-window-cursor-refresh-tests PRIVATE NOMINMAX)
@@ -2935,7 +2984,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/components/sidebarwidget.cpp
         src/presentation/components/titlebarwidget.cpp
         src/presentation/services/screenshotclipboardservice.cpp
-        src/platform/windows/windowchrome.cpp
+        ${SNOW_SHOT_WINDOW_CHROME_SOURCE}
     )
     if(APPLE)
         target_sources(snow-shot-about-page-tests PRIVATE
@@ -4044,7 +4093,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             src/presentation/capture/screenshotcapturecoordinator.cpp
             src/presentation/capture/screenshotcaptureworker.cpp
             src/presentation/capture/screenshotcapturepolicy.cpp
-            src/platform/windows/windowchrome.cpp)
+            ${SNOW_SHOT_WINDOW_CHROME_SOURCE})
         target_compile_definitions(snow-shot-recapture-cursor-native-e2e-test PRIVATE NOMINMAX)
         target_include_directories(snow-shot-recapture-cursor-native-e2e-test PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -4572,8 +4621,24 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-scrolling-auto-scroll-tests
         tests/scrolling_auto_scroll_tests.cpp
-        src/platform/windows/scrollinput.cpp
+        ${SNOW_SHOT_SCROLL_INPUT_SOURCE}
     )
+    if(UNIX AND NOT APPLE)
+        add_executable(snow-shot-linux-machine-capability-tests
+            tests/linux_machine_capability_tests.cpp
+            ${SNOW_SHOT_SCROLL_INPUT_SOURCE}
+        )
+        target_include_directories(snow-shot-linux-machine-capability-tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/services")
+        target_link_libraries(snow-shot-linux-machine-capability-tests PRIVATE
+            snow_shot_settings Qt6::Core Qt6::Gui Qt6::DBus X11::X11 X11::Xtst)
+        add_test(NAME snow-shot-linux-machine-capability-tests
+            COMMAND snow-shot-linux-machine-capability-tests)
+        set_tests_properties(snow-shot-linux-machine-capability-tests PROPERTIES
+            LABELS "unit" TIMEOUT 30)
+    endif()
     target_include_directories(snow-shot-scrolling-auto-scroll-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -8197,7 +8262,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/services/screenshotimagefileservice.cpp
         src/presentation/services/screenshotpdfexport.cpp
-        src/platform/windows/windowchrome.cpp
+        ${SNOW_SHOT_WINDOW_CHROME_SOURCE}
     )
     snow_shot_link_macos_window_platform(snow-shot-screen-recording-controller-tests)
     target_include_directories(snow-shot-screen-recording-controller-tests PRIVATE
@@ -9387,7 +9452,7 @@ if(SNOW_SHOT_BUILD_BENCHMARKS)
         src/presentation/components/sidebarwidget.cpp
         src/presentation/components/titlebarwidget.cpp
         src/presentation/services/screenshotclipboardservice.cpp
-        src/platform/windows/windowchrome.cpp)
+        ${SNOW_SHOT_WINDOW_CHROME_SOURCE})
     if(APPLE)
         target_sources(snow-shot-main-window-no-skin-performance-benchmark PRIVATE
             src/platform/macos/applicationactivation.mm)
@@ -9547,7 +9612,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(WIN32)
         target_sources(snow-shot-scrolling-hover-geometry-tests PRIVATE
-            src/platform/windows/windowchrome.cpp)
+            ${SNOW_SHOT_WINDOW_CHROME_SOURCE})
         target_link_libraries(snow-shot-scrolling-hover-geometry-tests PRIVATE dwmapi user32)
         add_test(NAME snow-shot-scrolling-thumbnail-capture-composition-tests
             COMMAND snow-shot-scrolling-hover-geometry-tests --capture-composition-only
@@ -10426,6 +10491,30 @@ if(WIN32)
     )
 endif()
 
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SNOW_SHOT_FFMPEG REQUIRED IMPORTED_TARGET GLOBAL
+        libavfilter libavformat libavcodec libswresample libswscale libavutil)
+    pkg_check_modules(SNOW_SHOT_PIPEWIRE REQUIRED IMPORTED_TARGET GLOBAL libpipewire-0.3)
+    foreach(_snow_rust_bundle IN ITEMS snow_shot_rust_ffi_bundle snow_shot_full_rust_ffi_bundle)
+        if(TARGET ${_snow_rust_bundle})
+            target_link_libraries(${_snow_rust_bundle} INTERFACE PkgConfig::SNOW_SHOT_FFMPEG
+                PkgConfig::SNOW_SHOT_PIPEWIRE X11::X11 X11::Xtst)
+        endif()
+    endforeach()
+    target_link_libraries(snow_shot PRIVATE
+        PkgConfig::SNOW_SHOT_FFMPEG
+        PkgConfig::SNOW_SHOT_PIPEWIRE
+        Qt6::DBus
+        Qt6::PrintSupport
+        X11::X11
+        X11::Xtst)
+    if(TARGET snow-shot-scrolling-auto-scroll-tests)
+        target_link_libraries(snow-shot-scrolling-auto-scroll-tests PRIVATE
+            Qt6::DBus X11::X11 X11::Xtst)
+    endif()
+endif()
+
 if(WIN32)
     set(SNOW_SHOT_FFMPEG_BIN_DIR
         "${SNOW_FFMPEG_ROOT}/bin"
@@ -11248,7 +11337,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_TESTS)
     foreach(_kind IN ITEMS screenshot recording)
         if(_kind STREQUAL "screenshot")
             set(_toolbar_test snow-shot-screenshot-toolbar-remembered-tool-tests)
-            target_sources(${_toolbar_test} PRIVATE src/platform/windows/windowchrome.cpp)
+            target_sources(${_toolbar_test} PRIVATE ${SNOW_SHOT_WINDOW_CHROME_SOURCE})
         else()
             set(_toolbar_test snow-shot-screen-recording-controller-tests)
         endif()
@@ -11292,8 +11381,8 @@ foreach(_target IN LISTS _overlay_widget_targets)
             src/presentation/recording/recordingregioninputrouter.h)
     endif()
     if(WIN32 AND _sources MATCHES "screenshotoverlaywindow.cpp" AND
-       NOT _sources MATCHES "src/platform/windows/windowchrome.cpp")
-        target_sources(${_target} PRIVATE src/platform/windows/windowchrome.cpp)
+       NOT _sources MATCHES "${SNOW_SHOT_WINDOW_CHROME_SOURCE}")
+        target_sources(${_target} PRIVATE ${SNOW_SHOT_WINDOW_CHROME_SOURCE})
         target_link_libraries(${_target} PRIVATE dwmapi user32)
     endif()
     # The platform helper owns composition and native alpha hit-testing for all

@@ -26,5 +26,8 @@ bench-timing = []
 # input. Production builds never enable this.
 bench-synthetic-input = []
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 snow-macos = { path = "../snow-macos" }

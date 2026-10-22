@@ -98,9 +98,17 @@ BarcodeDecoders loadDecoders(const QString& modelsDirectoryPath) {
         readModelFile(modelsDirectory, QStringLiteral("sr.caffemodel"), superResolutionCaffeModel);
     if (modelsReadable) {
         try {
+#if defined(Q_OS_LINUX)
+            created.qr = cv::makePtr<cv::wechat_qrcode::WeChatQRCode>(
+                modelsDirectory.filePath(QStringLiteral("detect.prototxt")).toStdString(),
+                modelsDirectory.filePath(QStringLiteral("detect.caffemodel")).toStdString(),
+                modelsDirectory.filePath(QStringLiteral("sr.prototxt")).toStdString(),
+                modelsDirectory.filePath(QStringLiteral("sr.caffemodel")).toStdString());
+#else
             created.qr = cv::makePtr<cv::wechat_qrcode::WeChatQRCode>(
                 std::move(detectorPrototxt), std::move(detectorCaffeModel),
                 std::move(superResolutionPrototxt), std::move(superResolutionCaffeModel));
+#endif
         } catch (const std::exception& exception) {
             qWarning() << "Failed to load the WeChat QR models:" << exception.what();
             created.loadError = recognitionModelsMissingMessage();

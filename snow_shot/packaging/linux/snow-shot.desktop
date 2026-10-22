@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Snow Shot
+Comment=Capture, scroll, and record the screen
+Exec=snow-shot %F
+Icon=snow-shot
+Terminal=false
+Categories=Graphics;Utility;
+MimeType=image/png;image/jpeg;image/gif;image/webp;image/bmp;image/tiff;
+Actions=edit;
+
+[Desktop Action edit]
+Name=Edit with Snow Shot
+Exec=snow-shot --edit-with-snow-shot %f

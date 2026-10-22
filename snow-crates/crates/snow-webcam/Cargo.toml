@@ -13,5 +13,8 @@ snow-recording-model = { path = "../snow-recording-model" }
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Com", "Win32_Media_MediaFoundation", "Win32_System_Variant", "Devices_Enumeration", "Foundation_Collections"] }
 windows-core.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 snow-macos = { path = "../snow-macos" }

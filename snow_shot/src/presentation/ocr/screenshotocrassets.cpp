@@ -49,6 +49,10 @@ constexpr auto kPlatform = "macos-arm64";
 constexpr auto kPlatform = "macos-x64";
 #elif defined(Q_OS_WIN) && defined(Q_PROCESSOR_ARM_64)
 constexpr auto kPlatform = "windows-arm64";
+#elif defined(Q_OS_LINUX) && defined(Q_PROCESSOR_ARM_64)
+constexpr auto kPlatform = "linux-arm64";
+#elif defined(Q_OS_LINUX)
+constexpr auto kPlatform = "linux-x64";
 #else
 constexpr auto kPlatform = "windows-x64";
 #endif
@@ -246,7 +250,7 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
     Descriptor result;
     result.runtimeVersion = runtime.value(QStringLiteral("version")).toString();
     result.platform = runtime.value(QStringLiteral("platform")).toString();
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
     result.bundled = true;
 #endif
     result.executable = result.bundled

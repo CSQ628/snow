@@ -356,6 +356,7 @@ struct SettingsLocalShortcutDefinition {
 
 enum class SettingsActionBinding {
     OpenLoginItemSettings,
+    OpenDesktopPermissions,
     RestartAsAdministrator,
     ClearCaptureHistory,
     ClearPinnedHistory,

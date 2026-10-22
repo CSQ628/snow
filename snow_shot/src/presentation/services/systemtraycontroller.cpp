@@ -165,7 +165,11 @@ class TrayImageCache final {
             return {};
         }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
         const QSize sourceSize = reader.effectiveSize();
+#else
+        const QSize sourceSize = reader.size();
+#endif
         if (!sourceSize.isValid() || sourceSize.width() <= 0 || sourceSize.height() <= 0 ||
             sourceSize.width() > 16384 || sourceSize.height() > 16384 ||
             static_cast<qint64>(sourceSize.width()) * sourceSize.height() > 64LL * 1024 * 1024) {

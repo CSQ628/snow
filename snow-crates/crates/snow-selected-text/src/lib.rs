@@ -9,11 +9,11 @@
 #[cfg(any(windows, test))]
 mod clipboard;
 mod model;
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 mod policy;
 mod runtime;
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod platform;
 
 pub use model::*;

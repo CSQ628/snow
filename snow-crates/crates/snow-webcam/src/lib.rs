@@ -1,5 +1,7 @@
 //! One asynchronous camera owner shared by preview and recording. No callback enters the UI.
 pub mod ffi;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 mod resize;
@@ -160,7 +162,11 @@ impl Source {
             {
                 macos::open(options)
             }
-            #[cfg(not(any(windows, target_os = "macos")))]
+            #[cfg(target_os = "linux")]
+            {
+                linux::open(options)
+            }
+            #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
             {
                 let _ = options;
                 Err("webcam capture is unsupported on this platform".into())

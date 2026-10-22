@@ -1086,7 +1086,7 @@ SettingsItemDefinition updateModeItem() {
             payload};
 }
 
-#ifndef Q_OS_MACOS
+#ifdef Q_OS_WIN
 SettingsItemDefinition screenshotApiModeItem() {
     SettingsSelectDefinition payload;
     payload.binding = SettingsSelectBinding::ScreenshotApiMode;
@@ -1629,7 +1629,7 @@ SettingsItemDefinition selectionResizeModeItem() {
         });
 }
 
-#ifndef Q_OS_MACOS
+#ifdef Q_OS_WIN
 SettingsItemDefinition screenshotRestoreOriginalScreenColorsItem() {
     return switchItem(
         QStringLiteral("screenshot.restore-original-screen-colors"),
@@ -2313,7 +2313,7 @@ SettingsItemDefinition fullscreenHotkeySuppressionItem() {
         SettingsSwitchBinding::DisableHotkeysOnFocusedFullscreen);
 }
 
-#ifndef Q_OS_MACOS
+#ifdef Q_OS_WIN
 SettingsItemDefinition launchAsAdministratorItem() {
     return switchItem(
         QStringLiteral("system.launch-as-administrator"),
@@ -2352,6 +2352,24 @@ SettingsItemDefinition loginItemSettingsItem() {
             payload};
 }
 #endif
+#ifdef Q_OS_LINUX
+SettingsItemDefinition portalPermissionsItem() {
+    SettingsActionDefinition payload;
+    payload.binding = SettingsActionBinding::OpenDesktopPermissions;
+    payload.buttonText = settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Review"));
+    payload.iconFactory = [] { return outlined_icons::Setting(); };
+    return {QStringLiteral("system.desktop-permissions"),
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Desktop portal permissions")),
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog",
+                "Screen recording, remote desktop, global shortcuts, and screen reading are "
+                "granted by the desktop portal when Snow Shot asks. Allow those prompts to "
+                "capture, scroll, use hotkeys, and read selected text.")),
+            {},
+            {},
+            payload};
+}
+#endif
 SettingsItemDefinition autoStartItem() {
     if (app::distribution::isStoreManaged())
         return switchItem(QStringLiteral("system.auto-start-at-boot"),
@@ -2362,7 +2380,7 @@ SettingsItemDefinition autoStartItem() {
                           SettingsSwitchBinding::AutoStartAtBoot);
     return switchItem(
         QStringLiteral("system.auto-start-at-boot"),
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
         QT_TRANSLATE_NOOP("SettingsCatalog", "Launch at login"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Start Snow Shot in the background when you log in."),
 #else
@@ -3271,8 +3289,10 @@ QVector<SettingsPageDefinition> builtInPages() {
                  {autoStartItem(),
 #ifdef Q_OS_MACOS
                   loginItemSettingsItem(),
-#else
+#elif defined(Q_OS_WIN)
                   launchAsAdministratorItem(), restartAsAdministratorItem(),
+#elif defined(Q_OS_LINUX)
+                  portalPermissionsItem(),
 #endif
 #ifdef Q_OS_WIN
                   contextMenuModeItem(),
@@ -3460,7 +3480,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                   "SettingsCatalog", "Include the pointer and capture controls in screenshots")),
               SettingsSectionReset::ScreenshotCaptureBehavior,
               {screenshotShowCursorItem(), screenshotCaptureUiInScrollingScreenshotItem()}},
-#ifndef Q_OS_MACOS
+#ifdef Q_OS_WIN
              {QStringLiteral("capture-compatibility"),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Advanced capture")),
               settingsText(QT_TRANSLATE_NOOP(
@@ -3568,7 +3588,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                  SettingsSectionReset::ScreenRecordingCapture,
                  {
                      screenRecordingCaptureToolbarItem(),
-#ifndef Q_OS_MACOS
+#ifdef Q_OS_WIN
                      screenRecordingApiModeItem(),
 #endif
                  },

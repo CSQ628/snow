@@ -33,8 +33,10 @@ function(snow_workspace_configure_paths)
             include(SnowWindowsArchitecture)
             snow_configure_windows_architecture()
             set(_snow_default_triplet "${SNOW_WINDOWS_ARCHITECTURE}-windows")
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+            set(_snow_default_triplet "arm64-linux")
         else()
-            set(_snow_default_triplet "x64-windows")
+            set(_snow_default_triplet "x64-linux")
         endif()
         set(VCPKG_TARGET_TRIPLET "${_snow_default_triplet}" CACHE STRING
             "vcpkg target triplet used by this build." FORCE)
@@ -45,8 +47,16 @@ function(snow_workspace_configure_paths)
     endif()
     set(SNOW_VCPKG_INSTALLED_DIR "${_vcpkg_installed_default}" CACHE PATH
         "vcpkg installed tree used by the active build preset.")
-    set(SNOW_FFMPEG_ROOT "${SNOW_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}" CACHE PATH
-        "vcpkg installation prefix containing FFmpeg.")
+    if(UNIX AND NOT APPLE)
+        # Linux resolves FFmpeg through the distribution packages, so no vcpkg
+        # installation prefix applies. An empty root lets ffmpeg-sys-next use
+        # pkg-config instead of a nonexistent FFMPEG_DIR.
+        set(SNOW_FFMPEG_ROOT "" CACHE PATH
+            "vcpkg installation prefix containing FFmpeg.")
+    else()
+        set(SNOW_FFMPEG_ROOT "${SNOW_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}" CACHE PATH
+            "vcpkg installation prefix containing FFmpeg.")
+    endif()
 
     foreach(_required_dir IN ITEMS
         SNOW_ANT_DESIGN_SOURCE_DIR

@@ -2,6 +2,7 @@
 #define SNOW_SHOT_APP_SHELLIMAGELAUNCH_H
 
 #include <QDir>
+#include <QFileInfo>
 #include <QStringList>
 
 namespace snow_shot::app {
@@ -18,6 +19,21 @@ struct ShellImageLaunchRequest {
 parseShellImageLaunchRequest(const QStringList& arguments) {
     ShellImageLaunchRequest request;
     for (qsizetype index = 0; index < arguments.size(); ++index) {
+#ifdef Q_OS_LINUX
+        if (!arguments.at(index).startsWith(u'-')) {
+            const QFileInfo info(arguments.at(index));
+            const QString suffix = info.suffix().toLower();
+            const bool image = suffix == QStringLiteral("png") || suffix == QStringLiteral("jpg") ||
+                               suffix == QStringLiteral("jpeg") || suffix == QStringLiteral("gif") ||
+                               suffix == QStringLiteral("webp") || suffix == QStringLiteral("bmp") ||
+                               suffix == QStringLiteral("tif") || suffix == QStringLiteral("tiff");
+            if (image && info.isAbsolute()) {
+                request.requested = true;
+                request.paths.append(info.absoluteFilePath());
+                continue;
+            }
+        }
+#endif
         if (arguments.at(index) != QStringLiteral("--edit-with-snow-shot"))
             continue;
         request.requested = true;

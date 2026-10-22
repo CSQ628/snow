@@ -558,8 +558,8 @@ void builtInCatalogIsCompleteAndValid() {
         sectionCount == 53,
         "Windows includes the context menu shortcut category with capture and recording groups");
 #else
-    require(sectionCount == 52,
-            "catalog includes capture and recording groups with merged storage and desktop groups");
+    require(sectionCount == 51,
+            "Linux omits Windows capture-backend sections and keeps the shared groups");
 #endif
     // Keep the shared total in one place: adding a shared setting must update both platforms.
     // Explicit platform membership also catches substitutions that a total alone would miss.
@@ -582,10 +582,14 @@ void builtInCatalogIsCompleteAndValid() {
     };
 #ifdef Q_OS_MACOS
     const auto& expectedPlatformItems = macOnlyItems;
-    const auto& excludedPlatformItems = windowsOnlyItems;
-#else
+    const QSet<QString> excludedPlatformItems = windowsOnlyItems;
+#elif defined(Q_OS_WIN)
     const auto& expectedPlatformItems = windowsOnlyItems;
-    const auto& excludedPlatformItems = macOnlyItems;
+    const QSet<QString> excludedPlatformItems = macOnlyItems;
+#else
+    const QSet<QString> expectedPlatformItems{QStringLiteral("system.desktop-permissions")};
+    QSet<QString> excludedPlatformItems = windowsOnlyItems;
+    excludedPlatformItems.unite(macOnlyItems);
 #endif
     for (const auto& id : expectedPlatformItems)
         require(itemIds.remove(id), "catalog must contain each platform-specific setting");
@@ -602,10 +606,17 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
+#if defined(Q_OS_LINUX)
+    require(itemIds.size() == 294,
+            qPrintable(QStringLiteral(
+                           "Linux catalog must contain 294 shared settings after the portal item; found %1")
+                           .arg(itemIds.size())));
+#else
     require(itemIds.size() == 293,
             qPrintable(QStringLiteral(
                            "catalog must contain 293 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
+#endif
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
             "catalog must retain both independent pinned window confirmation settings");
@@ -675,8 +686,8 @@ void builtInCatalogIsCompleteAndValid() {
     const auto* apiMode =
         catalog.item({QStringLiteral("screenshots"), QStringLiteral("capture-compatibility"),
                       QStringLiteral("screenshot.api-mode")});
-#ifdef Q_OS_MACOS
-    require(apiMode == nullptr, "macOS must omit Windows-only capture backends");
+#if !defined(Q_OS_WIN)
+    require(apiMode == nullptr, "non-Windows builds must omit DXGI, WGC, and GDI");
 #else
     require(apiMode != nullptr &&
                 apiMode->title.translated() == QStringLiteral("Screenshot capture API") &&
@@ -688,8 +699,8 @@ void builtInCatalogIsCompleteAndValid() {
     const auto* windowElementApi =
         catalog.item({QStringLiteral("screenshots"), QStringLiteral("capture-compatibility"),
                       QStringLiteral("screenshot.window-element-api")});
-#ifdef Q_OS_MACOS
-    require(windowElementApi == nullptr, "macOS must omit the Windows-only element API setting");
+#if !defined(Q_OS_WIN)
+    require(windowElementApi == nullptr, "non-Windows builds must omit MSAA and UIA");
 #else
     const auto* windowElementSelect =
         windowElementApi != nullptr
@@ -712,8 +723,8 @@ void builtInCatalogIsCompleteAndValid() {
     const auto* colorRestoration =
         catalog.item({QStringLiteral("screenshots"), QStringLiteral("capture-compatibility"),
                       QStringLiteral("screenshot.restore-original-screen-colors")});
-#ifdef Q_OS_MACOS
-    require(colorRestoration == nullptr, "macOS must omit Windows color restoration");
+#if !defined(Q_OS_WIN)
+    require(colorRestoration == nullptr, "non-Windows builds must omit magnifier color restoration");
 #else
     require(colorRestoration != nullptr &&
                 colorRestoration->configurationKey ==
@@ -767,8 +778,8 @@ void builtInCatalogIsCompleteAndValid() {
     const auto* recordingApiMode = catalog.item({QStringLiteral("screen-recording"),
                                                  QStringLiteral("screen-recording-capture"),
                                                  QStringLiteral("screen-recording.api-mode")});
-#ifdef Q_OS_MACOS
-    require(recordingApiMode == nullptr, "macOS must omit Windows-only recording APIs");
+#if !defined(Q_OS_WIN)
+    require(recordingApiMode == nullptr, "non-Windows builds must omit recording API choices");
 #else
     require(recordingApiMode != nullptr &&
                 recordingApiMode->configurationKey == QStringLiteral("screen_recording/api_mode") &&
@@ -927,7 +938,7 @@ void builtInCatalogIsCompleteAndValid() {
         QStringLiteral("drawing-settings"),
         QStringLiteral("drawing"),
         QStringLiteral("screenshot-capture"),
-#ifndef Q_OS_MACOS
+#ifdef Q_OS_WIN
         QStringLiteral("capture-compatibility"),
 #endif
     };
@@ -3067,8 +3078,8 @@ void searchIndexIsGeneratedAndRanked() {
                         }),
             "select option labels must be indexed");
     const auto windowElementApi = index.search(QStringLiteral("UIA"));
-#ifdef Q_OS_MACOS
-    require(windowElementApi.isEmpty(), "macOS search must omit Windows-only backend choices");
+#if !defined(Q_OS_WIN)
+    require(windowElementApi.isEmpty(), "non-Windows search must omit MSAA and UIA");
 #else
     require(!windowElementApi.isEmpty() && windowElementApi.constFirst().location.itemId ==
                                                QStringLiteral("screenshot.window-element-api"),
@@ -3855,7 +3866,7 @@ int main(int argc, char** argv) {
                 adminCatalog.item({QStringLiteral("general"), QStringLiteral("system-general"),
                                    QStringLiteral("system.restart-as-administrator")}) == nullptr,
             "macOS must omit Windows-only administrator controls");
-#else
+#elif defined(Q_OS_WIN)
     bool foundAdministratorControls = false;
     for (const auto& page : adminCatalog.pages()) {
         for (const auto& section : page.sections) {

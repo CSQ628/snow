@@ -168,6 +168,10 @@ function(snow_add_rust_static_libraries batch_name)
     if(NOT DEFINED SNOW_FFMPEG_ROOT OR SNOW_FFMPEG_ROOT STREQUAL "")
         if(DEFINED ENV{FFMPEG_DIR} AND NOT "$ENV{FFMPEG_DIR}" STREQUAL "")
             set(SNOW_FFMPEG_ROOT "$ENV{FFMPEG_DIR}")
+        elseif(UNIX AND NOT APPLE)
+            # Linux uses the distribution's FFmpeg development packages. Leaving
+            # SNOW_FFMPEG_ROOT empty lets ffmpeg-sys-next fall back to pkg-config.
+            set(SNOW_FFMPEG_ROOT "")
         elseif(DEFINED VCPKG_INSTALLED_DIR AND NOT VCPKG_INSTALLED_DIR STREQUAL "")
             set(SNOW_FFMPEG_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
         else()
@@ -244,9 +248,11 @@ function(snow_add_rust_static_libraries batch_name)
         "VCPKG_ROOT=${SNOW_VCPKG_ROOT}"
         "VCPKGRS_TRIPLET=${VCPKG_TARGET_TRIPLET}"
         "VCPKGRS_DYNAMIC=${_vcpkg_dynamic}"
-        "FFMPEG_DIR=${SNOW_FFMPEG_ROOT}"
         "CARGO_TARGET_DIR=${SNOW_RUST_CARGO_TARGET_DIR}"
     )
+    if(SNOW_FFMPEG_ROOT)
+        list(APPEND _cargo_environment "FFMPEG_DIR=${SNOW_FFMPEG_ROOT}")
+    endif()
     snow_windows_rust_environment(_windows_cargo_environment "${SNOW_RUST_TARGET}")
     list(APPEND _cargo_environment ${_windows_cargo_environment})
     if(APPLE)
@@ -445,6 +451,16 @@ function(snow_add_rust_executable target_name)
         "CARGO_TARGET_DIR=${SNOW_RUST_CARGO_TARGET_DIR}")
     if(SNOW_RUST_TOOLCHAIN)
         list(APPEND _cargo_environment "RUSTUP_TOOLCHAIN=${SNOW_RUST_TOOLCHAIN}")
+        # A stable rustc earlier on PATH wins over the rustup proxy, so the
+        # pinned toolchain never sees its feature gates. Put that toolchain's
+        # binaries first when rustup has installed them.
+        set(_snow_rust_toolchain_bin
+            "$ENV{HOME}/.rustup/toolchains/${SNOW_RUST_TOOLCHAIN}-${_rust_target}/bin")
+        if(IS_DIRECTORY "${_snow_rust_toolchain_bin}")
+            list(APPEND _cargo_environment
+                "PATH=${_snow_rust_toolchain_bin}:$ENV{PATH}"
+                "RUSTC=${_snow_rust_toolchain_bin}/rustc")
+        endif()
     endif()
     snow_windows_rust_environment(_windows_cargo_environment "${_rust_target}")
     list(APPEND _cargo_environment ${_windows_cargo_environment})

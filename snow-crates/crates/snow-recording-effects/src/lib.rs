@@ -1,4 +1,6 @@
 //! Timestamp-driven input effects shared by video composition and canvas previews.
+#[cfg(target_os = "linux")]
+pub(crate) mod linux_input;
 pub mod keyboard_hook;
 pub mod keyboard_overlay;
 pub mod keyboard_rasterizer;

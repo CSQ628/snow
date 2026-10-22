@@ -40,7 +40,7 @@
 #include "snow_shot/presentation/styles/themecolorscheme.h"
 #include "snow_shot/presentation/screenrecordingfolder.h"
 
-#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
+#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
 #include "snow_shot/platform/windowcaptureexclusion.h"
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include "snow_shot/platform/windows/windowchrome.h"

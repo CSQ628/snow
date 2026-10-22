@@ -23,6 +23,9 @@ name = "audio_hot_path"
 harness = false
 required-features = ["bench-internals"]
 
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = "0.8"
+
 [target.'cfg(windows)'.dependencies]
 windows-core.workspace = true
 windows = { workspace = true, features = [

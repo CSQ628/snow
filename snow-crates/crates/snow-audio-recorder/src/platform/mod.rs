@@ -1,21 +1,24 @@
 use std::sync::Arc;
 
 use crate::backend::{AudioBackend, AudioBackendKind};
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use crate::device::AudioDeviceInfo;
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use crate::error::AudioError;
 use crate::error::AudioResult;
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use crate::session::AudioStreamConfig;
 
 #[cfg(target_os = "windows")]
 pub(crate) mod windows;
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 struct UnsupportedBackend;
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 impl AudioBackend for UnsupportedBackend {
     fn enumerate_devices(
         &self,
@@ -41,7 +44,12 @@ pub(crate) fn build_backend(kind: AudioBackendKind) -> AudioResult<Arc<dyn Audio
     Ok(Arc::new(windows::WasapiBackend::new(kind)?))
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(target_os = "linux")]
+pub(crate) fn build_backend(kind: AudioBackendKind) -> AudioResult<Arc<dyn AudioBackend>> {
+    Ok(Arc::new(linux::build(kind)?))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub(crate) fn build_backend(_kind: AudioBackendKind) -> AudioResult<Arc<dyn AudioBackend>> {
     Ok(Arc::new(UnsupportedBackend))
 }

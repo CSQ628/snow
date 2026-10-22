@@ -615,7 +615,11 @@ class DocumentWorker final : public QObject {
                     return {failure(request, QStringLiteral("invalid_source")), {}};
                 QImageReader reader(&buffer);
                 reader.setAutoTransform(true);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
                 auto size = reader.effectiveSize();
+#else
+                auto size = reader.size();
+#endif
                 const bool native = !size.isValid();
                 auto nativeFormat = snow::image::Format::unknown;
                 if (native) {

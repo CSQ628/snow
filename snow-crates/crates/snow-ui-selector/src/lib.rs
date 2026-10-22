@@ -5,6 +5,10 @@ pub use query::{QueryControl, QueryResult, StopReason};
 mod windows;
 #[cfg(windows)]
 pub use windows::{ElementRegionService, enable_high_dpi_support};
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::ElementRegionService;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -138,4 +142,6 @@ pub struct WindowSnapshot {
     pub(crate) displays: Vec<macos::DisplayInfo>,
     #[cfg(target_os = "macos")]
     pub(crate) activation: std::sync::Arc<macos::activation::Session>,
+    #[cfg(target_os = "linux")]
+    pub(crate) nodes: Vec<linux::Node>,
 }

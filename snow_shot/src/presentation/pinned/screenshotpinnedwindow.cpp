@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/imageeditingdocument.h"
+#include "snow_shot/qtdatastreamversion.h"
 #include "snow_shot/presentation/screenshotmanualsave.h"
 #include "snow_shot/presentation/crosshaircursor.h"
 #include "snow_shot/presentation/canvastexteditingpreferences.h"
@@ -231,7 +232,7 @@ QByteArray serializeRecognitionResults(const ScreenshotRecognitionResults& sourc
     QDataStream stream(&bytes, QIODevice::WriteOnly);
     // Pinned records do not store a Qt stream version alongside their recognition payload.
     // Preserve the existing wire format independently of the Qt version compiling this code.
-    stream.setVersion(QDataStream::Qt_6_11);
+    stream.setVersion(snow_shot::kQDataStreamVersion);
     stream << results.key << quint8(results.text.has_value() ? 1 : 0)
            << quint8(results.table.has_value() ? 1 : 0) << quint8(results.qr.has_value() ? 1 : 0);
     if (results.text.has_value() && results.text->presentation != nullptr) {
@@ -308,7 +309,7 @@ ScreenshotRecognitionResults deserializeRecognitionResults(const QByteArray& byt
         return results;
     }
     QDataStream stream(bytes);
-    stream.setVersion(QDataStream::Qt_6_11);
+    stream.setVersion(snow_shot::kQDataStreamVersion);
     quint8 hasText = 0, hasTable = 0, hasQr = 0;
     stream >> results.key >> hasText >> hasTable >> hasQr;
     if (stream.status() != QDataStream::Ok) {
@@ -6010,7 +6011,7 @@ ScreenshotExportSource
 ScreenshotPinnedWindow::cachedPinnedExportSource(ScreenshotPinnedViewportExportSource request) {
     QByteArray key;
     QDataStream stream(&key, QIODevice::WriteOnly);
-    stream.setVersion(QDataStream::Qt_6_11);
+    stream.setVersion(snow_shot::kQDataStreamVersion);
     stream << m_presentationGeneration << m_runtime.documentRevision()
            << request.backgroundImage.cacheKey() << request.backgroundCanvasRect
            << request.contentPixelSize << encodeScreenshotResultStyle(request.resultStyle)

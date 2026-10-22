@@ -187,7 +187,7 @@ impl std::error::Error for SelectionError {}
 
 pub type CaptureResult = Result<SelectionOutcome, SelectionError>;
 
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 pub(crate) fn assemble(
     ranges: Vec<SelectedRange>,
     source: SourceApplication,

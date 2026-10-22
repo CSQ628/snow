@@ -7,7 +7,7 @@
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
 #include "snow_shot/presentation/screenshottoolbarwindow.h"
 
-#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
+#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
 #include "snow_shot/platform/windowcaptureexclusion.h"
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include "snow_shot/platform/windows/windowchrome.h"
@@ -343,7 +343,7 @@ struct ScreenshotScrollingCaptureController::Impl {
     }
 
     bool excludeScrollingWindowsFromCapture(ScreenshotOverlayWindow* overlay) {
-#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
+#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
         ScreenshotToolbarWindow* const toolbar = context.overlayCoordinator.toolbar();
         if (context.captureUiInScrollingScreenshot() ||
             QCoreApplication::arguments().contains(QStringLiteral("--e2e-allow-overlay-capture"))) {

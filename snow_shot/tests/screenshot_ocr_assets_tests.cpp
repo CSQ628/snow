@@ -264,7 +264,7 @@ bool writeDownloadedModelFixture(const QString& destination, QString* error) {
         mz_zip_file info{};
         info.filename = name.constData();
         info.compression_method = MZ_COMPRESS_METHOD_DEFLATE;
-        require(mz_zip_writer_add_buffer(writer, entry.second.constData(),
+        require(mz_zip_writer_add_buffer(writer, const_cast<char*>(entry.second.constData()),
                                          static_cast<int32_t>(entry.second.size()), &info) == MZ_OK,
                 "the fixture archive entry must be written");
     }
