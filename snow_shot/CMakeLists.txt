@@ -938,6 +938,8 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     src/presentation/components/pagecontainerwidget.cpp
     src/presentation/components/sectionheaderwidget.cpp
     src/presentation/components/screenshothistorypagewidget.cpp
+    include/snow_shot/presentation/components/historyentrycard.h
+    src/presentation/components/historyentrycard.cpp
     include/snow_shot/presentation/components/historyselectionbar.h
     include/snow_shot/presentation/components/historypagecommon.h
     src/presentation/components/historypagecommon.cpp
@@ -2728,6 +2730,8 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-screenshot-history-page-loading-tests
         COMMAND snow-shot-screenshot-history-page-tests --loading-only)
+    add_test(NAME snow-shot-history-entry-layout-tests
+        COMMAND snow-shot-screenshot-history-page-tests --entry-layout-only -platform offscreen)
     set_tests_properties(snow-shot-screenshot-history-page-tests
         snow-shot-screenshot-history-page-loading-tests PROPERTIES
         ENVIRONMENT
@@ -2735,6 +2739,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+    set_tests_properties(snow-shot-history-entry-layout-tests PROPERTIES LABELS unit
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-screenshot-history-context-menu-tests
         COMMAND snow-shot-screenshot-history-page-tests --context-menu-only -platform offscreen)
     set_tests_properties(snow-shot-screenshot-history-context-menu-tests PROPERTIES
@@ -6267,6 +6274,9 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-mcp-tests)
     add_test(NAME snow-shot-mcp-tests COMMAND snow-shot-mcp-tests -platform offscreen)
+    add_test(NAME snow-shot-mcp-selection-style-tests
+        COMMAND snow-shot-mcp-tests --selection-style-only -platform offscreen)
+    set_tests_properties(snow-shot-mcp-selection-style-tests PROPERTIES LABELS "unit" TIMEOUT 30)
     add_test(NAME snow-shot-mcp-replay-lifecycle-tests
         COMMAND snow-shot-mcp-tests --replay-lifecycle-only -platform offscreen)
     set_tests_properties(snow-shot-mcp-replay-lifecycle-tests PROPERTIES LABELS "unit" TIMEOUT 30
@@ -9002,6 +9012,9 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-mcp-storage-guard-tests PROPERTIES LABELS "unit" TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-mcp-document-tests COMMAND snow-shot-mcp-document-tests -platform offscreen)
+    add_test(NAME snow-shot-mcp-document-selection-style-tests
+        COMMAND snow-shot-mcp-document-tests --selection-style-only -platform offscreen)
+    set_tests_properties(snow-shot-mcp-document-selection-style-tests PROPERTIES LABELS "unit" TIMEOUT 30)
     add_test(NAME snow-shot-mcp-memory-activity-tests
         COMMAND snow-shot-mcp-document-tests --activity-only -platform offscreen)
     set_tests_properties(snow-shot-mcp-memory-activity-tests PROPERTIES LABELS "unit" TIMEOUT 30
