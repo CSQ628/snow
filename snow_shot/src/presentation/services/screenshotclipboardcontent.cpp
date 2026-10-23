@@ -340,16 +340,18 @@ renderTextDocument(std::shared_ptr<QTextDocument> document, QString plainText,
     if (!std::isfinite(idealWidth) || idealWidth <= 0.0) {
         idealWidth = 1.0;
     }
-    const int width =
-        std::clamp(qCeil(idealWidth), 1, style ? style->maximumWidth : kMaximumRichTextWidth);
-    document->setTextWidth(width);
+    const qreal maximumWidth = style ? style->maximumWidth : kMaximumRichTextWidth;
+    document->setTextWidth(std::ceil(std::clamp(idealWidth, 1.0, maximumWidth)));
 
     const QSizeF documentSize = document->documentLayout()->documentSize();
-    if (!documentSize.isValid() || documentSize.isEmpty() ||
+    if (!documentSize.isValid() || documentSize.isEmpty() || !std::isfinite(documentSize.width()) ||
         !std::isfinite(documentSize.height())) {
         return std::nullopt;
     }
-    const int height = qCeil(documentSize.height());
+    // The setting is a wrapping preference. Fixed-width tables, images and nonbreaking
+    // lines can exceed it, so rasterize the full layout rather than clipping to it.
+    const qreal width = std::ceil(documentSize.width());
+    const qreal height = std::ceil(documentSize.height());
     const qreal physicalWidthValue = std::ceil(width * devicePixelRatio);
     const qreal physicalHeightValue = std::ceil(height * devicePixelRatio);
     if (height <= 0 || height > kMaximumRichTextHeight ||

@@ -5731,6 +5731,13 @@ if(SNOW_SHOT_BUILD_TESTS)
     snow_shot_import_offscreen_platform(snow-shot-clipboard-content-tests)
     add_test(NAME snow-shot-clipboard-mime-data-tests
              COMMAND snow-shot-clipboard-content-tests --mime-data-only)
+    add_test(NAME snow-shot-clipboard-text-layout-tests
+             COMMAND snow-shot-clipboard-content-tests --text-layout-only)
+    set_tests_properties(snow-shot-clipboard-text-layout-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-clipboard-import-routing-tests
              COMMAND snow-shot-clipboard-content-tests --import-routing-only)
     set_tests_properties(snow-shot-clipboard-import-routing-tests PROPERTIES

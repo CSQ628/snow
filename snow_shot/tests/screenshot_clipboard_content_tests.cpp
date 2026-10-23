@@ -1528,6 +1528,111 @@ void formattedTextUsesOwningDisplayDevicePixelRatio() {
             "display DPR should not change the formatted document's logical layout size");
 }
 
+void intrinsicHtmlWidthPreservesTheEntireRaster() {
+    QImage source(QSize(1400, 20), QImage::Format_ARGB32);
+    source.fill(Qt::red);
+    const QStringList fixtures{
+        QStringLiteral("<table width=\"1400\" cellspacing=\"0\" cellpadding=\"0\"><tr>"
+                       "<td>Left</td><td align=\"right\" bgcolor=\"#00ff00\">Right edge</td>"
+                       "</tr></table>"),
+        QStringLiteral("<pre>%1<span style=\"background-color: #00ff00\">Right edge</span></pre>")
+            .arg(QStringLiteral("wide line ").repeated(20)),
+        QStringLiteral("<img src=\"data:image/png;base64,%1\">")
+            .arg(QString::fromLatin1(pngBytes(source).toBase64())),
+    };
+    for (const QString& html : fixtures) {
+        for (const qreal dpr : {1.0, 1.25, 2.0}) {
+            ScreenshotClipboardContentSnapshot snapshot;
+            snapshot.html = html;
+            snapshot.textStyle = snow_shot::storage::PinnedTextStyle{};
+            snapshot.textStyle->fontFamily = QApplication::font().family();
+            snapshot.textStyle->maximumWidth = 2000;
+            snapshot.devicePixelRatio = dpr;
+            const auto reference = ScreenshotClipboardContentReader::decode(snapshot);
+            require(reference && reference->formattedDocument->size().width() > 1024,
+                    "intrinsic HTML fixture must exceed the default text width");
+            require(reference->image.deviceIndependentSize().width() >=
+                        reference->formattedDocument->size().width(),
+                    "the HTML raster must include the full laid-out width");
+            for (const int maximumWidth : {100, 500}) {
+                snapshot.textStyle->maximumWidth = maximumWidth;
+                const auto content = ScreenshotClipboardContentReader::decode(snapshot);
+                require(content && content->image == reference->image,
+                        "fixed tables, preformatted lines, and images must ignore a narrower "
+                        "text width without clipping their right edge");
+                const QSizeF documentSize = content->formattedDocument->size();
+                require(content->image.deviceIndependentSize().width() >= documentSize.width() &&
+                            content->image.deviceIndependentSize().height() >=
+                                documentSize.height(),
+                        "the raster must contain the entire selectable document at every DPI");
+                const auto restored = ScreenshotClipboardContentReader::renderOriginalText(
+                    content->originalContent, dpr);
+                require(restored && restored->image == content->image,
+                        "restoring and exporting intrinsic HTML must preserve its full width");
+            }
+            snapshot.textStyle.reset();
+            const auto legacy = ScreenshotClipboardContentReader::decode(snapshot);
+            require(legacy && legacy->image.size() == reference->image.size(),
+                    "HTML without captured settings must also retain its intrinsic width");
+        }
+    }
+}
+
+void flowingHtmlStillUsesTheConfiguredWidth() {
+    for (const QString& html :
+         {QStringLiteral("<p>%1</p>"),
+          QStringLiteral("<table width=\"100%\"><tr><td>%1</td></tr></table>")}) {
+        ScreenshotClipboardContentSnapshot snapshot;
+        snapshot.html = html.arg(QStringLiteral("Flow text ").repeated(200));
+        snapshot.textStyle = snow_shot::storage::PinnedTextStyle{};
+        snapshot.textStyle->fontFamily = QApplication::font().family();
+        snapshot.devicePixelRatio = 1.25;
+        int previousHeight = std::numeric_limits<int>::max();
+        for (const int maximumWidth : {100, 500, 2000}) {
+            snapshot.textStyle->maximumWidth = maximumWidth;
+            const auto content = ScreenshotClipboardContentReader::decode(snapshot);
+            require(content && content->image.width() == maximumWidth * 1.25 &&
+                        content->image.height() < previousHeight,
+                    "flowing HTML and percentage-width tables must wrap at the configured width");
+            previousHeight = content->image.height();
+        }
+    }
+}
+
+void intrinsicHtmlWidthRespectsRasterLimits() {
+    QImage source(QSize(1, 1), QImage::Format_ARGB32);
+    source.fill(Qt::red);
+    const QString sourceUrl = QStringLiteral("data:image/png;base64,%1")
+                                  .arg(QString::fromLatin1(pngBytes(source).toBase64()));
+    ScreenshotClipboardContentSnapshot snapshot;
+    snapshot.html =
+        QStringLiteral("<img width=\"100000\" height=\"1000\" src=\"%1\">").arg(sourceUrl);
+    require(!ScreenshotClipboardContentReader::decode(snapshot),
+            "the full intrinsic width must count toward the raster pixel limit");
+
+    snapshot.html = QStringLiteral("<img width=\"1400\" height=\"20\" src=\"%1\">").arg(sourceUrl);
+    const auto content = ScreenshotClipboardContentReader::decode(snapshot);
+    require(content && content->image.width() >= 1400,
+            "the allocation fixture must include the full image width");
+    const qint64 rasterBytes =
+        static_cast<qint64>(content->image.width()) * content->image.height() * 8;
+    bool rejectedRaster = false;
+    const auto admit = [&](qint64 bytes) {
+        if (bytes >= rasterBytes) {
+            rejectedRaster = true;
+            return false;
+        }
+        return true;
+    };
+    require(!ScreenshotClipboardContentReader::decode(snapshot, {}, admit) && rejectedRaster,
+            "allocation admission must account for the full intrinsic raster width");
+    rejectedRaster = false;
+    require(!ScreenshotClipboardContentReader::renderOriginalText(content->originalContent, 1.0, {},
+                                                                  admit) &&
+                rejectedRaster,
+            "restoring intrinsic HTML must enforce the same raster admission");
+}
+
 #if defined(Q_OS_WIN) || defined(_WIN32)
 ScreenshotClipboardContentSnapshot nativeDibSnapshot(QByteArray bytes, QSize size) {
     ScreenshotClipboardContentSnapshot snapshot;
@@ -1749,6 +1854,15 @@ int main(int argc, char** argv) {
         clipboardImagesTakePriorityOverAccompanyingFiles();
         return EXIT_SUCCESS;
     }
+    if (application.arguments().contains(QStringLiteral("--text-layout-only"))) {
+        intrinsicHtmlWidthPreservesTheEntireRaster();
+        flowingHtmlStillUsesTheConfiguredWidth();
+        intrinsicHtmlWidthRespectsRasterLimits();
+        formattedTextHasPaddingOnEverySide();
+        pinnedTextStylesPreserveFormattingAndSnapshots();
+        formattedTextUsesOwningDisplayDevicePixelRatio();
+        return EXIT_SUCCESS;
+    }
     imageFileExtensionsMatchShellRegistration();
     clipboardImagesTakePriorityOverAccompanyingFiles();
     embeddedImagesUseManagedCachedPixels();
@@ -1786,6 +1900,9 @@ int main(int argc, char** argv) {
     formattedTextHasPaddingOnEverySide();
     formattedTextBackgroundFollowsApplicationTheme();
     htmlSourceBackgroundOverridesApplicationTheme();
+    intrinsicHtmlWidthPreservesTheEntireRaster();
+    flowingHtmlStillUsesTheConfiguredWidth();
+    intrinsicHtmlWidthRespectsRasterLimits();
     pinnedTextStylesPreserveFormattingAndSnapshots();
     formattedTextUsesOwningDisplayDevicePixelRatio();
 #if defined(Q_OS_WIN) || defined(_WIN32)
