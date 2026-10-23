@@ -176,7 +176,7 @@ if(APPLE)
         src/presentation/pinned/pinnedwindowplatform.cpp)
     target_include_directories(snow_shot_macos_window_platform PRIVATE include)
     target_link_libraries(snow_shot_macos_window_platform PUBLIC Qt6::Widgets
-        PRIVATE Qt6::GuiPrivate snow_shot_macos_cursor "-framework AppKit" "-framework ApplicationServices"
+        PRIVATE Qt6::GuiPrivate adqt::native_window snow_shot_macos_cursor "-framework AppKit" "-framework ApplicationServices"
         "-framework QuartzCore")
 endif()
 
@@ -11612,6 +11612,13 @@ if(APPLE AND SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-macos-overlay-initialization-tests)
     set_tests_properties(snow-shot-macos-overlay-initialization-tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit;macos")
+    add_test(NAME snow-shot-macos-native-view-lifecycle-tests
+        COMMAND snow-shot-macos-overlay-initialization-tests --native-view-lifecycle-only -platform offscreen)
+    set_tests_properties(snow-shot-macos-native-view-lifecycle-tests PROPERTIES LABELS "unit;macos")
+    add_test(NAME snow-shot-macos-native-view-lifecycle-native-tests
+        COMMAND snow-shot-macos-overlay-initialization-tests --native-view-lifecycle-only -platform cocoa)
+    set_tests_properties(snow-shot-macos-native-view-lifecycle-native-tests PROPERTIES
+        LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 30)
     add_test(NAME snow-shot-macos-overlay-animation-tests
         COMMAND snow-shot-macos-overlay-initialization-tests --overlay-animation-only -platform offscreen)
     set_tests_properties(snow-shot-macos-overlay-animation-tests PROPERTIES LABELS "unit;macos")

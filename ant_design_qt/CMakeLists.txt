@@ -82,6 +82,25 @@ set(ADQT_WINDOW_DPI_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/ant_design_qt/src/widgets/dpi_stable_window_controller.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/ant_design_qt/src/widgets/dpi_stable_window_controller.cpp")
 list(REMOVE_ITEM ADQT_WIDGET_SOURCES ${ADQT_WINDOW_DPI_SOURCES})
+# Native surface observation and interaction constraints are shared by widgets
+# and application window adapters without pulling in icons or image codecs.
+set(ADQT_NATIVE_WINDOW_SOURCES
+    packages/ant_design_qt/src/widgets/detail/window_surface_observer.cpp)
+list(REMOVE_ITEM ADQT_WIDGET_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/ant_design_qt/src/widgets/detail/window_surface_observer.cpp")
+add_library(ant_design_qt_native_window STATIC ${ADQT_NATIVE_WINDOW_SOURCES})
+add_library(adqt::native_window ALIAS ant_design_qt_native_window)
+snow_apply_release_options(ant_design_qt_native_window)
+target_include_directories(ant_design_qt_native_window SYSTEM PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/ant_design_qt/src")
+target_link_libraries(ant_design_qt_native_window PUBLIC Qt6::Widgets)
+if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(ant_design_qt_native_window PRIVATE
+        packages/ant_design_qt/src/widgets/detail/window_surface_observer_mac.mm
+        packages/ant_design_qt/src/widgets/detail/native_window_policy_mac.mm)
+    target_link_libraries(ant_design_qt_native_window PRIVATE "-framework AppKit")
+endif()
 add_library(ant_design_qt_dpi_window STATIC ${ADQT_WINDOW_DPI_SOURCES})
 add_library(adqt::dpi_window ALIAS ant_design_qt_dpi_window)
 snow_apply_release_options(ant_design_qt_dpi_window)
@@ -103,7 +122,7 @@ snow_apply_release_options(ant_design_qt)
 # executables in sibling directories, so this static library's private link
 # dependency must remain visible there as well.
 snow_find_qt_private(Gui)
-target_link_libraries(ant_design_qt PRIVATE Qt6::GuiPrivate)
+target_link_libraries(ant_design_qt PRIVATE Qt6::GuiPrivate adqt::native_window)
 if(APPLE)
     # Qt 6.12.0's source retains QAccessibleCache's private destruction slot and
     # stale-interface lookup. Keep the repair and review its ABI again on upgrades;
@@ -255,6 +274,16 @@ if(ADQT_BUILD_TESTS)
         set_tests_properties(adqt-context-menu-lifecycle-native-tests PROPERTIES
             LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=cocoa" TIMEOUT 30)
         add_executable(adqt-popup-stacking-native-tests tests/popup_stacking_native_tests.mm)
+        add_executable(adqt-window-surface-policy-tests tests/window_surface_policy_tests.mm)
+        target_link_libraries(adqt-window-surface-policy-tests PRIVATE
+            adqt::native_window Qt6::Widgets "-framework AppKit")
+        add_test(NAME adqt-window-surface-policy-tests
+            COMMAND adqt-window-surface-policy-tests -platform offscreen)
+        add_test(NAME adqt-window-surface-policy-native-tests
+            COMMAND adqt-window-surface-policy-tests -platform cocoa)
+        set_tests_properties(adqt-window-surface-policy-tests PROPERTIES LABELS "unit;macos")
+        set_tests_properties(adqt-window-surface-policy-native-tests PROPERTIES
+            LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 30)
         target_link_libraries(adqt-popup-stacking-native-tests PRIVATE
             adqt::widgets Qt6::Widgets "-framework AppKit")
         add_test(NAME adqt-popup-ownership-tests COMMAND adqt-popup-stacking-native-tests)
