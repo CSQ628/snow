@@ -366,6 +366,12 @@ void ScreenRecordingAreaWindow::setWebcamOverlay(const QRectF& bounds, const QSi
                     &ScreenRecordingAreaWindow::webcamLayoutPreviewed);
             connect(m_webcamControl, &RecordingWebcamControl::layoutCommitted, this,
                     &ScreenRecordingAreaWindow::webcamLayoutCommitted);
+            connect(m_webcamControl, &RecordingWebcamControl::orientationRequested, this,
+                    [this](int action) {
+                        if (m_webcamVisible && regionEditingEnabled() && !m_trimming &&
+                            !countdownActive() && isVisible() && !m_webcamControl->interacting())
+                            emit webcamOrientationRequested(action);
+                    });
             connect(m_webcamControl, &RecordingWebcamControl::interactionChanged, this,
                     [this] { updateNativeMouseRouting(regionPointer(QCursor::pos())); });
         }

@@ -692,6 +692,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String},
     {QStringLiteral("screen_recording/show_keyboard"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/enable_webcam"), false, ConfigurationValueKind::Boolean},
+    {QStringLiteral("screen_recording/webcam_orientation"), 0, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, 7, 1}},
     {QStringLiteral("screen_recording/webcam_size"), 150, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{50, 500, 1}},
     {QStringLiteral("screen_recording/webcam_offset_left"), 48, ConfigurationValueKind::Integer,
