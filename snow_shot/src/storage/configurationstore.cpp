@@ -107,7 +107,7 @@ void reconcileLocalShortcutDefaults(MaterializedConfiguration& result,
     QStringList defaultedLocalKeys;
     const auto bindingsForKey = [&result](const QString& key) {
         return shortcuts::shortcutBindingsFromJson(
-            result.values.value(key), key.startsWith(QStringLiteral("screenshot_shortcuts/")), -1,
+            result.values.value(key), ConfigurationSchema::allowsModifierOnlyShift(key), -1,
             nullptr, nullptr, key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
     };
     // Reserve every explicit binding first, including entries later in the schema.

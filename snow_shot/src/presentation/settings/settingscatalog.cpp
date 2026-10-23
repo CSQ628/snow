@@ -2675,6 +2675,14 @@ QVector<SettingsItemDefinition> screenRecordingShortcutItems() {
                           QStringLiteral("end_recording"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "End recording"),
                           []() { return outlined_icons::Close(); }),
+        localShortcutItem(SettingsLocalShortcutScope::ScreenRecording,
+                          QStringLiteral("previous_recording_area"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Previous recording area"),
+                          []() { return outlined_icons::Left(); }),
+        localShortcutItem(SettingsLocalShortcutScope::ScreenRecording,
+                          QStringLiteral("next_recording_area"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Next recording area"),
+                          []() { return outlined_icons::Right(); }),
     };
 }
 

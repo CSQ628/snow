@@ -42,6 +42,8 @@ class ScreenRecordingAreaWindow final : public QWidget {
     // Desktop points on macOS; physical desktop pixels on Windows.
     void setRecordingRegion(const QRect& region);
     [[nodiscard]] QRect recordingRegion() const;
+    [[nodiscard]] bool canRestoreRecordingRegion() const;
+    bool restoreRecordingRegion(const QRect& region);
     void setRecordingState(ScreenshotToolPalette::RecordingState state);
     void setInputMode(InputMode mode);
     [[nodiscard]] InputMode inputMode() const;

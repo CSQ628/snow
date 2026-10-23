@@ -3028,6 +3028,10 @@
             <translation>下一影格</translation>
         </message>
         <message>
+            <source>Next recording area</source>
+            <translation>下一個錄製區域</translation>
+        </message>
+        <message>
             <source>Next screenshot history</source>
             <translation>下一筆截圖歷史</translation>
         </message>
@@ -3338,6 +3342,10 @@
         <message>
             <source>Previous frame</source>
             <translation>上一影格</translation>
+        </message>
+        <message>
+            <source>Previous recording area</source>
+            <translation>上一個錄製區域</translation>
         </message>
         <message>
             <source>Previous screenshot history</source>

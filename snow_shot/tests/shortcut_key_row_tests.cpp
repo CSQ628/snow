@@ -1435,17 +1435,24 @@ void localShortcutRecordersUseOnlyNormalKeyEvents() {
 }
 
 void recordingShortcutRecorderAcceptsControlKeysAndEscape() {
-    for (const auto key : {Qt::Key_E, Qt::Key_S, Qt::Key_C, Qt::Key_Escape}) {
+    for (const auto combination :
+         {QKeyCombination(Qt::ControlModifier, Qt::Key_E),
+          QKeyCombination(Qt::ControlModifier, Qt::Key_S),
+          QKeyCombination(Qt::ControlModifier, Qt::Key_C), QKeyCombination(Qt::Key_Escape),
+          QKeyCombination(Qt::Key_R), QKeyCombination(Qt::ShiftModifier, Qt::Key_R),
+          QKeyCombination(Qt::ShiftModifier, Qt::Key_Shift)}) {
         PrintScreenRecordingSession session(
             ShortcutKeyRowConfig::ValidationScope::RecordingShortcut);
-        const auto modifiers = key == Qt::Key_Escape ? Qt::NoModifier : Qt::ControlModifier;
+        const auto key = combination.key();
+        const auto modifiers = combination.keyboardModifiers();
         const QString expected =
-            QKeySequence(QKeyCombination(modifiers, key)).toString(QKeySequence::PortableText);
+            key == Qt::Key_Shift ? QStringLiteral("Shift")
+                                 : QKeySequence(combination).toString(QKeySequence::PortableText);
         session.key(QEvent::KeyPress, key, modifiers);
         session.flush();
         require(session.validated == QStringList{expected} &&
                     session.modal->acceptButton()->isEnabled(),
-                "recording shortcut editor must capture Ctrl+E, Ctrl+S, Ctrl+C and Esc");
+                "recording shortcut editor captures R, Shift+R and custom bare Shift bindings");
         session.modal->acceptButton()->click();
         session.flush();
         require(portableText(session.saved) == QStringList{expected},
@@ -2172,6 +2179,10 @@ int main(int argc, char** argv) {
     }
 
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--recording-area-only"))) {
+        recordingShortcutRecorderAcceptsControlKeysAndEscape();
+        return 0;
+    }
     if (shortcutCancelOnly) {
         sharedShortcutFieldTracksDraftAndCommitsOnAcceptance();
         cancellingDuplicateScreenshotShortcutReleasesKeyboard();

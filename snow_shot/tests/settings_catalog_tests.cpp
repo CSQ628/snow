@@ -1518,13 +1518,16 @@ void builtInCatalogIsCompleteAndValid() {
                                                        QStringLiteral("pin-to-screen-shortcuts"));
     const auto* recordingShortcuts = catalog.section(QStringLiteral("shortcuts-mouse"),
                                                      QStringLiteral("screen-recording-shortcuts"));
-    require(recordingShortcuts != nullptr && recordingShortcuts->items.size() == 4 &&
+    require(recordingShortcuts != nullptr && recordingShortcuts->items.size() == 6 &&
                 recordingShortcuts->reset ==
                     settings::SettingsSectionReset::ScreenRecordingShortcuts,
             "recording shortcuts must expose a resettable settings section");
-    const QStringList recordingActions = {
-        QStringLiteral("export"), QStringLiteral("toggle_recording"),
-        QStringLiteral("copy_to_clipboard"), QStringLiteral("end_recording")};
+    const QStringList recordingActions = {QStringLiteral("export"),
+                                          QStringLiteral("toggle_recording"),
+                                          QStringLiteral("copy_to_clipboard"),
+                                          QStringLiteral("end_recording"),
+                                          QStringLiteral("previous_recording_area"),
+                                          QStringLiteral("next_recording_area")};
     for (qsizetype index = 0; index < recordingActions.size(); ++index) {
         const auto& item = recordingShortcuts->items.at(index);
         require(item.id ==
@@ -1535,6 +1538,11 @@ void builtInCatalogIsCompleteAndValid() {
                         settings::SettingsLocalShortcutScope::ScreenRecording,
                 "recording shortcut fields must use stable IDs and a dedicated local scope");
     }
+    require(recordingShortcuts->items.at(4).title.translated() ==
+                    QStringLiteral("Previous recording area") &&
+                recordingShortcuts->items.at(5).title.translated() ==
+                    QStringLiteral("Next recording area"),
+            "recording area history labels must identify their direction");
     const bool everyHotkeySectionUsesTwoColumns =
         applicationShortcutsPage != nullptr &&
         std::all_of(

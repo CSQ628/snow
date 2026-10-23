@@ -68,7 +68,9 @@
 #include <QMimeData>
 #include <QTimer>
 #include <QWindow>
+#include <QScreen>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -213,6 +215,23 @@ struct StartAttemptResult {
     QString error;
 };
 
+// The start worker only publishes success and queues a GUI-thread commit. Keeping
+// this independent of the controller also covers a window retired during startup.
+struct RecordingAreaHistoryCommit {
+    QRect rectangle;
+    QPointer<snow_shot::storage::ConfigurationStore> configuration;
+    std::atomic_bool started{false};
+    bool committed = false; // GUI thread only.
+    bool saved = false;     // GUI thread only.
+
+    void commit() {
+        if (committed || !started.load() || !configuration)
+            return;
+        committed = true;
+        saved = snow_shot::storage::RecordingAreaHistorySettings::append(*configuration, rectangle);
+    }
+};
+
 QString captureError() {
     const char* error = snow_recording_last_error_message();
     const QString message = QString::fromUtf8(error != nullptr ? error : "");
@@ -304,6 +323,10 @@ struct ScreenRecordingController::Impl {
         QObject::connect(&snow_shot::storage::ApplicationStorage::instance().configuration(),
                          &snow_shot::storage::ConfigurationStore::valueChanged, &owner,
                          [this](const QString& key, const QJsonValue&) {
+                             if (key == QStringLiteral("screen_recording/area_history")) {
+                                 areaHistoryIndex = -1;
+                                 return;
+                             }
                              if (key == QStringLiteral("screen_recording/show_status_prompts")) {
                                  syncPreview();
                                  return;
@@ -471,6 +494,7 @@ struct ScreenRecordingController::Impl {
         }
         setCaptureActivity(true);
         cancelPendingStart();
+        areaHistoryIndex = -1;
         refreshWebcamSettings();
         if (!automationOwned && !automationNextStart) {
             const snow_shot::storage::RecordingSettings settings;
@@ -543,6 +567,9 @@ struct ScreenRecordingController::Impl {
         SNOW_SHOT_RECORDING_PERF_MILESTONE("open.toolbar_connected");
         uiSession->shortcuts =
             std::make_unique<ScreenRecordingShortcutController>(*areaWindow, *toolbarWindow);
+        uiSession->shortcuts->setAreaHistoryActions(
+            [this] { return canNavigateAreaHistory(); },
+            [this](bool previous) { navigateAreaHistory(previous); });
         SNOW_SHOT_RECORDING_PERF_MILESTONE("open.shortcuts_created");
 
         sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::idle();
@@ -670,6 +697,8 @@ struct ScreenRecordingController::Impl {
                                  return;
                              }
                              setOption(recordingRegion, region);
+                             if (!restoringAreaHistory)
+                                 areaHistoryIndex = -1;
                              updateCaptureRegion();
                              syncPreview();
                              toolbarWindow->placeForRecordingRegion(region);
@@ -1125,6 +1154,44 @@ struct ScreenRecordingController::Impl {
                                notify);
     }
 
+    bool canNavigateAreaHistory() const {
+        return recordingOptionsEditable() && !sessionEnding && !trimRequested && !trimSession &&
+               uiSession && areaWindow->canRestoreRecordingRegion() &&
+               toolbarWindow->palette()->recordingExportSettingsVisible();
+    }
+
+    void navigateAreaHistory(bool previous) {
+        if (!canNavigateAreaHistory())
+            return;
+        const auto entries = snow_shot::storage::RecordingAreaHistorySettings().entries();
+        if (areaHistoryIndex >= entries.size())
+            areaHistoryIndex = -1;
+        if (areaHistoryIndex < 0 && !previous)
+            return;
+        const qsizetype step = previous ? -1 : 1;
+        qsizetype index = areaHistoryIndex < 0 ? entries.size() - 1 : areaHistoryIndex + step;
+        for (; index >= 0 && index < entries.size(); index += step) {
+            const auto& entry = entries.at(index);
+            if (entry.coordinateSpace != snow_shot::storage::recordingAreaCoordinateSpace())
+                continue;
+            bool onDesktop = false;
+            for (auto* screen : QGuiApplication::screens()) {
+#ifdef Q_OS_MACOS
+                const QRect bounds = screen->geometry();
+#else
+                const QRect bounds = ScreenshotGeometryMapper::physicalRectForScreen(*screen);
+#endif
+                onDesktop = onDesktop || bounds.intersects(entry.rectangle);
+            }
+            if (!onDesktop)
+                continue;
+            const QScopedValueRollback<bool> restoring(restoringAreaHistory, true);
+            if (areaWindow->restoreRecordingRegion(entry.rectangle))
+                areaHistoryIndex = index;
+            return;
+        }
+    }
+
     void scheduleStart() {
         if (webcamFailed) {
             snow_webcam_retry(webcam.get());
@@ -1153,6 +1220,10 @@ struct ScreenRecordingController::Impl {
                 return;
             }
             sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::starting();
+            pendingAreaHistory = std::make_shared<RecordingAreaHistoryCommit>();
+            pendingAreaHistory->rectangle = recordingRegion;
+            pendingAreaHistory->configuration =
+                &snow_shot::storage::ApplicationStorage::instance().configuration();
             discardPendingStart = false;
             automationRevision = snow_shot::presentation::nextAutomationRevision();
             syncUi();
@@ -1273,8 +1344,8 @@ struct ScreenRecordingController::Impl {
                 snow_shot::runtime::trackRuntimeWork(
                     [config, excludedWindowIds, directories, baseName, extension, keyboard,
                      keyboardFont, requestedPath, previewRetirement, deferred = sessionDeferred,
-                     overlay, barColor, recovery = startupRecovery,
-                     webcamLease = webcam]() mutable -> StartAttemptResult {
+                     overlay, barColor, recovery = startupRecovery, webcamLease = webcam,
+                     areaHistory = pendingAreaHistory]() mutable -> StartAttemptResult {
                         Q_UNUSED(webcamLease);
                         if (previewRetirement.valid())
                             previewRetirement.wait();
@@ -1321,6 +1392,12 @@ struct ScreenRecordingController::Impl {
                             result.error = captureError();
                             return result;
                         }
+                        areaHistory->started.store(true);
+                        if (areaHistory->configuration) {
+                            QMetaObject::invokeMethod(
+                                areaHistory->configuration,
+                                [areaHistory] { areaHistory->commit(); }, Qt::QueuedConnection);
+                        }
                         return result;
                     }));
             startPollTimer.start();
@@ -1334,6 +1411,11 @@ struct ScreenRecordingController::Impl {
         }
         startPollTimer.stop();
         StartAttemptResult result = startFuture.get();
+        if (pendingAreaHistory) {
+            pendingAreaHistory->commit();
+            if (pendingAreaHistory->saved)
+                areaHistoryIndex = -1;
+        }
         if (discardPendingStart) {
             discardPendingStart = false;
             recordingSession = std::move(result.session);
@@ -2469,6 +2551,9 @@ struct ScreenRecordingController::Impl {
     QString postProcessingEffect = QStringLiteral("progress_bar");
     QColor progressBarColor{22, 119, 255};
     std::future<StartAttemptResult> startFuture;
+    std::shared_ptr<RecordingAreaHistoryCommit> pendingAreaHistory;
+    qsizetype areaHistoryIndex = -1;
+    bool restoringAreaHistory = false;
     std::shared_ptr<snow_shot::presentation::recording::StartupRecovery> startupRecovery =
         std::make_shared<snow_shot::presentation::recording::StartupRecovery>();
     ScreenshotToolPalette::RecordingSessionStatus sessionStatus =
@@ -2728,6 +2813,10 @@ void ScreenRecordingController::prepareForSessionEnd(int timeoutMs) {
                 session.reset();
         },
         timeoutMs));
+    // Session-end preservation may block the GUI event loop, so drain the
+    // successful-start commit directly before application storage is flushed.
+    if (s.pendingAreaHistory)
+        s.pendingAreaHistory->commit();
 }
 
 void ScreenRecordingController::offerRecordingRecovery() {

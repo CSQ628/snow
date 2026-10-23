@@ -100,7 +100,7 @@ styles::ThemeMode themeModeForValue(const QVariant& value) {
 }
 
 shortcuts::ShortcutBindingList shortcutListDefault(const QString& key) {
-    const bool allowModifierOnlyShift = key.startsWith(QStringLiteral("screenshot_shortcuts/"));
+    const bool allowModifierOnlyShift = storage::ConfigurationSchema::allowsModifierOnlyShift(key);
     return shortcuts::shortcutBindingsFromJson(
         storage::ConfigurationSchema::defaultValue(key), allowModifierOnlyShift, 2, nullptr,
         nullptr, key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
@@ -1946,7 +1946,7 @@ BuiltInSettingsBackend::validateLocalShortcut(SettingsLocalShortcutScope scope,
                 canonical};
     }
     const QString key = localShortcutKey(scope, shortcutId);
-    const bool allowModifierOnlyShift = scope == SettingsLocalShortcutScope::Screenshot;
+    const bool allowModifierOnlyShift = storage::ConfigurationSchema::allowsModifierOnlyShift(key);
     const shortcuts::ShortcutBinding canonical =
         shortcuts::canonicalBinding(shortcut, allowModifierOnlyShift,
                                     key == QStringLiteral("screenshot_shortcuts/toggle_guides"));

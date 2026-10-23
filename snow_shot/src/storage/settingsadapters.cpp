@@ -48,7 +48,7 @@ QJsonArray stringArray(const QStringList& values) {
 }
 
 shortcuts::ShortcutBindingList shortcutValue(const QString& key) {
-    const bool allowModifierOnlyShift = key.startsWith(QStringLiteral("screenshot_shortcuts/"));
+    const bool allowModifierOnlyShift = ConfigurationSchema::allowsModifierOnlyShift(key);
     const bool allowModifierOnlyAlt = key == QStringLiteral("screenshot_shortcuts/toggle_guides");
     return shortcuts::shortcutBindingsFromJson(cache().value(key), allowModifierOnlyShift, -1,
                                                nullptr, nullptr, allowModifierOnlyAlt);
@@ -170,6 +170,8 @@ const QStringList& screenRecordingShortcutActionIds() {
         QStringLiteral("toggle_recording"),
         QStringLiteral("copy_to_clipboard"),
         QStringLiteral("end_recording"),
+        QStringLiteral("previous_recording_area"),
+        QStringLiteral("next_recording_area"),
     };
     return ids;
 }
@@ -1411,7 +1413,7 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
                 const auto value = normalizedValues.contains(key) ? normalizedValues.value(key)
                                                                   : current.value(key);
                 const auto bindings = shortcuts::shortcutBindingsFromJson(
-                    value, group.policy == LocalShortcutPolicy::Screenshot, -1, nullptr, nullptr,
+                    value, ConfigurationSchema::allowsModifierOnlyShift(key), -1, nullptr, nullptr,
                     key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
                 for (const auto& binding : bindings) {
                     if (group.policy == LocalShortcutPolicy::Drawing &&
@@ -1571,6 +1573,46 @@ bool PinToScreenShortcutSettings::setAllShortcutsAtomic(
     const shortcuts::ShortcutBindingMap& shortcutsByAction) const {
     return setAllLocalShortcutsAtomic(QStringLiteral("pin_to_screen_shortcuts/"),
                                       pinToScreenShortcutActionIds(), shortcutsByAction);
+}
+
+QVector<RecordingAreaHistoryEntry> RecordingAreaHistorySettings::entries() const {
+    QVector<RecordingAreaHistoryEntry> result;
+    for (const auto& value :
+         cache().value(QStringLiteral("screen_recording/area_history")).toArray()) {
+        const auto object = value.toObject();
+        result.append({QRect(object.value(QStringLiteral("x")).toInt(),
+                             object.value(QStringLiteral("y")).toInt(),
+                             object.value(QStringLiteral("width")).toInt(),
+                             object.value(QStringLiteral("height")).toInt()),
+                       object.value(QStringLiteral("coordinate_space")).toString()});
+    }
+    return result;
+}
+
+bool RecordingAreaHistorySettings::append(const QRect& rectangle) const {
+    return append(cache(), rectangle);
+}
+
+bool RecordingAreaHistorySettings::append(ConfigurationStore& configuration,
+                                          const QRect& rectangle) {
+    const auto entry = recordingAreaToJson({rectangle, recordingAreaCoordinateSpace()});
+    if (normalizeRecordingAreaHistory(QJsonArray{entry}).value.toArray().isEmpty())
+        return false;
+    bool conflict = false;
+    do {
+        const bool saved = configuration.mutateIfRevision(
+            configuration.revision(),
+            [&] {
+                const auto key = QStringLiteral("screen_recording/area_history");
+                auto history = configuration.value(key).toArray();
+                history.append(entry);
+                return configuration.setValue(key, history);
+            },
+            &conflict);
+        if (!conflict)
+            return saved;
+    } while (conflict);
+    return false;
 }
 
 shortcuts::ShortcutBindingList
