@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/presentation/screenrecordingareawindow.h"
 #include "snow_shot/presentation/canvastexteditingpreferences.h"
+#include "snow_shot/presentation/canvasdrawingpreferences.h"
 #include "snow_shot/presentation/screenshotstylebinding.h"
 
 #include <numbers>
@@ -134,17 +135,7 @@ ScreenRecordingAreaWindow::ScreenRecordingAreaWindow(QWidget* parent)
             [this]() { m_angleWheelSteps.reset(); });
     snow_shot::presentation::applyScreenshotCanvasToolStyles(
         *m_canvas, snow_shot::presentation::screenshotCanvasToolStyleDefaults());
-    applyQuickSelectionPreferences();
-    auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    if (applicationStorage.isInitialized()) {
-        connect(&applicationStorage.configuration(),
-                &snow_shot::storage::ConfigurationStore::valueChanged, this,
-                [this](const QString& key, const QJsonValue&) {
-                    if (key == QStringLiteral("drawing/quick_selection_disabled_tools")) {
-                        applyQuickSelectionPreferences();
-                    }
-                });
-    }
+    snow_shot::presentation::bindCanvasDrawingPreferences(*m_canvasRuntime, *this);
     applyInputMode();
 }
 
@@ -189,18 +180,6 @@ void ScreenRecordingAreaWindow::setPreviewFrame(const QImage& frame) {
         return;
     m_previewFrame = frame;
     update(m_selectionRect.toAlignedRect());
-}
-
-void ScreenRecordingAreaWindow::applyQuickSelectionPreferences() {
-    auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    if (!applicationStorage.isInitialized() || m_canvasRuntime == nullptr) {
-        return;
-    }
-    const auto tools = snow_shot::presentation::screenshotQuickSelectionDisabledTools(
-        snow_shot::storage::DrawingSettings().quickSelectionDisabledTools());
-    if (!m_canvasRuntime->setQuickSelectionDisabledTools(tools)) {
-        qWarning("Failed to apply screen recording drawing quick-selection preferences");
-    }
 }
 
 QRect ScreenRecordingAreaWindow::recordingRegion() const {

@@ -21,6 +21,8 @@ mod annotations;
 #[cfg(test)]
 mod auto_filter_tests;
 #[cfg(test)]
+mod automatic_selection_tests;
+#[cfg(test)]
 mod distance_tests;
 mod document_commands;
 #[cfg(test)]
@@ -258,6 +260,23 @@ impl Engine {
         self.editor.set_active_tool(tool)?;
         self.history.break_angle_wheel_coalescing();
         self.refresh_after_session_mutation(before)
+    }
+
+    pub fn set_automatically_select_newly_created_elements(
+        &mut self,
+        enabled: bool,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.editor
+            .set_automatically_select_newly_created_elements(enabled);
+        Ok(MutationResult::default())
+    }
+
+    pub fn set_automatic_selection_excluded_tools(
+        &mut self,
+        tools: u64,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.editor.set_automatic_selection_excluded_tools(tools);
+        Ok(MutationResult::default())
     }
 
     pub fn quick_selection_disabled_tools(&self) -> u64 {

@@ -1207,6 +1207,26 @@ bool ScreenshotSettings::setAutoSaveFilenameFormat(const QString& format) const 
     return cache().setValue(QStringLiteral("screenshot/auto_save_filename_format"), format);
 }
 
+bool DrawingSettings::automaticallySelectNewlyCreatedElements() const {
+    return cache()
+        .value(QStringLiteral("drawing/automatically_select_newly_created_elements"))
+        .toBool();
+}
+
+bool DrawingSettings::setAutomaticallySelectNewlyCreatedElements(bool enabled) const {
+    return cache().setValue(QStringLiteral("drawing/automatically_select_newly_created_elements"),
+                            enabled);
+}
+
+QStringList DrawingSettings::automaticSelectionExcludedTools() const {
+    return stringList(cache().value(QStringLiteral("drawing/automatic_selection_excluded_tools")));
+}
+
+bool DrawingSettings::setAutomaticSelectionExcludedTools(const QStringList& tools) const {
+    return cache().setValue(QStringLiteral("drawing/automatic_selection_excluded_tools"),
+                            stringArray(tools));
+}
+
 QStringList DrawingSettings::quickSelectionDisabledTools() const {
     return stringList(cache().value(QStringLiteral("drawing/quick_selection_disabled_tools")));
 }

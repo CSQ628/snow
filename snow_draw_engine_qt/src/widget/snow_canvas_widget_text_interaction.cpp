@@ -480,14 +480,26 @@ SnowCanvasWidgetTextInteraction::beginSpeechBubble(SnowRuntime runtime, SnowView
         found == 0) {
         return result;
     }
+    return beginSpeechBubbleTarget(runtime, viewport, displayCache, info, style, true);
+}
+
+SnowCanvasWidgetTextInteraction::BeginResult
+SnowCanvasWidgetTextInteraction::beginSpeechBubbleTarget(SnowRuntime runtime, SnowViewport viewport,
+                                                         SnowCanvasDisplayCache& displayCache,
+                                                         const SnowTextElementInfo& info,
+                                                         const SnowTextStyle& style,
+                                                         bool selectOwner) {
+    BeginResult result;
     result.started = beginForElement(
         info, displayCache, canvasToViewPoint(displayCache, QPointF(info.center_x, info.center_y)),
         &style, false, runtime);
     if (!result.started) {
         return result;
     }
-    auto selection = snow_canvas_commands::selectElement(runtime, viewport, info.bubble_id);
-    result.firstChangedViewports = std::move(selection.changedViewports);
+    if (selectOwner) {
+        auto selection = snow_canvas_commands::selectElement(runtime, viewport, info.bubble_id);
+        result.firstChangedViewports = std::move(selection.changedViewports);
+    }
     auto draft = publishActiveDraftPresentation(runtime, viewport);
     result.secondChangedViewports = std::move(draft.changedViewports);
     return result;
@@ -662,12 +674,15 @@ SnowCanvasWidgetTextInteraction::createSerialNumberText(SnowRuntime runtime, Sno
 SnowCanvasWidgetTextInteraction::BeginResult
 SnowCanvasWidgetTextInteraction::beginRequestedTextEdit(SnowRuntime runtime, SnowViewport viewport,
                                                         SnowCanvasDisplayCache& displayCache) {
-    SnowElementId bubbleId{};
-    std::uint8_t bubbleRequested = 0;
-    if (snow_viewport_take_speech_bubble_text_edit_request(runtime, viewport, &bubbleId,
-                                                           &bubbleRequested) == SNOW_OK &&
-        bubbleRequested != 0) {
-        return beginSpeechBubble(runtime, viewport, displayCache, QPointF(), true);
+    SnowTextElementInfo info{};
+    SnowTextStyle style{};
+    std::uint8_t found = 0;
+    if (snow_viewport_take_speech_bubble_text_edit_target(runtime, viewport, &info, &style,
+                                                          &found) != SNOW_OK) {
+        return {};
+    }
+    if (found != 0) {
+        return beginSpeechBubbleTarget(runtime, viewport, displayCache, info, style, false);
     }
     snow_canvas_commands::CreateSerialNumberTextResult request;
     std::uint8_t hasTextId = 0;
@@ -791,9 +806,14 @@ SnowCanvasWidgetTextInteraction::commit(SnowRuntime runtime, SnowViewport viewpo
         snow_canvas_element_id::hasElementId(edit.bubbleId)  ? edit.bubbleId
         : snow_canvas_element_id::hasElementId(edit.arrowId) ? edit.arrowId
                                                              : edit.elementId;
+    std::uint8_t selected = 0;
+    // An element ID also exists for labels inserted during a creation gesture.
+    // Restore only a live selection, preserving the creation policy for every label type.
     commitResult.finishedExistingEdit.hasElement =
-        edit.hasExistingElement || snow_canvas_element_id::hasElementId(edit.arrowId) ||
-        snow_canvas_element_id::hasElementId(edit.bubbleId);
+        snow_canvas_element_id::hasElementId(commitResult.finishedExistingEdit.elementId) &&
+        snow_viewport_is_element_selected(
+            runtime, viewport, commitResult.finishedExistingEdit.elementId, &selected) == SNOW_OK &&
+        selected != 0;
 
     if (edit.shouldCommit(hasViewport)) {
         const QByteArray utf8 = edit.text.toUtf8();

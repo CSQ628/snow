@@ -745,6 +745,7 @@ impl Engine {
             ApplyTransactionCommand {
                 transaction: tx,
                 history_undo_snapshot: Some(before),
+                created_selection_target: None,
             },
         ) {
             Ok(result) => result,
@@ -800,6 +801,7 @@ mod tests {
                     ApplyTransactionCommand {
                         transaction,
                         history_undo_snapshot: None,
+                        created_selection_target: None,
                     },
                 )
                 .unwrap();

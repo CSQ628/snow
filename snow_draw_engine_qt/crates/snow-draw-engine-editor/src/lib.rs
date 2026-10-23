@@ -117,6 +117,7 @@ pub struct SerialNumberTextOperation {
 pub struct ApplyTransactionCommand {
     pub transaction: Transaction,
     pub history_undo_snapshot: Option<DocumentSyncSnapshot>,
+    pub created_selection_target: Option<ElementId>,
 }
 
 impl ApplyTransactionCommand {
@@ -124,7 +125,13 @@ impl ApplyTransactionCommand {
         Self {
             transaction,
             history_undo_snapshot: None,
+            created_selection_target: None,
         }
+    }
+
+    fn selecting_created(mut self, id: ElementId) -> Self {
+        self.created_selection_target = Some(id);
+        self
     }
 
     fn with_history_undo_snapshot(
@@ -134,6 +141,7 @@ impl ApplyTransactionCommand {
         Self {
             transaction,
             history_undo_snapshot: Some(history_undo_snapshot),
+            created_selection_target: None,
         }
     }
 }
@@ -158,6 +166,8 @@ pub struct Editor {
     view: std::cell::Cell<EditorViewportState>,
     config: EngineConfig,
     quick_selection_disabled_tools: u64,
+    automatically_select_newly_created_elements: bool,
+    automatic_selection_excluded_tools: u64,
     scene_state_revision: u64,
     overlay_state_revision: u64,
     pending_command: Option<EditorCommand>,
@@ -183,6 +193,11 @@ impl Editor {
             view: Default::default(),
             config,
             quick_selection_disabled_tools: 0,
+            automatically_select_newly_created_elements: false,
+            automatic_selection_excluded_tools: ActiveTool::FreeDraw.policy_bit()
+                | ActiveTool::PenFilter.policy_bit()
+                | ActiveTool::Text.policy_bit()
+                | ActiveTool::SpeechBubble.policy_bit(),
             scene_state_revision: 0,
             overlay_state_revision: 0,
             pending_command: None,
@@ -264,6 +279,39 @@ impl Editor {
 
     pub fn active_tool(&self) -> ActiveTool {
         self.state.active_tool
+    }
+
+    pub fn automatically_select_newly_created_elements(&self) -> bool {
+        self.automatically_select_newly_created_elements
+    }
+
+    pub fn set_automatically_select_newly_created_elements(&mut self, enabled: bool) {
+        self.automatically_select_newly_created_elements = enabled;
+    }
+
+    pub fn automatic_selection_excluded_tools(&self) -> u64 {
+        self.automatic_selection_excluded_tools
+    }
+
+    pub fn set_automatic_selection_excluded_tools(&mut self, tools: u64) {
+        self.automatic_selection_excluded_tools = tools;
+    }
+
+    pub(crate) fn select_created_element(&mut self, document: &DocumentModel, id: ElementId) {
+        if !self.automatically_select_newly_created_elements()
+            || (self.automatic_selection_excluded_tools & self.active_tool().policy_bit()) != 0
+        {
+            return;
+        }
+        let Ok(element) = document.element(id) else {
+            return;
+        };
+        if element.data.is_background_restore()
+            || element.data.kind() == snow_draw_engine_document::ElementKind::AutoFilter
+        {
+            return;
+        }
+        self.set_selection_state_with_document(Some(document), vec![id], Some(id));
     }
 
     pub fn quick_selection_disabled_tools(&self) -> u64 {

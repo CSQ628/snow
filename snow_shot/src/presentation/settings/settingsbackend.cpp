@@ -1015,6 +1015,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
     case SettingsSwitchBinding::LaunchAsAdministrator:
         return !app::distribution::isStoreManaged() &&
                storage::SystemSettings().launchAsAdministrator();
+    case SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements:
+        return storage::DrawingSettings().automaticallySelectNewlyCreatedElements();
     case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
         return storage::DrawingSettings().deleteTextAfterCursor();
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
@@ -1225,6 +1227,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard) {
         return storage::ScreenshotSettings().setCopyImageFileToClipboard(value);
     }
+    if (binding == SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements) {
+        return storage::DrawingSettings().setAutomaticallySelectNewlyCreatedElements(value);
+    }
     if (binding == SettingsSwitchBinding::DrawingDeleteTextAfterCursor) {
         return storage::DrawingSettings().setDeleteTextAfterCursor(value);
     }
@@ -1422,6 +1427,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::McpEnabled:
     case SettingsSwitchBinding::AutoStartAtBoot:
     case SettingsSwitchBinding::LaunchAsAdministrator:
+    case SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements:
     case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
     case SettingsSwitchBinding::DrawingRememberLastUsedTool:
     case SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton:
@@ -1538,7 +1544,11 @@ bool BuiltInSettingsBackend::applyIntegerValue(SettingsIntegerBinding binding, i
 
 QVariantList BuiltInSettingsBackend::multiSelectValue(SettingsMultiSelectBinding binding) const {
     QVariantList values;
-    if (binding == SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools) {
+    if (binding == SettingsMultiSelectBinding::DrawingAutomaticSelectionExcludedTools) {
+        for (const QString& value : storage::DrawingSettings().automaticSelectionExcludedTools()) {
+            values.push_back(value);
+        }
+    } else if (binding == SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools) {
         for (const QString& value : storage::DrawingSettings().quickSelectionDisabledTools()) {
             values.push_back(value);
         }
@@ -1560,6 +1570,9 @@ bool BuiltInSettingsBackend::applyMultiSelectValue(SettingsMultiSelectBinding bi
     tools.reserve(value.size());
     for (const QVariant& item : value) {
         tools.push_back(item.toString());
+    }
+    if (binding == SettingsMultiSelectBinding::DrawingAutomaticSelectionExcludedTools) {
+        return storage::DrawingSettings().setAutomaticSelectionExcludedTools(tools);
     }
     if (binding == SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools) {
         return storage::DrawingSettings().setQuickSelectionDisabledTools(tools);
@@ -2758,6 +2771,12 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("screenshot/fill_color_presets"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screenshot/fill_color_presets"))},
+            {QStringLiteral("drawing/automatically_select_newly_created_elements"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("drawing/automatically_select_newly_created_elements"))},
+            {QStringLiteral("drawing/automatic_selection_excluded_tools"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("drawing/automatic_selection_excluded_tools"))},
             {QStringLiteral("drawing/quick_selection_disabled_tools"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("drawing/quick_selection_disabled_tools"))},

@@ -1084,9 +1084,9 @@ void builtInCatalogIsCompleteAndValid() {
                 settings::SettingsSwitchBinding::DrawingDeleteTextAfterCursor &&
             storage::ConfigurationSchema::defaultValue(deleteTextAfterCursor->configurationKey)
                 .toBool() &&
-            drawingSettingsSection.items.at(0).id ==
+            drawingSettingsSection.items.at(2).id ==
                 QStringLiteral("drawing.quick-selection-disabled-tools") &&
-            drawingSettingsSection.items.at(1).id == deleteTextAfterCursor->id,
+            drawingSettingsSection.items.at(3).id == deleteTextAfterCursor->id,
         "the default-on Delete text switch must immediately follow quick selection");
     require(
         firstToolbarGroupButton != nullptr &&
@@ -1097,10 +1097,44 @@ void builtInCatalogIsCompleteAndValid() {
                 settings::SettingsSwitchBinding::DrawingAlwaysShowFirstToolbarGroupButton &&
             !storage::ConfigurationSchema::defaultValue(firstToolbarGroupButton->configurationKey)
                  .toBool() &&
-            drawingSettingsSection.items.size() == 6 &&
-            drawingSettingsSection.items.at(2).id == rememberLastUsedTool->id &&
-            drawingSettingsSection.items.at(3).id == firstToolbarGroupButton->id,
+            drawingSettingsSection.items.size() == 8 &&
+            drawingSettingsSection.items.at(4).id == rememberLastUsedTool->id &&
+            drawingSettingsSection.items.at(5).id == firstToolbarGroupButton->id,
         "the default-off first toolbar group button switch must follow Remember last used tool");
+    const auto* automaticSelection =
+        catalog.item({QStringLiteral("screenshots"), QStringLiteral("drawing-settings"),
+                      QStringLiteral("drawing.automatically-select-newly-created-elements")});
+    require(
+        automaticSelection != nullptr &&
+            automaticSelection->title.translated() ==
+                QStringLiteral("Automatically select newly created elements") &&
+            automaticSelection->configurationKey ==
+                QStringLiteral("drawing/automatically_select_newly_created_elements") &&
+            std::get<settings::SettingsSwitchDefinition>(automaticSelection->payload).binding ==
+                settings::SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements &&
+            !storage::ConfigurationSchema::defaultValue(automaticSelection->configurationKey)
+                 .toBool() &&
+            drawingSettingsSection.items.at(0).id == automaticSelection->id,
+        "the default-off automatic selection switch must come first");
+    const auto& exclusions = drawingSettingsSection.items.at(1);
+    require(
+        exclusions.id == QStringLiteral("drawing.automatic-selection-excluded-tools") &&
+            exclusions.title.translated() ==
+                QStringLiteral("Tools excluded from automatic selection") &&
+            exclusions.configurationKey ==
+                QStringLiteral("drawing/automatic_selection_excluded_tools") &&
+            std::get<settings::SettingsMultiSelectDefinition>(exclusions.payload).binding ==
+                settings::SettingsMultiSelectBinding::DrawingAutomaticSelectionExcludedTools &&
+            storage::ConfigurationSchema::defaultValue(exclusions.configurationKey).toArray() ==
+                QJsonArray{QStringLiteral("free-draw"), QStringLiteral("pen-filter"),
+                           QStringLiteral("text"), QStringLiteral("speech-bubble")},
+        "automatic selection exclusions must follow the switch and include the four default tools");
+    const auto* exclusionField = settings::builtInSettingsRegistry().fieldForMultiSelect(
+        settings::SettingsMultiSelectBinding::DrawingAutomaticSelectionExcludedTools);
+    require(
+        exclusionField != nullptr && exclusionField->definition->id == exclusions.id &&
+            exclusionField->reset == settings::SettingsSectionReset::DrawingQuickSelection,
+        "automatic selection exclusions must have a registered resettable multi-select binding");
     const auto& paletteRegistry = settings::builtInSettingsRegistry();
     for (const auto binding : {settings::SettingsColorPaletteBinding::StrokeColors,
                                settings::SettingsColorPaletteBinding::FillColors}) {

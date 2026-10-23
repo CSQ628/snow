@@ -1,3 +1,4 @@
+#include "canvas_automatic_selection_test_support.h"
 #include "snow_shot/presentation/imageeditingdocument.h"
 #include "snow_shot/presentation/imageeditingwindow.h"
 #include "snow_shot/app/supportedpinfiles.h"
@@ -27109,6 +27110,36 @@ int main(int argc, char* argv[]) {
             pinnedRightQuickSelection();
             pinnedRightQuickSelectionPreservesWindowSelection();
             pinnedLinearCreationConsumesRightClick();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--automatic-selection-only"))) {
+            canvas_automatic_selection_test::exercise([](auto verify) {
+                auto* screen = QGuiApplication::primaryScreen();
+                ScreenshotPinnedWindow pin;
+                pin.setAttribute(Qt::WA_DeleteOnClose, false);
+                QImage image(400, 300, QImage::Format_ARGB32_Premultiplied);
+                image.fill(Qt::white);
+                ScreenshotPinnedWindow::Config config;
+                config.screen = screen;
+                config.nativeGeometry = physicalPinGeometry(*screen, QPoint(40, 40), image.size());
+                config.canvasSourceRect = QRectF(QPointF(), QSizeF(image.size()));
+                config.initialWindowSize = image.size();
+                config.imageSource =
+                    ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+                config.automaticTextRecognition = false;
+                config.enableEditing = true;
+                require(pin.present(config), "present pin for automatic selection");
+                waitForUi(30);
+                ScreenshotPinnedWindowTestAccess::editSelectionOffscreen(pin, true);
+                auto* editController = pin.findChild<ScreenshotPinnedEditController*>();
+                require(editController != nullptr && editController->toolbarWindow() != nullptr,
+                        "pin owns annotation toolbar");
+                editController->toolbarWindow()->palette()->shapeRequested();
+                auto* canvas = pin.findChild<SnowCanvasWidget*>();
+                require(canvas != nullptr, "pinned window creates an annotation canvas");
+                verify(*canvas);
+                pin.close();
+            });
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--delete-text-after-cursor-only"))) {

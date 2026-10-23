@@ -107,7 +107,6 @@ class ScreenRecordingAreaWindow final : public QWidget {
     void setRegionCursor(Qt::Edges edges);
     [[nodiscard]] int minimumRegionExtent() const;
     void updateRegionCursor(const QPointF& position);
-    void applyQuickSelectionPreferences();
     void applyNativePassThrough(bool enabled);
     [[nodiscard]] bool regionEditingEnabled() const;
     [[nodiscard]] bool drawingEnabled() const;

@@ -723,6 +723,10 @@ inline bool operator!=(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyle
 struct SnowCanvasRuntimeConfig {
     std::optional<SnowCanvasStyleDefaults> styleDefaults;
     QSet<SnowCanvasTool> quickSelectionDisabledTools{};
+    bool automaticallySelectNewlyCreatedElements = false;
+    QSet<SnowCanvasTool> automaticSelectionExcludedTools{
+        SnowCanvasTool::FreeDraw, SnowCanvasTool::PenFilter, SnowCanvasTool::Text,
+        SnowCanvasTool::SpeechBubble};
 };
 
 struct SnowCanvasStyleToolbarState {
