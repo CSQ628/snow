@@ -530,6 +530,8 @@ class RecordingSettings final {
     bool setWebcamLayout(int size, const QPoint& offset) const;
     [[nodiscard]] QString webcamShape() const;
     bool setWebcamShape(const QString& shape) const;
+    [[nodiscard]] int webcamOrientation() const;
+    bool setWebcamOrientation(int orientation) const;
     [[nodiscard]] bool showKeyboard() const;
     bool setShowKeyboard(bool show) const;
     [[nodiscard]] bool mouseHighlightEnabled() const;

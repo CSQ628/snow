@@ -72,6 +72,7 @@ class ScreenRecordingAreaWindow final : public QWidget {
   signals:
     void webcamLayoutPreviewed(int size, const QPoint& offset);
     void webcamLayoutCommitted(int size, const QPoint& offset);
+    void webcamOrientationRequested(int action);
     void recordingRegionChanged(const QRect& region);
     void regionInteractionStarted();
     void regionInteractionFinished();

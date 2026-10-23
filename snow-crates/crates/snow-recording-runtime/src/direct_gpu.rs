@@ -1290,7 +1290,18 @@ mod tests {
                 revision: index as u64 + 1,
                 at: Instant::now(),
                 size: 100,
-                rgba: Arc::new([220, 30, index as u8 * 20, 255].repeat(100 * 100)),
+                rgba: Arc::new(
+                    (0..100 * 100)
+                        .flat_map(|pixel| {
+                            [
+                                ((pixel % 100) * 2) as u8,
+                                ((pixel / 100) * 2) as u8,
+                                index as u8 * 20,
+                                255,
+                            ]
+                        })
+                        .collect(),
+                ),
             };
             for state in [&mut cpu_state, &mut gpu_state] {
                 state.webcam.prepare(
@@ -1304,6 +1315,8 @@ mod tests {
                         },
                         offset_left: 32 + index as u32 * 12,
                         offset_bottom: 32 + index as u32 * 6,
+                        orientation: snow_webcam::WebcamOrientation::from_raw(index as u32 % 8)
+                            .unwrap(),
                     },
                     size,
                 );

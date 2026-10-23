@@ -1942,6 +1942,14 @@ bool RecordingSettings::setWebcamLayout(int size, const QPoint& offset) const {
 QString RecordingSettings::webcamShape() const {
     return cache().value(QStringLiteral("screen_recording/webcam_shape")).toString();
 }
+
+int RecordingSettings::webcamOrientation() const {
+    return cache().value(QStringLiteral("screen_recording/webcam_orientation")).toInt();
+}
+
+bool RecordingSettings::setWebcamOrientation(int orientation) const {
+    return cache().setValue(QStringLiteral("screen_recording/webcam_orientation"), orientation);
+}
 bool RecordingSettings::setWebcamShape(const QString& shape) const {
     return cache().setValue(QStringLiteral("screen_recording/webcam_shape"), shape);
 }
