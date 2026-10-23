@@ -15,6 +15,7 @@
 
 #include "snow_shot/storage/capturehistorytypes.h"
 #include "snow_shot/storage/persistedselectioncodec.h"
+#include "snow_shot/storage/recordingareahistory.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/shortcuts/menuaccesskey.h"
 #include "snow_shot/shortcuts/screenshotregiontypeshortcut.h"
@@ -648,6 +649,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::Structured},
     {QStringLiteral("global_mouse/screen_recording"), QJsonObject(),
      ConfigurationValueKind::Structured},
+    {QStringLiteral("screen_recording/area_history"), QJsonArray(),
+     ConfigurationValueKind::Structured},
     {QStringLiteral("screen_recording/enable_microphone"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/enable_system_audio"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/microphone_gain_db"), 0, ConfigurationValueKind::Integer,
@@ -1129,6 +1132,18 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      1},
+    {QStringLiteral("screen_recording_shortcuts/previous_recording_area"),
+     QJsonArray{QStringLiteral("R")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("screen_recording_shortcuts/next_recording_area"),
+     QJsonArray{QStringLiteral("Shift+R")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("screen_recording_shortcuts/export"),
      QJsonArray{QStringLiteral("Ctrl+E")},
      ConfigurationValueKind::StringList,
@@ -2755,6 +2770,8 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     if (key == QStringLiteral("interface/language")) {
         return normalizeLanguage(value);
     }
+    if (key == QStringLiteral("screen_recording/area_history"))
+        return normalizeRecordingAreaHistory(value);
     if (key == QStringLiteral("screenshot_selection/selection_rect_presets")) {
         return normalizePresets(value);
     }
@@ -2930,12 +2947,17 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
         return normalizeAllowedStringList(*schemaEntry, value);
     case ConfigurationValueKind::ShortcutList:
         return normalizeShortcuts(value, schemaEntry->maximumListItems,
-                                  key.startsWith(QStringLiteral("screenshot_shortcuts/")),
+                                  allowsModifierOnlyShift(key),
                                   key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
     case ConfigurationValueKind::Structured:
         return exactType(value, QJsonValue::Object);
     }
     return {};
+}
+
+bool ConfigurationSchema::allowsModifierOnlyShift(const QString& key) {
+    return key.startsWith(QStringLiteral("screenshot_shortcuts/")) ||
+           key.startsWith(QStringLiteral("screen_recording_shortcuts/"));
 }
 
 bool ConfigurationSchema::parseIntegerVersion(const QJsonValue& value, int* version) {

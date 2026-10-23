@@ -7094,6 +7094,207 @@ void recordingSessionEndPreservation() {
     }
 }
 
+void recordingAreaHistoryTests() {
+    using namespace snow_shot::storage;
+    auto& configuration = ApplicationStorage::instance().configuration();
+    const auto historyKey = QStringLiteral("screen_recording/area_history");
+    const RecordingAreaHistorySettings history;
+    const RecordingSettings settings;
+    require(settings.setStartDelaySeconds(0) && settings.setPostProcessingEnabled(false) &&
+                settings.setDeleteFilesOnRecordingClose(false) &&
+                settings.setAutoExitAfterRecordingEnds(false),
+            "configure recording area tests");
+    const QRect first(20, 20, 301, 201);
+    const QRect second(60, 60, 321, 241);
+    const QRect current(100, 100, 351, 251);
+    const auto space = recordingAreaCoordinateSpace();
+    const auto otherSpace = space == QStringLiteral("desktop_points")
+                                ? QStringLiteral("physical_pixels")
+                                : QStringLiteral("desktop_points");
+    require(configuration.setValue(
+                historyKey,
+                QJsonArray{recordingAreaToJson({first, space}), recordingAreaToJson({first, space}),
+                           recordingAreaToJson({second, space}),
+                           recordingAreaToJson({current, otherSpace}),
+                           recordingAreaToJson({QRect(100000, 100000, 300, 200), space})}),
+            "seed chronological history with duplicate and unavailable areas");
+    const auto key = [](ScreenRecordingAreaWindow* area, Qt::Key value,
+                        Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        area->activateInput();
+        QCoreApplication::processEvents();
+        PhysicalKeyEvent down(QEvent::KeyPress, value, modifiers);
+        PhysicalKeyEvent up(QEvent::KeyRelease, value, modifiers);
+        QApplication::sendEvent(area, &down);
+        QApplication::sendEvent(area, &up);
+    };
+    const auto wait = [](const auto& condition) {
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!condition() && deadline.elapsed() < 5000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            QThread::msleep(1);
+        }
+        require(condition(), "recording area fixture must complete its asynchronous operation");
+    };
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        auto* area = recordingAreaWindow();
+        auto* controls = palette();
+        require(history.entries().size() == 5, "opening a recording window does not save an area");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == current, "Next does nothing before browsing");
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == second, "Previous selects newest usable entry, skipping "
+                                                   "unavailable coordinate spaces and displays");
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == first, "Previous moves toward older starts");
+        key(area, Qt::Key_R);
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == first, "Previous stops at the oldest entry");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == first, "duplicates remain separate navigation stops");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == second, "Next moves toward newer starts");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == second, "Next stops at the newest usable entry");
+        require(area->restoreRecordingRegion(current), "simulate an idle region edit");
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == current,
+                "manual region changes reset the history cursor");
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == second && history.entries().size() == 5,
+                "browsing restarts at the newest entry without appending history");
+        controller.startRecording();
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        waitForRecording(controller);
+        require(history.entries().size() == 6 && history.entries().last().rectangle == second,
+                "successful startup saves the selected area exactly once");
+#ifndef Q_OS_MACOS
+        require(lastDirectConfig.width == 322 && lastDirectConfig.height == 242,
+                "recording uses compatible even capture dimensions while history preserves odd "
+                "selection dimensions");
+#endif
+        controls->recordingPauseRequested();
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == second && history.entries().size() == 6,
+                "paused recording cannot navigate or append history");
+        controls->recordingResumeRequested();
+        require(history.entries().size() == 6, "resume does not append another start");
+        controls->recordingCloseRequested();
+        wait([&] { return !controller.isRecording(); });
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        auto* area = recordingAreaWindow();
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == second, "reopened windows browse saved recording areas");
+        key(area, Qt::Key_R);
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == first, "browse older history before a failed start");
+        ErrorObserver errors;
+        qApp->installEventFilter(&errors);
+        for (int failure = 0; failure < 2; ++failure) {
+            failStart = failure == 0;
+            failStartOperation = failure == 1;
+            controller.startRecording();
+            wait([&] { return errors.shown == failure + 1 && !palette()->recordingBusy(); });
+            require(history.entries().size() == 6,
+                    "failed backend creation or start does not save an area");
+            if (failure == 0) {
+                key(area, Qt::Key_R, Qt::ShiftModifier);
+                require(area->recordingRegion() == second,
+                        "failed startup preserves the existing history navigation cursor");
+            }
+        }
+        failStart = false;
+        failStartOperation = false;
+        qApp->removeEventFilter(&errors);
+        require(settings.setStartDelaySeconds(10), "enable countdown");
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        controller.startRecording();
+        auto* area = recordingAreaWindow();
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == current && history.entries().size() == 6,
+                "countdown blocks navigation and does not save an area");
+        palette()->recordingCloseRequested();
+    }
+    require(settings.setStartDelaySeconds(0), "disable countdown");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        std::promise<void> releaseStart;
+        sessionCreateGate = releaseStart.get_future().share();
+        sessionCreateEntered = false;
+        auto controller = std::make_unique<ScreenRecordingController>(testEffectsSource);
+        controller->open(current);
+        controller->startRecording();
+        wait([] { return sessionCreateEntered.load(); });
+        auto* area = recordingAreaWindow();
+        key(area, Qt::Key_R);
+        require(area->recordingRegion() == current && history.entries().size() == 6,
+                "pending backend startup freezes navigation and has not saved history yet");
+        controller.reset();
+        releaseStart.set_value();
+        wait([&] { return history.entries().size() == 7; });
+        require(history.entries().last().rectangle == current,
+                "a successful start after controller destruction still commits its selected area");
+        sessionCreateGate = {};
+    }
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(first);
+        controller.startRecording();
+        waitForRecording(controller);
+        require(history.entries().size() == 8, "every successful recording appends a new entry");
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        require(configuration.setValue(historyKey, QJsonArray{}), "clear fixture history");
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        auto* area = recordingAreaWindow();
+        key(area, Qt::Key_R);
+        key(area, Qt::Key_R, Qt::ShiftModifier);
+        require(area->recordingRegion() == current && palette()->recordingExportSettingsVisible(),
+                "empty history leaves both geometry and the selected tool unchanged");
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(current);
+        configuration.suspendWrites(true);
+        const auto resumeWrites = qScopeGuard([&] { configuration.suspendWrites(false); });
+        controller.startRecording();
+        waitForRecording(controller);
+        require(history.entries().isEmpty(),
+                "a history persistence failure does not interrupt successful recording");
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    {
+        std::promise<void> releaseStart;
+        sessionCreateGate = releaseStart.get_future().share();
+        sessionCreateEntered = false;
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open(first);
+        controller.startRecording();
+        wait([] { return sessionCreateEntered.load(); });
+        releaseStart.set_value();
+        controller.prepareForSessionEnd(3000);
+        require(history.entries().size() == 1 && history.entries().last().rectangle == first,
+                "terminal preservation commits successful startup without processing GUI events");
+        QCoreApplication::processEvents();
+        require(history.entries().size() == 1,
+                "queued and terminal startup completion cannot save the same start twice");
+        sessionCreateGate = {};
+    }
+}
+
 template <typename Application> int runRecordingControllerTests(Application& app) {
     QTemporaryDir temporary;
     require(temporary.isValid(), "temporary storage must exist");
@@ -7163,6 +7364,10 @@ template <typename Application> int runRecordingControllerTests(Application& app
     QApplication::setFont(testFont);
     QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Han,
                                                       {QStringLiteral("Snow Recording Test Han")});
+    if (app.arguments().contains(QStringLiteral("--area-history-only"))) {
+        recordingAreaHistoryTests();
+        return 0;
+    }
     const QString preservationPrefix = QStringLiteral("--store-preservation-case=");
     for (const auto& argument : app.arguments()) {
         if (argument.startsWith(preservationPrefix)) {

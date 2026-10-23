@@ -207,6 +207,24 @@ QRect ScreenRecordingAreaWindow::recordingRegion() const {
     return m_recordingRegion;
 }
 
+bool ScreenRecordingAreaWindow::canRestoreRecordingRegion() const {
+    return regionEditingEnabled() && !m_trimming && !m_regionDragActive &&
+           !(m_webcamControl && m_webcamControl->interacting()) &&
+           m_gestureButton == Qt::NoButton && QApplication::mouseButtons() == Qt::NoButton;
+}
+
+bool ScreenRecordingAreaWindow::restoreRecordingRegion(const QRect& requestedRegion) {
+    if (!canRestoreRecordingRegion())
+        return false;
+    const QRect region =
+        snow_shot::presentation::recording::screenRecordingNormalizedRegion(requestedRegion);
+    if (!region.isValid() || region.isEmpty())
+        return false;
+    cancelWebcamInteraction();
+    applyRegionDragGeometry(region);
+    return true;
+}
+
 void ScreenRecordingAreaWindow::setRecordingRegion(const QRect& requestedRegion) {
     cancelRegionInteraction();
     cancelWebcamInteraction();

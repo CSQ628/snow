@@ -802,7 +802,8 @@ class ShortcutKeyConfigContent final : public QWidget {
         }
 
         const bool allowModifierOnlyShift =
-            m_validationScope == ShortcutKeyRowConfig::ValidationScope::ScreenshotShortcut;
+            m_validationScope == ShortcutKeyRowConfig::ValidationScope::ScreenshotShortcut ||
+            m_validationScope == ShortcutKeyRowConfig::ValidationScope::RecordingShortcut;
         const snow_shot::shortcuts::ShortcutBinding shortcut =
             snow_shot::shortcuts::bindingFromKeyEvent(event, allowModifierOnlyShift,
                                                       m_allowModifierOnlyAlt);

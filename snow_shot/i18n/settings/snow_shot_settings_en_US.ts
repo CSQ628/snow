@@ -3028,6 +3028,10 @@
             <translation>Next frame</translation>
         </message>
         <message>
+            <source>Next recording area</source>
+            <translation>Next recording area</translation>
+        </message>
+        <message>
             <source>Next screenshot history</source>
             <translation>Next screenshot history</translation>
         </message>
@@ -3338,6 +3342,10 @@
         <message>
             <source>Previous frame</source>
             <translation>Previous frame</translation>
+        </message>
+        <message>
+            <source>Previous recording area</source>
+            <translation>Previous recording area</translation>
         </message>
         <message>
             <source>Previous screenshot history</source>

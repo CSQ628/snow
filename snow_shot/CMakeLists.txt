@@ -3832,6 +3832,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         Qt6::Widgets
     )
     snow_shot_import_offscreen_platform(snow-shot-shortcut-key-row-tests)
+    add_test(NAME snow-shot-recording-area-shortcut-editor-tests
+        COMMAND snow-shot-shortcut-key-row-tests --recording-area-only -platform offscreen)
+    set_tests_properties(snow-shot-recording-area-shortcut-editor-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(
         NAME snow-shot-shortcut-key-row-tests
         COMMAND snow-shot-shortcut-key-row-tests
@@ -7152,6 +7157,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         set(_snow_recording_shortcut_platform windows)
         set(_snow_recording_shortcut_os windows)
     endif()
+    add_test(NAME snow-shot-recording-area-shortcut-tests
+        COMMAND snow-shot-screen-recording-shortcut-tests --area-history-only -platform offscreen)
+    set_tests_properties(snow-shot-recording-area-shortcut-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-recording-history-shortcut-tests
         COMMAND snow-shot-screen-recording-shortcut-tests --history-shortcuts-only)
     set_tests_properties(snow-shot-screen-recording-shortcut-tests
@@ -8429,6 +8439,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-recording-api-mode-tests
         COMMAND snow-shot-screen-recording-controller-tests --api-mode-only -platform offscreen)
     set_tests_properties(snow-shot-recording-api-mode-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-recording-area-history-tests
+        COMMAND snow-shot-screen-recording-controller-tests --area-history-only -platform offscreen)
+    set_tests_properties(snow-shot-recording-area-history-tests PROPERTIES
         LABELS "unit" TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-recording-startup-retry-tests
