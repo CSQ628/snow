@@ -302,6 +302,10 @@ class ScreenshotSettings final {
 
 class DrawingSettings final {
   public:
+    [[nodiscard]] bool automaticallySelectNewlyCreatedElements() const;
+    bool setAutomaticallySelectNewlyCreatedElements(bool enabled) const;
+    [[nodiscard]] QStringList automaticSelectionExcludedTools() const;
+    [[nodiscard]] bool setAutomaticSelectionExcludedTools(const QStringList& tools) const;
     [[nodiscard]] QStringList quickSelectionDisabledTools() const;
     bool setQuickSelectionDisabledTools(const QStringList& tools) const;
     [[nodiscard]] bool deleteTextAfterCursor() const;

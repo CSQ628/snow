@@ -187,6 +187,7 @@ impl Engine {
             EditorCommand::ApplyTransaction(ApplyTransactionCommand {
                 transaction,
                 history_undo_snapshot: None,
+                created_selection_target: None,
             }),
         )
     }
@@ -218,6 +219,7 @@ impl Engine {
             EditorCommand::ApplyTransaction(ApplyTransactionCommand {
                 transaction,
                 history_undo_snapshot: None,
+                created_selection_target: None,
             }),
         )
     }
@@ -271,6 +273,7 @@ mod delete_all_elements_tests {
                     ApplyTransactionCommand {
                         transaction,
                         history_undo_snapshot: None,
+                        created_selection_target: None,
                     },
                 )
                 .unwrap();

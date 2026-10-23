@@ -176,6 +176,10 @@ class SnowCanvasWidgetTextInteraction final {
                                       bool keepSelection);
 
   private:
+    BeginResult beginSpeechBubbleTarget(SnowRuntime runtime, SnowViewport viewport,
+                                        SnowCanvasDisplayCache& displayCache,
+                                        const SnowTextElementInfo& info, const SnowTextStyle& style,
+                                        bool selectOwner);
     QRegion applyEditorTextStyle(const SnowTextStyle& style,
                                  const SnowCanvasDisplayCache& displayCache, const QFont& baseFont);
     QRegion editingRegion(const SnowCanvasDisplayCache& displayCache, const QFont& baseFont) const;

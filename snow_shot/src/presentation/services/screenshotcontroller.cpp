@@ -58,6 +58,7 @@
 #include "snow_shot/presentation/screenshotdisplayconfigurationobserver.h"
 #include "snow_shot/platform/selectedfiles.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
+#include "snow_shot/presentation/canvasdrawingpreferences.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
 #include "snow_shot/presentation/screenshotdisplaysession.h"
 #include "snow_shot/presentation/screenshotexportservice.h"
@@ -282,7 +283,6 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void createToolbarCommands();
     void connectSelectorSignals();
     void reloadUiPreferences();
-    void reloadDrawingPreferences();
     void updateSmartSelectionSettingForCurrentSession(bool enabled);
     void applyUiPreferences(const ScreenshotUiPreferences& preferences);
     void resetGuideVisibilityForSession();
@@ -736,7 +736,13 @@ ScreenshotController::Impl::Impl(ScreenshotController& controller,
 #endif
     createPresentationInfrastructure();
     reloadUiPreferences();
-    reloadDrawingPreferences();
+    snow_shot::presentation::bindCanvasDrawingPreferences(
+        m_canvasRuntime, owner, [this](const QSet<SnowCanvasTool>& tools) {
+            m_quickSelectionDisabledTools = tools;
+            if (m_presentationServices != nullptr) {
+                m_presentationServices->setQuickSelectionDisabledTools(tools);
+            }
+        });
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     if (storage.isInitialized()) {
         QObject::connect(
@@ -754,8 +760,6 @@ ScreenshotController::Impl::Impl(ScreenshotController& controller,
                     synchronizeQrToolbar();
                 } else if (key.startsWith(QStringLiteral("screenshot_ui/"))) {
                     reloadUiPreferences();
-                } else if (key == QStringLiteral("drawing/quick_selection_disabled_tools")) {
-                    reloadDrawingPreferences();
                 } else if (key.startsWith(QStringLiteral("screenshot_shortcuts/")) &&
                            m_presentationServices != nullptr) {
                     m_presentationServices->reloadConfiguredShortcuts();
@@ -791,22 +795,6 @@ ScreenshotController::Impl::Impl(ScreenshotController& controller,
     createOverlayInputPipeline();
     createToolbarCommands();
     connectSelectorSignals();
-}
-
-void ScreenshotController::Impl::reloadDrawingPreferences() {
-    auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    if (!applicationStorage.isInitialized()) {
-        return;
-    }
-    const auto tools = snow_shot::presentation::screenshotQuickSelectionDisabledTools(
-        snow_shot::storage::DrawingSettings().quickSelectionDisabledTools());
-    m_quickSelectionDisabledTools = tools;
-    if (!m_canvasRuntime.setQuickSelectionDisabledTools(tools)) {
-        qWarning("Failed to apply screenshot annotation quick-selection preferences");
-    }
-    if (m_presentationServices != nullptr) {
-        m_presentationServices->setQuickSelectionDisabledTools(tools);
-    }
 }
 
 void ScreenshotController::Impl::updateSmartSelectionSettingForCurrentSession(bool enabled) {

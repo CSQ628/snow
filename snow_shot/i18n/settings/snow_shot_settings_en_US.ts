@@ -1444,6 +1444,10 @@
             <translation>Automatically exit screen recording after the recording is saved.</translation>
         </message>
         <message>
+            <source>Automatically select newly created elements</source>
+            <translation>Automatically select newly created elements</translation>
+        </message>
+        <message>
             <source>Autostart</source>
             <translation>Autostart</translation>
         </message>
@@ -2242,6 +2246,10 @@
         <message>
             <source>Distance annotation</source>
             <translation>Distance annotation</translation>
+        </message>
+        <message>
+            <source>Do not automatically select elements created with these tools.</source>
+            <translation>Do not automatically select elements created with these tools.</translation>
         </message>
         <message>
             <source>Double-click Action</source>
@@ -3808,6 +3816,10 @@
             <translation>Select dark theme tray icon</translation>
         </message>
         <message>
+            <source>Select each newly created element while keeping the current drawing tool active.</source>
+            <translation>Select each newly created element while keeping the current drawing tool active.</translation>
+        </message>
+        <message>
             <source>Select image save directory</source>
             <translation>Select image save directory</translation>
         </message>
@@ -4458,6 +4470,10 @@
         <message>
             <source>Toolbar size</source>
             <translation>Toolbar size</translation>
+        </message>
+        <message>
+            <source>Tools excluded from automatic selection</source>
+            <translation>Tools excluded from automatic selection</translation>
         </message>
         <message>
             <source>Tools that forbid quick selection of same-type elements</source>

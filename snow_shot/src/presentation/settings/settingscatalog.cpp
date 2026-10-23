@@ -1712,9 +1712,19 @@ SettingsItemDefinition screenshotConfirmBeforeExitingViaShortcutItem() {
         SettingsSwitchBinding::ScreenshotConfirmBeforeExitingViaShortcut);
 }
 
-SettingsItemDefinition drawingQuickSelectionItem() {
-    SettingsMultiSelectDefinition payload;
-    payload.options = {
+SettingsItemDefinition drawingAutomaticallySelectNewlyCreatedElementsItem() {
+    return switchItem(
+        QStringLiteral("drawing.automatically-select-newly-created-elements"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Automatically select newly created elements"),
+        QT_TRANSLATE_NOOP(
+            "SettingsCatalog",
+            "Select each newly created element while keeping the current drawing tool active."),
+        QStringLiteral("drawing/automatically_select_newly_created_elements"),
+        SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements);
+}
+
+QVector<SettingsOptionDefinition> drawingSelectableToolOptions() {
+    return {
         {QStringLiteral("shape"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Shape tool"))},
         {QStringLiteral("speech-bubble"),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Speech Bubble"))},
@@ -1740,10 +1750,32 @@ SettingsItemDefinition drawingQuickSelectionItem() {
         {QStringLiteral("text"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Text"))},
         {QStringLiteral("serial-number"),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Serial number"))},
-        {QStringLiteral("eraser"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Eraser"))},
-        {QStringLiteral("watermark"),
-         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Watermark"))},
     };
+}
+
+SettingsItemDefinition drawingAutomaticSelectionExcludedToolsItem() {
+    SettingsMultiSelectDefinition payload;
+    payload.binding = SettingsMultiSelectBinding::DrawingAutomaticSelectionExcludedTools;
+    payload.options = drawingSelectableToolOptions();
+    return {
+        QStringLiteral("drawing.automatic-selection-excluded-tools"),
+        settingsText(
+            QT_TRANSLATE_NOOP("SettingsCatalog", "Tools excluded from automatic selection")),
+        settingsText(QT_TRANSLATE_NOOP(
+            "SettingsCatalog", "Do not automatically select elements created with these tools.")),
+        {},
+        QStringLiteral("drawing/automatic_selection_excluded_tools"),
+        std::move(payload),
+    };
+}
+
+SettingsItemDefinition drawingQuickSelectionItem() {
+    SettingsMultiSelectDefinition payload;
+    payload.options = drawingSelectableToolOptions();
+    payload.options.append(
+        {QStringLiteral("eraser"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Eraser"))});
+    payload.options.append({QStringLiteral("watermark"),
+                            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Watermark"))});
     return {
         QStringLiteral("drawing.quick-selection-disabled-tools"),
         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
@@ -3456,9 +3488,11 @@ QVector<SettingsPageDefinition> builtInPages() {
                      "SettingsCatalog",
                      "Configure annotation tools and the screenshot annotation toolbar")),
                  SettingsSectionReset::DrawingQuickSelection,
-                 {drawingQuickSelectionItem(), drawingDeleteTextAfterCursorItem(),
-                  drawingRememberLastUsedToolItem(), drawingAlwaysShowFirstToolbarGroupButtonItem(),
-                  strokeColorPresetsItem(), fillColorPresetsItem()},
+                 {drawingAutomaticallySelectNewlyCreatedElementsItem(),
+                  drawingAutomaticSelectionExcludedToolsItem(), drawingQuickSelectionItem(),
+                  drawingDeleteTextAfterCursorItem(), drawingRememberLastUsedToolItem(),
+                  drawingAlwaysShowFirstToolbarGroupButtonItem(), strokeColorPresetsItem(),
+                  fillColorPresetsItem()},
              },
              {
                  QStringLiteral("drawing"),
@@ -5264,6 +5298,10 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSwitchBinding::AutoStartAtBoot:
                         expectedKey = QStringLiteral("system/auto_start_at_boot");
                         break;
+                    case SettingsSwitchBinding::DrawingAutomaticallySelectNewlyCreatedElements:
+                        expectedKey =
+                            QStringLiteral("drawing/automatically_select_newly_created_elements");
+                        break;
                     case SettingsSwitchBinding::DrawingDeleteTextAfterCursor:
                         expectedKey = QStringLiteral("drawing/delete_text_after_cursor");
                         break;
@@ -5285,6 +5323,9 @@ QStringList SettingsCatalog::validationErrors() const {
                         std::get_if<SettingsMultiSelectDefinition>(&itemDefinition.payload)) {
                     QString expectedKey;
                     switch (multi->binding) {
+                    case SettingsMultiSelectBinding::DrawingAutomaticSelectionExcludedTools:
+                        expectedKey = QStringLiteral("drawing/automatic_selection_excluded_tools");
+                        break;
                     case SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools:
                         expectedKey = QStringLiteral("drawing/quick_selection_disabled_tools");
                         break;

@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/screenshotmanualsave.h"
 #include "snow_shot/presentation/crosshaircursor.h"
 #include "snow_shot/presentation/canvastexteditingpreferences.h"
+#include "snow_shot/presentation/canvasdrawingpreferences.h"
 #include "snow_shot/presentation/collagedocument.h"
 #include "snow_shot/presentation/screenshotmessageservice.h"
 #include "snow_shot/presentation/components/confirmationskipbutton.h"
@@ -1226,23 +1227,7 @@ ScreenshotPinnedWindow::ScreenshotPinnedWindow(QWidget* parent)
     });
 
     auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
-    if (applicationStorage.isInitialized()) {
-        const auto applyDrawingPreferences = [this]() {
-            const auto tools = snow_shot::presentation::screenshotQuickSelectionDisabledTools(
-                snow_shot::storage::DrawingSettings().quickSelectionDisabledTools());
-            if (!m_runtime.setQuickSelectionDisabledTools(tools)) {
-                qWarning("Failed to apply pinned annotation quick-selection preferences");
-            }
-        };
-        applyDrawingPreferences();
-        connect(&applicationStorage.configuration(),
-                &snow_shot::storage::ConfigurationStore::valueChanged, this,
-                [applyDrawingPreferences](const QString& key, const QJsonValue&) {
-                    if (key == QStringLiteral("drawing/quick_selection_disabled_tools")) {
-                        applyDrawingPreferences();
-                    }
-                });
-    }
+    snow_shot::presentation::bindCanvasDrawingPreferences(m_runtime, *this);
 
     createUi();
     setAcceptDrops(true);

@@ -763,6 +763,21 @@ impl Engine {
         self.ensure_viewport(viewport)?;
         Ok(self.editor.take_speech_bubble_text_edit_request())
     }
+
+    pub fn take_speech_bubble_text_edit_target(
+        &mut self,
+        viewport: ViewportId,
+    ) -> Result<Option<(TextElementInfo, TextStyle)>, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        let Some(owner) = self.editor.take_speech_bubble_text_edit_request() else {
+            return Ok(None);
+        };
+        if !self.editor.can_begin_arrow_text() {
+            return Ok(None);
+        }
+        self.speech_bubble_text_target_for_owner(owner)
+    }
+
     pub fn speech_bubble_text_target(
         &self,
         viewport: ViewportId,
@@ -826,6 +841,13 @@ impl Engine {
         let Some(owner) = target else {
             return Ok(None);
         };
+        self.speech_bubble_text_target_for_owner(owner)
+    }
+
+    fn speech_bubble_text_target_for_owner(
+        &self,
+        owner: ElementId,
+    ) -> Result<Option<(TextElementInfo, TextStyle)>, ErrorCode> {
         let Some(bubble) = self
             .editor
             .speech_bubble_display_snapshot(&self.model, owner)

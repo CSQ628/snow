@@ -58,6 +58,10 @@ fn create(shape: HighlightShape, width: f64, height: f64) -> (Engine, ViewportId
     config.style_defaults.editor.speech_bubble.shape = shape;
     config.style_defaults.editor.speech_bubble.corner_radii = CornerRadii::splat(8.0);
     let mut engine = Engine::new(config);
+    engine
+        .set_automatically_select_newly_created_elements(true)
+        .unwrap();
+    engine.set_automatic_selection_excluded_tools(0).unwrap();
     let viewport = engine.create_viewport(ViewportConfig::default()).unwrap();
     engine
         .set_viewport_surface_size(viewport, 800, 600)
@@ -377,6 +381,7 @@ fn speech_bubble_existing_text_keeps_explicit_alignment_when_reopened() {
             EditorCommand::ApplyTransaction(ApplyTransactionCommand {
                 transaction: tx,
                 history_undo_snapshot: None,
+                created_selection_target: None,
             }),
         )
         .unwrap();
@@ -665,6 +670,7 @@ fn speech_bubble_rotated_growth_keeps_top_left_and_tail_canvas_positions() {
                 ApplyTransactionCommand {
                     transaction: tx,
                     history_undo_snapshot: None,
+                    created_selection_target: None,
                 },
             )
             .unwrap();
@@ -789,6 +795,7 @@ fn speech_bubble_text_measurement_cache_reuses_warm_frames_and_rebuilds_only_tou
             ApplyTransactionCommand {
                 transaction: tx,
                 history_undo_snapshot: None,
+                created_selection_target: None,
             },
         )
         .unwrap();
@@ -1031,6 +1038,7 @@ fn bubble_group_fixture(
             EditorCommand::ApplyTransaction(ApplyTransactionCommand {
                 transaction,
                 history_undo_snapshot: None,
+                created_selection_target: None,
             }),
         )
         .unwrap();
@@ -1097,6 +1105,7 @@ fn speech_bubble_move_rotate_and_resize_keep_canvas_tips_in_preview_commit_and_h
                         EditorCommand::ApplyTransaction(ApplyTransactionCommand {
                             transaction: tx,
                             history_undo_snapshot: None,
+                            created_selection_target: None,
                         }),
                     )
                     .unwrap();
@@ -1375,6 +1384,7 @@ fn speech_bubble_group_tail_only_update_refreshes_frame_and_history() {
             EditorCommand::ApplyTransaction(ApplyTransactionCommand {
                 transaction,
                 history_undo_snapshot: None,
+                created_selection_target: None,
             }),
         )
         .unwrap();
@@ -1408,6 +1418,7 @@ fn speech_bubble_group_bounds_change_preserves_other_groups_rotated_preview_fram
             EditorCommand::ApplyTransaction(ApplyTransactionCommand {
                 transaction,
                 history_undo_snapshot: None,
+                created_selection_target: None,
             }),
         )
         .unwrap();

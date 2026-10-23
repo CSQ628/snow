@@ -763,6 +763,19 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      defaultOutputDirectory(QStandardPaths::MoviesLocation), ConfigurationValueKind::String},
     {QStringLiteral("screen_recording/video_filename_format"),
      QStringLiteral("SnowShot_Video_{YYYY-MM-DD_HH-mm-ss}"), ConfigurationValueKind::String},
+    {QStringLiteral("drawing/automatically_select_newly_created_elements"), false,
+     ConfigurationValueKind::Boolean},
+    {QStringLiteral("drawing/automatic_selection_excluded_tools"),
+     QJsonArray{QStringLiteral("free-draw"), QStringLiteral("pen-filter"), QStringLiteral("text"),
+                QStringLiteral("speech-bubble")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {QStringLiteral("shape"), QStringLiteral("arrow"), QStringLiteral("line"),
+      QStringLiteral("angle"), QStringLiteral("distance"), QStringLiteral("free-draw"),
+      QStringLiteral("rectangle-highlight"), QStringLiteral("pen-highlight"),
+      QStringLiteral("spotlight"), QStringLiteral("magnifier"), QStringLiteral("rectangle-filter"),
+      QStringLiteral("pen-filter"), QStringLiteral("text"), QStringLiteral("serial-number"),
+      QStringLiteral("speech-bubble")}},
     {QStringLiteral("drawing/quick_selection_disabled_tools"),
      QJsonArray{QStringLiteral("free-draw"), QStringLiteral("pen-filter")},
      ConfigurationValueKind::StringList,
@@ -2902,7 +2915,8 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
         return normalizeTranslationLanguage(*schemaEntry, value);
     }
 #endif
-    if (key == QStringLiteral("drawing/quick_selection_disabled_tools")) {
+    if (key == QStringLiteral("drawing/quick_selection_disabled_tools") ||
+        key == QStringLiteral("drawing/automatic_selection_excluded_tools")) {
         return normalizeAllowedStringList(*schemaEntry, value);
     }
     if (key == QStringLiteral("tray/menu_options")) {

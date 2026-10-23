@@ -19,6 +19,8 @@ pub struct EditorSessionSnapshot {
     state: EditorState,
     config: EngineConfig,
     quick_selection_disabled_tools: u64,
+    automatically_select_newly_created_elements: bool,
+    automatic_selection_excluded_tools: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -309,6 +311,10 @@ impl EditorSession {
             state: self.editor.state.clone(),
             config: self.editor.config,
             quick_selection_disabled_tools: self.editor.quick_selection_disabled_tools(),
+            automatic_selection_excluded_tools: self.editor.automatic_selection_excluded_tools(),
+            automatically_select_newly_created_elements: self
+                .editor
+                .automatically_select_newly_created_elements(),
         }
     }
 
@@ -422,6 +428,27 @@ impl EditorSession {
         snow_draw_engine_core::validate_config(&config)?;
         self.editor.config = config;
         Ok(())
+    }
+
+    pub fn automatically_select_newly_created_elements(&self) -> bool {
+        self.editor.automatically_select_newly_created_elements()
+    }
+
+    pub fn set_automatically_select_newly_created_elements(&mut self, enabled: bool) {
+        self.editor
+            .set_automatically_select_newly_created_elements(enabled);
+    }
+
+    pub fn automatic_selection_excluded_tools(&self) -> u64 {
+        self.editor.automatic_selection_excluded_tools()
+    }
+
+    pub fn set_automatic_selection_excluded_tools(&mut self, tools: u64) {
+        self.editor.set_automatic_selection_excluded_tools(tools);
+    }
+
+    pub fn select_created_element(&mut self, document: &DocumentModel, id: ElementId) {
+        self.editor.select_created_element(document, id);
     }
 
     pub fn quick_selection_disabled_tools(&self) -> u64 {
@@ -1288,6 +1315,7 @@ mod document_reset_tests {
         session.editor.state.ui.snap_guides.reserve(64);
         session.editor.state.selection.ids.reserve(64);
         session.set_quick_selection_disabled_tools(3);
+        session.set_automatic_selection_excluded_tools(ActiveTool::Shape.policy_bit());
         let config = session.config();
         let generation = session.editor.state.arrow_text_measurement_generation;
 
@@ -1306,5 +1334,9 @@ mod document_reset_tests {
         );
         assert_eq!(session.config(), config);
         assert_eq!(session.quick_selection_disabled_tools(), 3);
+        assert_eq!(
+            session.automatic_selection_excluded_tools(),
+            ActiveTool::Shape.policy_bit()
+        );
     }
 }

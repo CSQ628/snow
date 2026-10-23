@@ -1730,6 +1730,7 @@ set(PROJECT_HEADERS
     include/snow_shot/presentation/pinnedwindowgroupmanager.h
     include/snow_shot/presentation/globalshortcuttypes.h
     include/snow_shot/presentation/screenshotdefaultstyles.h
+    include/snow_shot/presentation/canvasdrawingpreferences.h
     include/snow_shot/presentation/screenshotcanvastoolstyles.h
     include/snow_shot/presentation/screenshotdisplayconfigurationobserver.h
     include/snow_shot/presentation/screenshotdisplaysession.h
@@ -5173,7 +5174,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
     foreach(_snow_editor_regression IN ITEMS
-        close source smart-erase save canvas document translation branch conversion-availability)
+        close source smart-erase save canvas document translation branch conversion-availability
+        automatic-selection)
         set(_snow_editor_regression_test
             "snow-shot-image-editing-${_snow_editor_regression}-tests")
         add_test(NAME ${_snow_editor_regression_test}
@@ -12925,6 +12927,28 @@ if(SNOW_APPS_BUILD_BENCHMARKS AND TARGET snow-shot-pinned-window-tests)
         TIMEOUT 240 ENVIRONMENT "${_image_editing_environment}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
+
+foreach(_automatic_selection_pair IN ITEMS
+        "capture|snow_shot"
+        "pinned|snow-shot-pinned-window-tests"
+        "recording|snow-shot-screen-recording-area-window-tests"
+        "global|snow-shot-global-canvas-tests")
+    string(REPLACE "|" ";" _automatic_selection_parts "${_automatic_selection_pair}")
+    list(GET _automatic_selection_parts 0 _automatic_selection_host)
+    list(GET _automatic_selection_parts 1 _automatic_selection_target)
+    set(_automatic_selection_arguments --automatic-selection-only -platform offscreen)
+    if(_automatic_selection_host STREQUAL "capture")
+        set(_automatic_selection_arguments --automatic-selection-tests)
+    endif()
+    if(SNOW_SHOT_BUILD_TESTS AND TARGET ${_automatic_selection_target})
+        add_test(NAME snow-shot-${_automatic_selection_host}-automatic-selection-tests
+            COMMAND ${_automatic_selection_target} ${_automatic_selection_arguments})
+        set_tests_properties(snow-shot-${_automatic_selection_host}-automatic-selection-tests PROPERTIES
+            LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+endforeach()
 
 if(SNOW_SHOT_BUILD_TESTS)
     include(SnowShotTestResources)

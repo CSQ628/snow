@@ -108,6 +108,7 @@ impl Engine {
         let ApplyTransactionCommand {
             mut transaction,
             history_undo_snapshot,
+            created_selection_target,
         } = command;
         if transaction.is_empty() {
             return Ok(MutationResult::default());
@@ -151,6 +152,10 @@ impl Engine {
                 &self.model,
                 &following_numeric_types,
             );
+        }
+        // Selection follows successful creation only, never previews or failed transactions.
+        if let Some(id) = created_selection_target {
+            self.editor.select_created_element(&self.model, id);
         }
         let mutation_result = self.finish_document_change(&redo_snapshot, &apply_result.changes);
         let mut owners = HashMap::new();
@@ -268,6 +273,7 @@ mod tests {
                     ApplyTransactionCommand {
                         transaction,
                         history_undo_snapshot: None,
+                        created_selection_target: None,
                     },
                 )
                 .unwrap();

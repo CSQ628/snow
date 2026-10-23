@@ -985,6 +985,12 @@ SnowError snow_viewport_take_speech_bubble_text_edit_request(SnowRuntime runtime
                                                              SnowViewport viewport,
                                                              SnowElementId* out_owner,
                                                              uint8_t* out_requested);
+/* Resolves and consumes the requested bubble's text target independently of selection. */
+SnowError snow_viewport_take_speech_bubble_text_edit_target(SnowRuntime runtime,
+                                                            SnowViewport viewport,
+                                                            SnowTextElementInfo* out_info,
+                                                            SnowTextStyle* out_style,
+                                                            uint8_t* out_found);
 SnowError snow_speech_bubble_resolve_text_layout(const SnowTextElementInfo* info,
                                                  double minimum_grapheme_width,
                                                  double text_ink_reserve,
@@ -1511,6 +1517,11 @@ SnowError snow_runtime_begin_presentation_update(SnowRuntime runtime);
 SnowError snow_runtime_end_presentation_update_ex(SnowRuntime runtime,
                                                   SnowChangedViewportList* out_changed_viewports);
 
+SnowError snow_runtime_set_automatically_select_newly_created_elements_ex(
+    SnowRuntime runtime, uint8_t enabled, SnowChangedViewportList* out_changed_viewports);
+
+SnowError snow_runtime_set_automatic_selection_excluded_tools_ex(
+    SnowRuntime runtime, uint64_t tools, SnowChangedViewportList* out_changed_viewports);
 SnowError
 snow_runtime_set_quick_selection_disabled_tools_ex(SnowRuntime runtime, uint64_t tools,
                                                    SnowChangedViewportList* out_changed_viewports);

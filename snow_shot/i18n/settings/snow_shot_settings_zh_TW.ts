@@ -1444,6 +1444,10 @@
             <translation>儲存錄製內容後自動退出螢幕錄製。</translation>
         </message>
         <message>
+            <source>Automatically select newly created elements</source>
+            <translation>自動選取新建立的元素</translation>
+        </message>
+        <message>
             <source>Autostart</source>
             <translation>開機自動啟動</translation>
         </message>
@@ -2242,6 +2246,10 @@
         <message>
             <source>Distance annotation</source>
             <translation>距離標註</translation>
+        </message>
+        <message>
+            <source>Do not automatically select elements created with these tools.</source>
+            <translation>不自動選取使用這些工具建立的元素。</translation>
         </message>
         <message>
             <source>Double-click Action</source>
@@ -3808,6 +3816,10 @@
             <translation>選擇深色主題系統匣圖示</translation>
         </message>
         <message>
+            <source>Select each newly created element while keeping the current drawing tool active.</source>
+            <translation>選取每個新建立的元素，同時保持目前繪圖工具處於啟用狀態。</translation>
+        </message>
+        <message>
             <source>Select image save directory</source>
             <translation>選擇影像儲存目錄</translation>
         </message>
@@ -4458,6 +4470,10 @@
         <message>
             <source>Toolbar size</source>
             <translation>工具列尺寸</translation>
+        </message>
+        <message>
+            <source>Tools excluded from automatic selection</source>
+            <translation>禁止自動選取元素的工具</translation>
         </message>
         <message>
             <source>Tools that forbid quick selection of same-type elements</source>

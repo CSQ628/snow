@@ -94,6 +94,9 @@ void prepare(SnowCanvasWidget& canvas) {
 void create(SnowCanvasWidget& canvas, SnowCanvasRuntime& runtime,
             SnowCanvasRectangleShape shape = SnowCanvasRectangleShape::Rectangle,
             QPointF start = {130, 100}, QPointF end = {360, 160}) {
+    require(runtime.setAutomaticallySelectNewlyCreatedElements(true) &&
+                runtime.setAutomaticSelectionExcludedTools({}),
+            "enable selection for bubble editing and handle tests");
     require(canvas.setCanvasTool(SnowCanvasTool::SpeechBubble), "activate speech bubble");
     SnowCanvasShapeStyle style;
     style.shape = shape;
