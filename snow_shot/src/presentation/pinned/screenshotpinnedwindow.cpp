@@ -1691,7 +1691,20 @@ void ScreenshotPinnedWindow::registerWindowShortcuts() {
     copy.id = QStringLiteral("pinned.ocr.copy");
     copy.keyCombinations = standardKeyCombinations(QKeySequence::Copy);
     copy.priority = ShortcutManager::StandardPriority::WindowCommand;
-    copy.canActivate = ocrCommandsAllowed;
+    copy.canActivate = [this, ocrCommandsAllowed](const auto& context) {
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+        // LaTeX Copy must use the session's exact source; QTextEdit's native Copy
+        // normalizes whitespace in its display document.
+        if (!m_closing && m_ocrMode && m_recognitionSession && m_recognitionSession->active() &&
+            m_recognitionSession->mode() == ScreenshotRecognitionSessionController::Mode::Latex &&
+            m_recognitionContent && context.focusWidget &&
+            (context.focusWidget == m_recognitionContent ||
+             m_recognitionContent->isAncestorOf(context.focusWidget))) {
+            return true;
+        }
+#endif
+        return ocrCommandsAllowed(context);
+    };
     copy.activate = [this](const auto&) {
         copyEditToolbarContent();
         return true;
