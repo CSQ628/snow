@@ -103,6 +103,9 @@ class SnowCanvasWidgetTextInteraction final {
                                      SnowCanvasDisplayCache& displayCache,
                                      const SnowTextStyle& style, std::uint32_t properties);
 
+    BeginResult beginRequestedDistanceValue(SnowRuntime runtime, SnowViewport viewport,
+                                            SnowCanvasDisplayCache& displayCache,
+                                            QMouseEvent* event);
     BeginResult beginArrow(SnowRuntime runtime, SnowViewport viewport,
                            SnowCanvasDisplayCache& displayCache, const QPointF& viewPosition,
                            bool selected = false);

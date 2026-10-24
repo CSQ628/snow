@@ -174,6 +174,37 @@ impl EditorSession {
         }
         Ok(())
     }
+    pub fn apply_distance_value_widths(&mut self, widths: &[(ElementId, u64, f64)]) {
+        self.editor.apply_distance_value_widths(widths);
+    }
+    pub fn take_distance_value_edit_request(&mut self) -> Option<ElementId> {
+        self.editor.state.pending_distance_value_edit.take()
+    }
+    pub fn distance_value_target(
+        &self,
+        document: &DocumentModel,
+        owner: ElementId,
+    ) -> Result<ElementId, ErrorCode> {
+        self.editor.distance_value_target(document, owner)
+    }
+    pub fn set_distance_value_draft(
+        &mut self,
+        document: &DocumentModel,
+        owner: ElementId,
+        text: String,
+        layout: TextLayoutSize,
+    ) -> Result<bool, ErrorCode> {
+        self.editor
+            .set_distance_value_draft(document, owner, text, layout)
+    }
+    pub fn commit_distance_value(
+        &mut self,
+        document: &DocumentModel,
+        owner: ElementId,
+        value: f64,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor.commit_distance_value(document, owner, value)
+    }
     pub fn take_text_edit_request(&mut self) -> Option<ElementId> {
         self.editor.state.pending_text_edit.take()
     }
@@ -1310,6 +1341,7 @@ mod document_reset_tests {
                 size: TextLayoutSize::new(20.0, 10.0),
                 text_key: 11,
                 natural_width: 20.0,
+                distance_value_width: 0.0,
             },
         );
         session.editor.state.ui.snap_guides.reserve(64);
