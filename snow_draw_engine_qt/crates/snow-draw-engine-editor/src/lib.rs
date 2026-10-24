@@ -368,6 +368,13 @@ impl Editor {
         document: &DocumentModel,
         snapshot: &DocumentSyncSnapshot,
     ) {
+        if self
+            .state
+            .active_distance_value_owner
+            .is_some_and(|owner| self.distance_value_target(document, owner).is_err())
+        {
+            self.clear_active_text_draft_presentation();
+        }
         self.invalidate_auto_filter_gesture(document);
         self.sync_selection_after_document_change(document, &snapshot.selection);
         self.sync_magnifier_interaction_styles(document);
@@ -408,6 +415,7 @@ impl Editor {
         }
         self.state.ui.free_draw_hover_position = None;
         self.state.pending_text_edit = None;
+        self.state.pending_distance_value_edit = None;
         self.state.pending_new_text_draft = false;
         self.state.auto_filter = Default::default();
         self.bump_overlay_state_revision();

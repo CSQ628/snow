@@ -1088,8 +1088,9 @@ SnowCanvasStyleToolbarState SnowCanvasWidget::Impl::canvasStyleToolbarState() co
                                  0.0, &arrowText, &arrowTextStyle, &foundArrow) == SNOW_OK &&
                              foundArrow != 0;
     if (textInteraction.isActive()) {
-        if (textInteraction.session().arrowId().generation != 0 ||
-            textInteraction.session().bubbleId().generation != 0) {
+        if (!textInteraction.session().isDistanceValue() &&
+            (textInteraction.session().arrowId().generation != 0 ||
+             textInteraction.session().bubbleId().generation != 0)) {
             state.source = SnowCanvasStyleToolbarSource::SelectedText;
         }
         state.textStyle = snow_canvas_types::toCanvasTextStyle(textInteraction.currentTextStyle());
@@ -1255,6 +1256,12 @@ bool SnowCanvasWidget::Impl::setCanvasDistanceStyle(const SnowCanvasDistanceStyl
                                                     quint32 properties) {
     if (!snow_canvas_types::validDistanceStyle(style))
         return false;
+    const QPointer<SnowCanvasWidget> lifetime(&widget);
+    if (textInteraction.session().isDistanceValue()) {
+        commitText(false);
+        if (!lifetime)
+            return false;
+    }
     return applyMutation([&]() {
         return snow_canvas_commands::setDistanceStylePatch(
             runtimeBinding.engine(), runtimeBinding.viewportHandle(),
@@ -1693,6 +1700,11 @@ bool SnowCanvasWidget::Impl::handleContextMenu(QContextMenuEvent* event) {
 void SnowCanvasWidget::Impl::setInteractionEnabled(bool enabled) {
     if (!enabled) {
         const QPointer<SnowCanvasWidget> lifetime(&widget);
+        if (textInteraction.session().isDistanceValue()) {
+            static_cast<void>(cancelActiveTextEditing());
+            if (!lifetime)
+                return;
+        }
         if (tabletGestureActive) {
             handleFocusOut();
             if (!lifetime) {
@@ -2698,6 +2710,21 @@ void SnowCanvasWidget::Impl::syncAfterEngineMutation(bool emitSignals) {
     const auto publicationEpoch = statePublicationEpoch;
     const auto engineLease = runtimeBinding.retainEngine();
     distanceCreationPixelScale.reset();
+    if (hasViewport() && textInteraction.session().isDistanceValue()) {
+        SnowTextElementInfo info{};
+        SnowTextStyle style{};
+        std::uint8_t active = 0;
+        if (snow_viewport_get_active_text_draft_presentation(runtimeBinding.engine(),
+                                                             runtimeBinding.viewportHandle(), &info,
+                                                             &style, &active) == SNOW_OK &&
+            active == 0) {
+            static_cast<void>(textInteraction.cancel(runtimeBinding.engine(),
+                                                     runtimeBinding.viewportHandle(),
+                                                     displayState.displayCache()));
+            if (!lifetime || statePublicationEpoch != publicationEpoch)
+                return;
+        }
+    }
     std::uint8_t captureActive = 0;
     if (hasViewport() &&
         snow_runtime_has_pointer_capture(runtimeBinding.engine(), &captureActive) == SNOW_OK) {
@@ -3392,6 +3419,17 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event,
         event, pointerInput != nullptr
                    ? *pointerInput
                    : snow_canvas_input::makePointerInput(*event, SNOW_POINTER_EVENT_DOWN));
+    if (handled && event->button() == Qt::LeftButton) {
+        auto draft = textInteraction.beginRequestedDistanceValue(
+            runtimeBinding.engine(), runtimeBinding.viewportHandle(), displayState.displayCache(),
+            event);
+        if (!syncChangedViewports(draft.firstChangedViewports.get()))
+            return false;
+        if (draft.started) {
+            static_cast<void>(publishStateChange(StateNotification::StyleToolbar));
+            return true;
+        }
+    }
     if (handled && plan.shouldBeginText && plan.allowCreateText) {
         const SnowTextStyle textStyle = displayState.snapshot().styleToolbarState.text_style;
         SnowCanvasWidgetTextInteraction::BeginResult draft =
@@ -3898,7 +3936,9 @@ bool SnowCanvasWidget::Impl::handleWheel(QWheelEvent* event) {
         snow_canvas_text_editor_input::planFontSizeWheel(
             snow_canvas_text_editor_input::FontSizeWheelRequest{
                 true,
-                textInteraction.isActive() ? SnowCanvasTool::Text : canvasTool(),
+                textInteraction.session().isDistanceValue() ? SnowCanvasTool::Distance
+                : textInteraction.isActive()                ? SnowCanvasTool::Text
+                                                            : canvasTool(),
                 event->modifiers(),
                 event->pixelDelta().y(),
                 event->angleDelta().y(),

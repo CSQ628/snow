@@ -1010,6 +1010,7 @@ typedef struct SnowArrowTextLayoutRequest {
     SnowTextStyle style;
     uint64_t key;
     double max_width;
+    uint32_t distance_value_chars;
 } SnowArrowTextLayoutRequest;
 
 typedef struct SnowArrowTextLayoutResult {
@@ -1026,6 +1027,7 @@ typedef struct SnowArrowTextLayoutMetrics {
        Zero means
      * unknown and restricts reuse to the original constraint. */
     double natural_width;
+    double distance_value_width;
 } SnowArrowTextLayoutMetrics;
 
 /* Call before requesting replacement layouts after host font or DPI changes. */
@@ -1043,6 +1045,19 @@ typedef struct SnowSerialLabelLayoutRequest {
 } SnowSerialLabelLayoutRequest;
 
 uint32_t snow_runtime_arrow_text_count(SnowRuntime runtime);
+SnowError snow_viewport_take_distance_value_edit_target(SnowRuntime runtime, SnowViewport viewport,
+                                                        SnowTextElementInfo* out_info,
+                                                        SnowTextStyle* out_style,
+                                                        uint8_t* out_found);
+/* Draft text includes temporary IME composition; only commit changes calibration. */
+SnowError snow_viewport_set_distance_value_draft_ex(SnowRuntime runtime, SnowViewport viewport,
+                                                    SnowElementId owner, const char* text,
+                                                    uint32_t length, SnowTextLayoutSize layout,
+                                                    SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_commit_distance_value_ex(SnowRuntime runtime, SnowViewport viewport,
+                                                 SnowElementId owner, double value,
+                                                 SnowChangedViewportList* out_changed_viewports);
+
 SnowError snow_viewport_get_arrow_text_layout_requests(SnowRuntime runtime, SnowViewport viewport,
                                                        SnowArrowTextLayoutRequest* out_items,
                                                        uint32_t capacity, uint32_t* out_count);

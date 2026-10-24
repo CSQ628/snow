@@ -457,6 +457,10 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         COMMAND snow-canvas-text-draft-tests --delete-text-only -platform offscreen)
     set_tests_properties(snow-canvas-text-delete-input-tests PROPERTIES LABELS unit TIMEOUT 30)
 
+    add_test(NAME snow-canvas-text-input-tests
+        COMMAND snow-canvas-text-draft-tests --text-input-only -platform offscreen)
+    set_tests_properties(snow-canvas-text-input-tests PROPERTIES LABELS unit TIMEOUT 30)
+
     add_executable(snow-canvas-text-emphasis-tests tests/snow_canvas_text_emphasis_tests.cpp)
     target_include_directories(snow-canvas-text-emphasis-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}

@@ -105,6 +105,54 @@ fn text_style_from_text(text: &TextData) -> TextStyle {
 }
 
 impl Engine {
+    pub fn apply_distance_value_widths(&mut self, widths: &[(ElementId, u64, f64)]) {
+        self.editor.apply_distance_value_widths(widths);
+    }
+    pub fn take_distance_value_edit_request(
+        &mut self,
+        viewport: ViewportId,
+    ) -> Result<Option<(TextElementInfo, TextStyle)>, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        let Some(owner) = self.editor.take_distance_value_edit_request() else {
+            return Ok(None);
+        };
+        let id = self.editor.distance_value_target(&self.model, owner)?;
+        let label = self.model.text(id)?;
+        Ok(Some((
+            self.text_element_info(id)?,
+            text_style_from_text(label),
+        )))
+    }
+    pub fn set_distance_value_draft(
+        &mut self,
+        viewport: ViewportId,
+        owner: ElementId,
+        text: String,
+        layout: TextLayoutSize,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        let before = self.editor.snapshot();
+        self.editor
+            .set_distance_value_draft(&self.model, owner, text, layout)?;
+        self.refresh_after_session_mutation(before)
+    }
+    pub fn commit_distance_value(
+        &mut self,
+        viewport: ViewportId,
+        owner: ElementId,
+        value: f64,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        let before = self.editor.snapshot();
+        if let Some(command) = self
+            .editor
+            .commit_distance_value(&self.model, owner, value)?
+        {
+            self.apply_editor_command(viewport, command)
+        } else {
+            self.refresh_after_session_mutation(before)
+        }
+    }
     pub fn arrow_text_count(&self) -> usize {
         self.model.arrow_label_bindings().len()
     }

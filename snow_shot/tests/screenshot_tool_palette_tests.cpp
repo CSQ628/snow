@@ -13560,6 +13560,27 @@ void distanceActualValueUpdatesTheCanvasAndUndo() {
             "resizing an annotation should refresh its actual value while preserving its scale");
     require(canvas.undo() && value->displayText() == QStringLiteral("25.125"),
             "undoing geometry should refresh the actual value without changing style");
+
+    mouse(QEvent::MouseButtonPress, {100, 200}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {100, 200}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.hasActiveTextEditing() && value->isVisible() &&
+                canvas.canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::SelectedDistance,
+            "inline editing must retain the distance controls in the sub-toolbar");
+    const auto key = [&canvas](int code, Qt::KeyboardModifiers modifiers,
+                               const QString& text = {}) {
+        QKeyEvent event(QEvent::KeyPress, code, modifiers, text);
+        QApplication::sendEvent(&canvas, &event);
+        QApplication::processEvents();
+    };
+    key(Qt::Key_A, Qt::ControlModifier);
+    key(Qt::Key_2, Qt::NoModifier, QStringLiteral("20"));
+    key(Qt::Key_Return, Qt::NoModifier);
+    require(!canvas.hasActiveTextEditing() && value->isVisible() &&
+                value->displayText() == QStringLiteral("20") &&
+                record(QStringLiteral("Text")).value(QStringLiteral("text")).toString() ==
+                    QStringLiteral("20.000 mm"),
+            "inline commit synchronizes the distance toolbar value");
 }
 
 void arrowRatioEditorAdjustsAndResets() {
