@@ -356,6 +356,16 @@ if(ADQT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         TIMEOUT 30)
 
+    add_executable(adqt-button-rendering-tests tests/button_rendering_tests.cpp)
+    target_link_libraries(adqt-button-rendering-tests PRIVATE adqt::widgets Qt6::Test)
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(adqt-button-rendering-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+    add_test(NAME adqt-button-rendering-tests COMMAND adqt-button-rendering-tests)
+    set_tests_properties(adqt-button-rendering-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     add_executable(adqt-button-lifetime-tests tests/button_lifetime_tests.cpp)
     target_link_libraries(adqt-button-lifetime-tests PRIVATE adqt::widgets Qt6::Widgets)
     get_target_property(_adqt_button_qt_core_type Qt6::Core TYPE)
