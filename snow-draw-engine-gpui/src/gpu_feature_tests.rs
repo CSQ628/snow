@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn invisible_text_lines_do_not_submit_coverage_passes() -> Result<()> {
+    for scale in [1.0, 1.5, 2.0] {
+        for stroke_width in [0.0, 1.5] {
+            let mut device = Device::new()?;
+            let item = TextDisplayItem {
+                center_x: 64.0,
+                center_y: 2500.0,
+                width: 120.0,
+                height: 5000.0,
+                // Both variants extend beyond the viewport, keeping the
+                // intermediate surface bounds and sampling grid identical.
+                text: vec!["Label"; 8].join("\n"),
+                font_size: 20.0,
+                color: ColorRgba8 {
+                    r: 60,
+                    g: 120,
+                    b: 200,
+                    a: 180,
+                },
+                stroke: ColorRgba8 {
+                    r: 200,
+                    g: 60,
+                    b: 30,
+                    a: 160,
+                },
+                stroke_width,
+                opacity: 0.6,
+                vertical_align: DisplayTextVerticalAlign::Top,
+                ..Default::default()
+            };
+            let make_scene = |item| {
+                scene(
+                    view(128, 80),
+                    vec![node(
+                        0,
+                        1,
+                        SceneDisplayItem::Text(item),
+                        [0.0, 0.0, 128.0, 5000.0],
+                    )],
+                )
+            };
+            let (reference, expected) =
+                device.render(&make_scene(item.clone()), None, scale, &Default::default())?;
+            let long = TextDisplayItem {
+                text: vec!["Label"; 128].join("\n"),
+                ..item
+            };
+            let (frame, actual) =
+                device.render(&make_scene(long), None, scale, &Default::default())?;
+            assert!(expected.pixels().any(|pixel| pixel[3] != 0));
+            assert!(
+                actual.pixels().zip(expected.pixels()).all(|(a, b)| a
+                    .0
+                    .into_iter()
+                    .zip(b.0)
+                    .all(|(a, b)| a.abs_diff(b) <= 1)),
+                "invisible lines changed visible text at scale {scale}, stroke {stroke_width}"
+            );
+            assert_eq!(
+                frame.profile.uniform_upload_bytes, reference.profile.uniform_upload_bytes,
+                "offscreen lines submitted extra coverage passes at scale {scale}, stroke {stroke_width}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn camera_translation_reuses_local_geometry_and_matches_full_rendering() -> Result<()> {
     let mut device = Device::new()?;
     let original = scene(

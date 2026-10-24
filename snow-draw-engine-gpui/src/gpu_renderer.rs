@@ -151,7 +151,7 @@ impl ScratchPool {
             .iter()
             .position(|texture| texture.size == size && texture.samples == samples)
         {
-            let texture = self.free.swap_remove(index);
+            let texture = self.free.remove(index);
             self.bytes -= texture.bytes();
             return Ok(texture);
         }
@@ -166,10 +166,54 @@ impl ScratchPool {
         Texture::with_samples(device, size, samples, memory)
     }
     fn put(&mut self, texture: Texture) {
-        if self.bytes + texture.bytes() <= 64 * 1024 * 1024 {
-            self.bytes += texture.bytes();
-            self.free.push(texture);
+        const BUDGET: usize = 64 * 1024 * 1024;
+        if texture.bytes() > BUDGET {
+            return;
         }
+        // A moving/clipped text item changes surface sizes. Keep recent sizes
+        // reusable instead of filling the pool permanently with obsolete ones.
+        while self.bytes + texture.bytes() > BUDGET {
+            let oldest = self.free.remove(0);
+            self.bytes -= oldest.bytes();
+        }
+        self.bytes += texture.bytes();
+        self.free.push(texture);
+    }
+}
+
+#[cfg(test)]
+mod scratch_pool_tests {
+    use super::*;
+    use gpui_windows::gpu_extensions::OffscreenGpuHost;
+
+    #[test]
+    fn full_pool_reuses_recent_surface_sizes() -> Result<()> {
+        let host = OffscreenGpuHost::new()?;
+        let service = host.service();
+        let memory = GpuMemory::shared(&service, None, DEFAULT_GPU_MEMORY_BUDGET)?;
+        let native = service
+            .as_any()
+            .downcast_ref::<DirectXGpuService>()
+            .context("D3D11 service")?;
+        native.with_context(|gpu| {
+            let mut pool = ScratchPool {
+                free: Vec::new(),
+                bytes: 0,
+            };
+            // Fill the cache with an obsolete size, then return a surface used
+            // by the new clipping bounds. Its next use must reuse that lease.
+            pool.put(Texture::with_samples(gpu.device, [2048, 2048], 4, &memory)?);
+            pool.put(Texture::with_samples(gpu.device, [256, 256], 1, &memory)?);
+            assert!(pool.bytes <= 64 * 1024 * 1024);
+            let allocations = memory.allocations();
+            let _reused = pool.take(gpu.device, [256, 256], 1, &memory)?;
+            assert_eq!(
+                memory.allocations(),
+                allocations,
+                "full cache discarded the recently used surface"
+            );
+            Ok(())
+        })
     }
 }
 
@@ -1767,6 +1811,18 @@ impl GpuCanvas {
                     item.label_gap,
                 )?;
             } else {
+                // A text line can be outside this tile even when another line
+                // makes the item visible. Match the per-member culling below
+                // before allocating and compositing an empty coverage surface.
+                if !item.parts[index..end].iter().any(|member| {
+                    intersects(
+                        paint_bounds(member, frame, raster_scale),
+                        raster_region.bounds(),
+                    )
+                }) {
+                    index = end;
+                    continue;
+                }
                 let coverage = self
                     .scratch
                     .take(device, raster_region.size(), 4, &self.memory)?;
