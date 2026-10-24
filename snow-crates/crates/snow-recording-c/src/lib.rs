@@ -50,6 +50,16 @@ fn clear_last_error() {
     });
 }
 
+// Live meters and the current recording backend also use this entry point
+// when the legacy macOS recording interface is disabled.
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub extern "C" fn snow_recording_macos_set_microphone_diagnostic_callback(
+    callback: Option<snow_macos::microphone::MicrophoneDiagnosticCallback>,
+) {
+    snow_macos::microphone::set_diagnostic_callback(callback);
+}
+
 fn parse_capture_backend(value: u8) -> Result<CaptureBackendKind, String> {
     match value {
         0 => Ok(CaptureBackendKind::Auto),
