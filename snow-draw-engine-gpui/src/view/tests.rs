@@ -1,5 +1,18 @@
+#![cfg(target_os = "windows")]
 use super::*;
 use gpui::{TestAppContext, VisualTestContext, size};
+
+#[path = "render_tests.rs"]
+mod render_tests;
+
+#[path = "text_entry_tests.rs"]
+mod text_entry_tests;
+
+#[path = "text_caret_tests.rs"]
+mod text_caret_tests;
+
+#[path = "frame_tests.rs"]
+mod frame_tests;
 
 #[gpui::test]
 fn send_cache_payload_drop_is_deferred_from_the_host_callback(cx: &mut TestAppContext) {
@@ -246,23 +259,24 @@ fn custom_crosshair_paints_current_hover_geometry_and_tracks_moves(cx: &mut Test
 }
 
 #[gpui::test]
-fn view_cache_reset_never_waits_for_the_renderer_mutex(cx: &mut TestAppContext) {
+fn view_cache_reset_is_deferred_until_frame_preparation(cx: &mut TestAppContext) {
     let (view, mut visual) = fixture(cx, crate::showcase_document().unwrap());
-    let renderer = view.read_with(&visual, |v, _| v.renderer.as_ref().unwrap().clone());
-    let guard = renderer.lock().unwrap();
-    let builds = guard.vector_build_count();
+    let builds = view.read_with(&visual, |v, _| v.gpu_frame.as_ref().unwrap().revision);
     let before = view.read_with(&visual, |v, _| {
         v.document.engine().document_checkpoint().unwrap()
     });
     visual.update(|window, cx| {
         view.update(cx, |v, cx| {
             v.clear_render_state(window, cx);
-            assert!(v.image.is_some());
+            assert!(v.gpu_frame.is_some());
+            assert_eq!(v.gpu_frame.as_ref().unwrap().revision, builds);
         })
     });
-    drop(guard);
     paint(&mut visual);
-    assert!(renderer.lock().unwrap().vector_build_count() > builds);
+    assert!(
+        view.read_with(&visual, |v, _| v.gpu_frame.as_ref().unwrap().revision
+            > builds)
+    );
     assert_eq!(
         view.read_with(&visual, |v, _| v
             .document
@@ -281,6 +295,15 @@ fn fixture(
     cx: &mut TestAppContext,
     document: CanvasDocument,
 ) -> (Entity<CanvasView>, VisualTestContext) {
+    struct TestGpuHost {
+        _host: gpui_windows::gpu_extensions::OffscreenGpuHost,
+    }
+    impl gpui::Global for TestGpuHost {}
+    if !cx.update(|cx| cx.has_global::<TestGpuHost>()) {
+        let host = gpui_windows::gpu_extensions::OffscreenGpuHost::new().unwrap();
+        cx.set_gpu_service(host.service());
+        cx.update(|cx| cx.set_global(TestGpuHost { _host: host }));
+    }
     let window = cx.open_window(size(px(640.0), px(480.0)), |window, cx| {
         CanvasView::new(document, window, cx).unwrap()
     });
@@ -297,7 +320,7 @@ fn paint(cx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
-fn repeated_dense_edits_coalesce_and_publish_only_the_latest_generation(cx: &mut TestAppContext) {
+fn repeated_dense_edits_coalesce_and_finish_with_the_latest_generation(cx: &mut TestAppContext) {
     let mut document = CanvasDocument::default();
     for base in (0..1000).step_by(128) {
         let ops:Vec<_>=(base..(base+128).min(1000)).map(|i|serde_json::json!({"type":"rectangle","bounds":[(i%40)*12,(i/40)*12,8,8],"style":{"fill":[40,100,190,255]}})).collect();
@@ -313,8 +336,8 @@ fn repeated_dense_edits_coalesce_and_publish_only_the_latest_generation(cx: &mut
     let (view, mut visual) = fixture(cx, document);
     let (original, render_count) = view.read_with(&visual, |v, _| {
         (
-            v.image.clone().unwrap(),
-            v.renderer.as_ref().unwrap().lock().unwrap().render_count(),
+            v.gpu_frame.clone().unwrap(),
+            v.gpu_frame.as_ref().unwrap().revision,
         )
     });
     visual.update(|window, cx| {
@@ -322,8 +345,8 @@ fn repeated_dense_edits_coalesce_and_publish_only_the_latest_generation(cx: &mut
             let id = v
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Rectangle(r) = item {
                         Some(draw::ElementId {
@@ -340,7 +363,7 @@ fn repeated_dense_edits_coalesce_and_publish_only_the_latest_generation(cx: &mut
                     e.select_element_with_viewport_changes(s, id)
                 })
                 .unwrap();
-            for i in 0..24 {
+            for i in 0..25 {
                 v.session
                     .mutate(&mut v.document, |e, s| {
                         e.set_selected_opacity_with_viewport_changes(
@@ -351,21 +374,23 @@ fn repeated_dense_edits_coalesce_and_publish_only_the_latest_generation(cx: &mut
                     .unwrap();
                 v.changed(window, cx);
             }
-            assert!(v.render_task.is_some() && v.render_pending);
+            assert!(!v.logical_frame_ready);
+            assert_eq!(v.gpu_frame.as_ref().unwrap().revision, render_count);
             assert!(
-                Arc::ptr_eq(v.image.as_ref().unwrap(), &original),
+                Arc::ptr_eq(&v.gpu_frame.as_ref().unwrap().tiles, &original.tiles),
                 "pending edits removed the last completed image"
             );
-            assert_ne!(v.rendered_generation, v.generation);
+            assert!(!v.logical_frame_ready);
         })
     });
     paint(&mut visual);
     view.read_with(&visual, |v, _| {
         assert_eq!(v.rendered_generation, v.generation);
-        assert!(!v.is_rendering() && !v.render_pending);
+        assert!(!v.is_rendering());
         assert!(v.error.is_none());
-        assert!(
-            v.renderer.as_ref().unwrap().lock().unwrap().render_count() <= render_count + 2,
+        assert_eq!(
+            v.gpu_frame.as_ref().unwrap().revision,
+            render_count + 1,
             "queued every intermediate edit instead of coalescing"
         );
     });
@@ -427,8 +452,8 @@ fn editing_without_changes_preserves_narrow_text_and_ime_commits_once(cx: &mut T
     let id = view.read_with(&visual, |view, _| {
         view.session
             .scene()
-            .items()
-            .iter()
+            .ordered_nodes()
+            .map(|node| node.item.as_ref())
             .find_map(|item| match item {
                 draw::SceneDisplayItem::Text(text) => Some(draw::ElementId {
                     index: text.id.index,
@@ -482,28 +507,169 @@ fn editing_without_changes_preserves_narrow_text_and_ime_commits_once(cx: &mut T
 }
 
 #[gpui::test]
-fn dpi_and_zoom_reuse_reference_pixels_without_idle_rendering(cx: &mut TestAppContext) {
-    let (view, mut visual) = fixture(cx, crate::showcase_document().unwrap());
-    paint(&mut visual);
-    let (generation, reference) = view.read_with(&visual, |view, _| {
-        (view.generation, view.reference_session.scene().frame())
+fn dpi_and_zoom_render_at_device_resolution_without_idle_rendering(cx: &mut TestAppContext) {
+    let (view, mut visual) = fixture(cx, CanvasDocument::default());
+    for scale in [1.25, 1.5, 2.0, 1.0] {
+        let reference = view.read_with(&visual, |view, _| view.session.scene().frame());
+        let (generation, count) = view.read_with(&visual, |view, _| {
+            (view.generation, view.gpu_frame.as_ref().unwrap().revision)
+        });
+        visual.simulate_scale_factor_change(scale);
+        paint(&mut visual);
+        view.read_with(&visual, |view, _| {
+            assert_eq!(view.session.scene().frame(), reference);
+            assert!(
+                view.generation > generation,
+                "DPI change reused the old raster"
+            );
+            assert_eq!(view.rendered_generation, view.generation);
+            assert_eq!(view.gpu_frame.as_ref().unwrap().revision, count + 1);
+        });
+        assert_device_resolution(&view, &mut visual);
+        visual.update(|window, cx| view.update(cx, |view, cx| view.zoom(1.5, window, cx)));
+        paint(&mut visual);
+        assert_device_resolution(&view, &mut visual);
+    }
+}
+
+fn frame_pixels(view: &CanvasView) -> image::RgbaImage {
+    crate::gpu_tests::read_frame(
+        &view.gpu_canvas.as_ref().unwrap().service(),
+        view.gpu_frame.as_ref().unwrap(),
+    )
+    .unwrap()
+}
+
+fn assert_device_resolution(view: &Entity<CanvasView>, visual: &mut VisualTestContext) {
+    let generation = visual.update(|window, cx| {
+        view.read_with(cx, |view, _| {
+            assert!(view.error.is_none(), "{:?}", view.error);
+            let live = view.session.scene().frame();
+            assert_eq!(view.image_frame.unwrap(), live);
+            let size = view.gpu_frame.as_ref().unwrap().size;
+            assert_eq!(
+                size,
+                [
+                    (live.surface.width as f32 * window.scale_factor()).ceil() as u32,
+                    (live.surface.height as f32 * window.scale_factor()).ceil() as u32
+                ]
+            );
+            view.generation
+        })
     });
-    visual.simulate_scale_factor_change(1.5);
-    paint(&mut visual);
-    assert_eq!(
-        view.read_with(&visual, |view, _| view.reference_session.scene().frame()),
-        reference
-    );
-    assert_eq!(
-        view.read_with(&visual, |view, _| view.generation),
-        generation
-    );
-    paint(&mut visual);
-    paint(&mut visual);
-    assert_eq!(
-        view.read_with(&visual, |view, _| view.generation),
-        generation
-    );
+    let image = view.read_with(visual, |view, _| view.gpu_frame.clone().unwrap());
+    paint(visual);
+    paint(visual);
+    view.read_with(visual, |view, _| {
+        assert_eq!(view.generation, generation);
+        assert!(
+            Arc::ptr_eq(&view.gpu_frame.as_ref().unwrap().tiles, &image.tiles),
+            "idle paint replaced GPU tiles"
+        );
+    });
+}
+
+#[gpui::test]
+fn device_raster_keeps_single_pixel_edges_with_source_scaling(cx: &mut TestAppContext) {
+    let mut document = CanvasDocument::default();
+    document.set_background(Some(
+        SourceImage::new(image::RgbaImage::from_pixel(
+            320,
+            240,
+            image::Rgba([255; 4]),
+        ))
+        .unwrap()
+        .with_placement(draw::Point::new(0.0, 0.0), 0.5)
+        .unwrap(),
+    ));
+    document.command(|e| e.apply_annotation_json(br#"{"version":1,"operations":[{"type":"rectangle","bounds":[20,20,0.5,30],"style":{"fill":[0,0,0,255],"stroke_width":0}}]}"#)).unwrap();
+    let (view, mut visual) = fixture(cx, document);
+    visual.simulate_scale_factor_change(2.0);
+    {
+        visual.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.session
+                    .set_camera(
+                        &mut view.document,
+                        draw::Camera {
+                            center: draw::Point::new(320.0, 240.0),
+                            zoom: 1.0,
+                        },
+                    )
+                    .unwrap();
+                view.set_options(Default::default(), window, cx).unwrap();
+            })
+        });
+        paint(&mut visual);
+        assert_device_resolution(&view, &mut visual);
+        view.read_with(&visual, |view, _| {
+            let frame = view.image_frame.unwrap();
+            let position =
+                draw::canvas_to_view(draw::Point::new(20.0, 30.0), &frame.camera, frame.surface);
+            let x = (position.x * f64::from(view.scale)).round() as usize;
+            let y = (position.y * f64::from(view.scale)).round() as usize;
+            let pixels = frame_pixels(view);
+            let offset = (y * pixels.width() as usize + x) * 4;
+            let pixels = pixels.as_raw();
+            assert_eq!(&pixels[offset - 4..offset], &[255; 4]);
+            assert_eq!(&pixels[offset..offset + 4], &[0, 0, 0, 255]);
+            assert_eq!(&pixels[offset + 4..offset + 8], &[255; 4]);
+        });
+    }
+}
+
+#[gpui::test]
+fn device_raster_matches_snapshot_with_filter_support_at_fractional_dpi(cx: &mut TestAppContext) {
+    let mut document = CanvasDocument::default();
+    document.set_background(Some(
+        SourceImage::new(image::RgbaImage::from_fn(700, 520, |x, y| {
+            image::Rgba([(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8, 255])
+        }))
+        .unwrap(),
+    ));
+    document.command(|e| e.apply_annotation_json(br#"{"version":1,"operations":[{"type":"rectangle","bounds":[-12,5,22,120],"style":{"fill":[0,0,0,255]}},{"type":"rectangle_filter","bounds":[-20,0,100,240],"style":{"filter":"gaussian_blur","strength":0.2}},{"type":"rectangle","bounds":[1,1,2,2],"style":{"opacity":0}},{"type":"rectangle_filter","bounds":[-20,0,100,240],"style":{"filter":"mosaic","strength":0.3}},{"type":"text","bounds":[150,100,300,60],"text":"Device pixels","style":{"font_size":24}}]}"#)).unwrap();
+    let (view, mut visual) = fixture(cx, document);
+    visual.simulate_resize(size(px(641.0), px(479.0)));
+    for scale in [1.25, 1.5, 2.0] {
+        visual.simulate_scale_factor_change(scale);
+        visual.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.session
+                    .set_camera(
+                        &mut view.document,
+                        draw::Camera {
+                            center: draw::Point::new(320.5, 239.5),
+                            zoom: 1.0,
+                        },
+                    )
+                    .unwrap();
+                view.changed(window, cx);
+            })
+        });
+        paint(&mut visual);
+        assert_device_resolution(&view, &mut visual);
+        view.read_with(&visual, |view, _| {
+            let mut renderer =
+                crate::GpuCanvas::new(view.gpu_canvas.as_ref().unwrap().service()).unwrap();
+            let expected = renderer
+                .prepare(
+                    view.session.scene(),
+                    view.document.background(),
+                    view.document.resource_revision(),
+                    scale,
+                    &view.options.presentation,
+                    &view.smart_service.snapshot(),
+                    &Default::default(),
+                )
+                .unwrap();
+            let expected = crate::gpu_tests::read_frame(&renderer.service(), &expected).unwrap();
+            assert_eq!(
+                frame_pixels(view),
+                expected,
+                "fractional device scale {scale}"
+            );
+        });
+    }
 }
 
 #[gpui::test]
@@ -517,8 +683,8 @@ fn wrapped_line_pointer_caret_keeps_visual_affinity(cx: &mut TestAppContext) {
     session.set_surface(&mut document, 1000, 1000).unwrap();
     let id = session
         .scene()
-        .items()
-        .iter()
+        .ordered_nodes()
+        .map(|node| node.item.as_ref())
         .find_map(|item| {
             if let draw::SceneDisplayItem::Text(t) = item {
                 Some(draw::ElementId {
@@ -564,8 +730,10 @@ fn preparation_failure_invalidates_pending_render_and_export(cx: &mut TestAppCon
         view.changed(window, cx);
         let scheduled = view.generation;
         let mut other = CanvasDocument::default();
-        view.reference_session = CanvasSession::new(&mut other).unwrap();
+        view.session = CanvasSession::new(&mut other).unwrap();
+        view.invalidate_render();
         view.changed(window, cx);
+        view.prepare_display_frame(window,cx);
         assert!(view.generation > scheduled);
         assert!(view.snapshot().is_err());
         assert!(view.error.is_some());
@@ -573,7 +741,7 @@ fn preparation_failure_invalidates_pending_render_and_export(cx: &mut TestAppCon
     paint(&mut visual);
     assert!(view.read_with(&visual, |view, _| view.error.is_some()
         && !view.is_rendering()
-        && !view.reference_valid));
+        && !view.logical_frame_ready));
 }
 
 #[gpui::test]
@@ -587,6 +755,21 @@ fn png_clipboard_uses_strict_snapshot_and_text_popup_keeps_draft(cx: &mut TestAp
             (640.0 * window.scale_factor()).ceil() as u32
         });
         paint(&mut visual);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while view.read_with(&visual, |view, _| view.clipboard_task.is_some()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "GPU clipboard readback timed out"
+            );
+            visual
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(1));
+            visual.run_until_parked();
+            std::thread::yield_now();
+        }
+        view.read_with(&visual, |view, _| {
+            assert!(view.error.is_none(), "{:?}", view.error)
+        });
         visual.update(|_, cx| {
             let clipboard = cx.read_from_clipboard().unwrap();
             let gpui::ClipboardEntry::Image(image) = &clipboard.entries()[0] else {
@@ -635,8 +818,8 @@ fn style_only_edits_commit_once_and_delete_label_preserves_owner(cx: &mut TestAp
             let text = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Text(t) = item {
                         Some(draw::ElementId {
@@ -663,8 +846,8 @@ fn style_only_edits_commit_once_and_delete_label_preserves_owner(cx: &mut TestAp
             let arrow = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Arrow(t) = item {
                         Some(draw::ElementId {
@@ -718,8 +901,8 @@ fn content_clip_rejects_new_creation_but_keeps_outside_selection_handles(cx: &mu
             let id = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Rectangle(r) = item {
                         Some(draw::ElementId {
@@ -743,6 +926,7 @@ fn content_clip_rejects_new_creation_but_keeps_outside_selection_handles(cx: &mu
                 ..Default::default()
             };
             view.set_options(options, window, cx).unwrap();
+            view.prepare_logical_frame().unwrap();
             let handle = view
                 .session
                 .scene()

@@ -1057,3 +1057,5 @@ pub fn full_surface_dirty_region(surface: SurfaceSize) -> Vec<DirtyRegion> {
         )]
     }
 }
+mod retained;
+pub use retained::*;

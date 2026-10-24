@@ -52,7 +52,7 @@ impl CanvasView {
     pub fn set_command_key_resolver(&mut self, resolver: Option<CanvasCommandKeyResolver>) {
         self.command_key_resolver = resolver;
     }
-    pub(super) fn command_key(&self, key: &gpui::Keystroke) -> SharedString {
+    pub(super) fn command_key(&self, key: &gpui::Keystroke, cx: &App) -> SharedString {
         // Use the pinned runtime's printable-key classification, including IME
         // input, rather than treating unknown named/function keys as text.
         let printable = key.key.is_empty()
@@ -61,7 +61,7 @@ impl CanvasView {
                 .with_simulated_ime()
                 .key_char
                 .is_some_and(|text| !text.chars().any(char::is_control));
-        if self.draft.is_some() && !key.modifiers.secondary() && printable {
+        if self.draft.is_some() && !key.modifiers.secondary(cx) && printable {
             return key.key.clone().into();
         }
         self.command_key_resolver
@@ -126,15 +126,11 @@ impl CanvasView {
             self.fail("Invalid custom crosshair dimensions or color", cx);
         }
     }
-    /// Cancels pending composition and clears renderer caches on the existing CPU
-    /// worker. The last completed image stays visible until replacement is ready.
+    /// Invalidates display caches for the next frame without composing in the
+    /// host callback. The last completed image stays available until that paint.
     pub fn clear_render_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.invalidate_render();
         self.clear_renderer_pending = true;
-        crate::cleanup::retire_send_resources(
-            self.metrics.as_mut().unwrap().take_cached_payload(),
-            cx,
-        );
         self.changed(window, cx);
     }
     pub fn set_show_dirty_regions(&mut self, show: bool, cx: &mut Context<Self>) {

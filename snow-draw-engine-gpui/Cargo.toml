@@ -12,10 +12,12 @@ native-capture = ["gpui/test-support", "gpui_platform/test-support"]
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui = { path = "../../../gpui/crates/gpui", default-features = false, features = ["gpu-extensions"] }
+lyon = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 png = "=0.18.1"
-resvg = "=0.45.1"
+usvg = "=0.45.1"
+tiny-skia = "=0.11.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 snow-draw-engine = { path = "../snow_draw_engine_qt/crates/snow-draw-engine" }
@@ -27,28 +29,45 @@ unicode-bidi = "0.3"
 rustybuzz = "=0.20.1"
 
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_platform = { path = "../../../gpui/crates/gpui_platform", features = ["font-kit", "x11", "wayland", "runtime_shaders", "gpu-extensions"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui_windows = { path = "../../../gpui/crates/gpui_windows", default-features = false, features = ["gpu-extensions"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite"] }
+windows-numerics = "0.3"
+windows-core = "0.62"
 
 [dev-dependencies]
-gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+gpui = { path = "../../../gpui/crates/gpui", default-features = false, features = ["test-support", "gpu-extensions"] }
+
+[target.'cfg(windows)'.build-dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics_Direct3D_Fxc"] }
 
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dev-dependencies]
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["test-support"] }
+gpui_platform = { path = "../../../gpui/crates/gpui_platform", features = ["test-support", "gpu-extensions"] }
 
 [[bin]]
 name = "snow-draw-demo"
 path = "src/main.rs"
 
 [[bench]]
-name = "canvas"
-harness = false
-
-[[bench]]
-name = "dense_profile"
-harness = false
-
-[[bench]]
 name = "teardown"
+harness = false
+
+[[bench]]
+name = "gpu_profile"
+harness = false
+
+[[bench]]
+name = "native_input"
+harness = false
+
+[[bench]]
+name = "gpu_workloads"
+harness = false
+
+[[bench]]
+name = "bound_text_drag"
 harness = false
 
 [profile.canvas-perf]
@@ -61,8 +80,3 @@ incremental = false
 
 [profile.test]
 incremental = false
-
-# This exact GPUI Windows snapshot gates the AOT fxc path on debug_assertions.
-# Preserve the runtime-shader path for the native platform in this scoped profile.
-[profile.canvas-perf.package.gpui-pre-windows]
-debug-assertions = true

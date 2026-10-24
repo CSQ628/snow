@@ -33,8 +33,8 @@ fn main() {
             if edits > 0 {
                 let id = session
                     .scene()
-                    .items()
-                    .iter()
+                    .ordered_nodes()
+                    .map(|node| node.item.as_ref())
                     .find_map(|item| {
                         if let SceneDisplayItem::Rectangle(r) = item {
                             Some(ElementId {

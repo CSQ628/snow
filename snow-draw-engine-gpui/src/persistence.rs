@@ -33,6 +33,45 @@ pub struct DrawingSnapshot {
     background: Option<SourceImage>,
 }
 impl DrawingSnapshot {
+    pub(crate) fn source(&self) -> Option<&SourceImage> {
+        self.background.as_ref()
+    }
+    /// Freeze layered visual and donor composites on the GPUI device before
+    /// moving this snapshot to the encoder worker. Raster-only saves need no
+    /// GPU work. The callback must return pixels on the source's native grid.
+    pub fn materialize_for_save(
+        mut self,
+        mut materialize: impl FnMut(&SourceImage, bool) -> Result<SourceImage, CanvasError>,
+    ) -> Result<Self, CanvasError> {
+        let Some(source) = self
+            .background
+            .as_ref()
+            .filter(|source| source.layers().is_some())
+        else {
+            return Ok(self);
+        };
+        let visual = materialize(source, false)?;
+        let eligible = materialize(source, true)?;
+        if visual.layers().is_some()
+            || eligible.layers().is_some()
+            || visual.dimensions() != source.dimensions()
+            || eligible.dimensions() != source.dimensions()
+        {
+            return Err(CanvasError::InvalidFile(
+                "GPU source materialization dimensions differ".into(),
+            ));
+        }
+        let mut visual = visual.with_placement(source.origin(), source.units_per_pixel())?;
+        visual.smart_erase_pixels = Some(eligible.pixels.clone());
+        self.background = Some(visual);
+        Ok(self)
+    }
+
+    pub fn requires_materialization(&self) -> bool {
+        self.background
+            .as_ref()
+            .is_some_and(|source| source.layers().is_some())
+    }
     pub(crate) fn capture(
         engine: &Engine,
         background: Option<SourceImage>,
@@ -48,8 +87,13 @@ impl DrawingSnapshot {
     /// Per-asset decoded RGBA budget, paired with `decode_with_limit`.
     pub fn encode_with_limit(self, maximum_source_rgba_bytes: u64) -> Result<Vec<u8>, CanvasError> {
         validate_budget(maximum_source_rgba_bytes)?;
+        if self.requires_materialization() {
+            return Err(CanvasError::Unsupported(
+                "saving layered sources before GPU materialization",
+            ));
+        }
         if self.background.as_ref().is_some_and(|source| {
-            source.pixels().as_raw().len() as u64 > maximum_source_rgba_bytes
+            source.pixels.as_raw().len() as u64 > maximum_source_rgba_bytes
                 || source
                     .smart_erase_pixels
                     .as_ref()
@@ -64,7 +108,7 @@ impl DrawingSnapshot {
         let background = self
             .background
             .map(|source| {
-                let png = encode_pixels(source.pixels(), &mut remaining)?;
+                let png = encode_pixels(&source.pixels, &mut remaining)?;
                 let eligible = source
                     .smart_erase_pixels
                     .as_ref()
@@ -122,7 +166,7 @@ impl DrawingSnapshot {
                         &STANDARD.decode(png).map_err(error)?,
                         maximum_source_rgba_bytes,
                     )?;
-                    if pixels.pixels().dimensions() != image.pixels().dimensions() {
+                    if pixels.dimensions() != image.dimensions() {
                         return Err(CanvasError::InvalidFile(
                             "Reconstruction source dimensions differ".into(),
                         ));

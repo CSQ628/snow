@@ -69,8 +69,8 @@ impl ImageSourceLayer {
         self.canvas_rect.unwrap_or(CanvasRect {
             x: self.image.origin().x,
             y: self.image.origin().y,
-            width: f64::from(self.image.pixels().width()) * self.image.units_per_pixel(),
-            height: f64::from(self.image.pixels().height()) * self.image.units_per_pixel(),
+            width: f64::from(self.image.width()) * self.image.units_per_pixel(),
+            height: f64::from(self.image.height()) * self.image.units_per_pixel(),
         })
     }
 }
@@ -155,7 +155,6 @@ pub struct CanvasViewOptions {
     pub wheel_zoom_enabled: bool,
     pub delete_text_after_cursor: bool,
     pub text_editing_bounds: Option<CanvasRect>,
-    pub filter_render_reference: Option<CanvasRenderReference>,
 }
 impl Default for CanvasViewOptions {
     fn default() -> Self {
@@ -165,31 +164,6 @@ impl Default for CanvasViewOptions {
             wheel_zoom_enabled: true,
             delete_text_after_cursor: true,
             text_editing_bounds: None,
-            filter_render_reference: None,
         }
-    }
-}
-
-/// Host-selected stable composition grid. Presentation over a GPUI-owned
-/// backdrop is selected independently with `clear_background = false`.
-#[derive(Clone, Copy, Debug)]
-pub struct CanvasRenderReference {
-    pub canvas_rect: CanvasRect,
-    pub pixels_per_canvas_unit: f64,
-}
-impl CanvasRenderReference {
-    pub(crate) fn validate(self) -> Result<(), CanvasError> {
-        self.canvas_rect.validate()?;
-        if !self.pixels_per_canvas_unit.is_finite()
-            || self.pixels_per_canvas_unit <= 0.0
-            || self.canvas_rect.width <= 0.0
-            || self.canvas_rect.height <= 0.0
-        {
-            return Err(crate::engine::ErrorCode::InvalidArgument.into());
-        }
-        crate::document::validate_surface(
-            (self.canvas_rect.width * self.pixels_per_canvas_unit).ceil() as u32,
-            (self.canvas_rect.height * self.pixels_per_canvas_unit).ceil() as u32,
-        )
     }
 }

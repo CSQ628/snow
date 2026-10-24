@@ -1,9 +1,9 @@
-use crate::{CanvasDocument, CanvasError, vector::VectorCache};
+use crate::{CanvasDocument, CanvasError, vector::VectorContext};
 use snow_draw_engine as draw;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) fn synchronize(
-    metrics: &mut VectorCache,
+    metrics: &mut VectorContext,
     document: &mut CanvasDocument,
     viewport: draw::ViewportId,
 ) -> Result<(), CanvasError> {
@@ -32,7 +32,7 @@ fn style_from_text(text: &draw::TextData) -> draw::TextStyle {
     }
 }
 fn synchronize_inner(
-    metrics: &mut VectorCache,
+    metrics: &mut VectorContext,
     document: &mut CanvasDocument,
     viewport: draw::ViewportId,
 ) -> Result<(), CanvasError> {

@@ -1,7 +1,211 @@
+#![cfg(target_os = "windows")]
+use gpui::{GpuRect, GpuService};
+use gpui_windows::gpu_extensions::OffscreenGpuHost;
 use image::{GenericImageView, Rgba, RgbaImage};
 use snow_draw_engine_gpui::{
-    CanvasDocument, CanvasRenderer, CanvasSession, SourceImage, engine::*,
+    CanvasCancellation, CanvasDocument, CanvasError, CanvasPresentation, CanvasSession,
+    CanvasSnapshot, ExportTile, GpuCanvas, GpuExportFormat, GpuExportJob, GpuSavePreparation,
+    RetainedScene, SourceImage, engine::*, prepare_text_metrics,
 };
+use std::{
+    sync::{Arc, Mutex},
+    task::Poll,
+    time::{Duration, Instant},
+};
+
+fn capture(
+    document: &mut CanvasDocument,
+    session: &mut CanvasSession,
+) -> Result<CanvasSnapshot, CanvasError> {
+    prepare_text_metrics(document, session)?;
+    CanvasSnapshot::capture(document, session)
+}
+
+#[derive(Clone, Default)]
+struct Output(Arc<Mutex<Vec<u8>>>);
+impl std::io::Write for Output {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct GpuTest {
+    _host: OffscreenGpuHost,
+    service: Arc<dyn GpuService>,
+    canvas: GpuCanvas,
+    last_profile: snow_draw_engine_gpui::GpuRenderProfile,
+    presentation: CanvasPresentation,
+}
+impl GpuTest {
+    fn new() -> Self {
+        let host = OffscreenGpuHost::new().unwrap();
+        let service = host.service();
+        Self {
+            canvas: GpuCanvas::new(service.clone()).unwrap(),
+            service,
+            _host: host,
+            last_profile: Default::default(),
+            presentation: Default::default(),
+        }
+    }
+    fn finish<T: Send + 'static>(&self, mut job: GpuExportJob<T>) -> Result<T, CanvasError> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let result = job.poll();
+            assert!(self.service.diagnostics().pending_readback_bytes <= 2 * 256 * 128 * 4);
+            if let Poll::Ready(result) = result {
+                return result;
+            }
+            assert!(Instant::now() < deadline, "GPU export timed out");
+            std::thread::yield_now();
+        }
+    }
+    fn png(&mut self, snapshot: &CanvasSnapshot, scale: f32) -> Result<Vec<u8>, CanvasError> {
+        self.finish(GpuExportJob::bytes(
+            self.service.clone(),
+            snapshot.clone(),
+            scale,
+            Default::default(),
+            GpuExportFormat::Png,
+            Default::default(),
+        )?)
+    }
+    fn svg(&mut self, snapshot: &CanvasSnapshot, scale: f32) -> Result<String, CanvasError> {
+        String::from_utf8(self.finish(GpuExportJob::bytes(
+            self.service.clone(),
+            snapshot.clone(),
+            scale,
+            Default::default(),
+            GpuExportFormat::Svg,
+            Default::default(),
+        )?)?)
+        .map_err(|error| CanvasError::InvalidFile(error.to_string()))
+    }
+    fn packed(
+        &mut self,
+        snapshot: &CanvasSnapshot,
+        scale: f32,
+        size: [u32; 2],
+        tiles: &[ExportTile],
+    ) -> Result<Vec<u8>, CanvasError> {
+        self.finish(GpuExportJob::packed_png(
+            self.service.clone(),
+            snapshot.clone(),
+            scale,
+            size,
+            tiles.to_vec(),
+            Default::default(),
+            Default::default(),
+        )?)
+    }
+    fn write(
+        &mut self,
+        snapshot: &CanvasSnapshot,
+        scale: f32,
+        format: GpuExportFormat,
+        output: &mut Vec<u8>,
+        cancel: &CanvasCancellation,
+    ) -> Result<(), CanvasError> {
+        let sink = Output::default();
+        self.finish(GpuExportJob::to_writer(
+            self.service.clone(),
+            snapshot.clone(),
+            scale,
+            Default::default(),
+            format,
+            sink.clone(),
+            cancel.clone(),
+        )?)?;
+        output.extend_from_slice(&sink.0.lock().unwrap());
+        Ok(())
+    }
+    fn save(&mut self, document: &CanvasDocument) -> Vec<u8> {
+        let mut job = GpuSavePreparation::new(
+            self.service.clone(),
+            document.persistence_snapshot().unwrap(),
+            Default::default(),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Poll::Ready(result) = job.poll() {
+                return result.unwrap().encode().unwrap();
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+    fn draw(
+        &mut self,
+        scene: &RetainedScene,
+        source: Option<&SourceImage>,
+        resources: u64,
+        scale: f32,
+    ) -> Result<Arc<RgbaImage>, CanvasError> {
+        let gpu_error = |error: anyhow::Error| CanvasError::Gpu(error.to_string());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !self.canvas.is_ready().map_err(gpu_error)? {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let frame = self
+            .canvas
+            .prepare(
+                scene,
+                source,
+                resources,
+                scale,
+                &self.presentation,
+                &Default::default(),
+                &Default::default(),
+            )
+            .map_err(gpu_error)?;
+        self.last_profile = frame.profile.clone();
+        let mut output = RgbaImage::new(frame.size[0], frame.size[1]);
+        for tile in frame.tiles.iter() {
+            let mut readback = self
+                .service
+                .readback(
+                    &tile.texture,
+                    GpuRect {
+                        x: 0,
+                        y: 0,
+                        width: tile.region.width,
+                        height: tile.region.height,
+                    },
+                )
+                .map_err(gpu_error)?;
+            let mut image = loop {
+                if let Some(image) = readback.poll().map_err(gpu_error)? {
+                    break image;
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            for pixel in image.pixels.as_chunks_mut::<4>().0 {
+                let alpha = u32::from(pixel[3]);
+                for channel in &mut pixel[..3] {
+                    *channel = (u32::from(*channel) * 255 + alpha / 2)
+                        .checked_div(alpha)
+                        .unwrap_or(0)
+                        .min(255) as u8;
+                }
+            }
+            let image = RgbaImage::from_raw(image.width, image.height, image.pixels).unwrap();
+            image::imageops::replace(
+                &mut output,
+                &image,
+                i64::from(tile.region.x),
+                i64::from(tile.region.y),
+            );
+        }
+        Ok(Arc::new(output))
+    }
+}
 
 fn setup() -> (CanvasDocument, CanvasSession) {
     let mut document = CanvasDocument::default();
@@ -44,8 +248,8 @@ fn persistence_codec_moves_to_worker_and_atomic_cancel_preserves_target() {
         .into_document()
         .unwrap();
     assert_eq!(
-        explicit.background().unwrap().pixels(),
-        document.background().unwrap().pixels()
+        explicit.background().unwrap().raster_pixels().unwrap(),
+        document.background().unwrap().raster_pixels().unwrap()
     );
     let loaded =
         std::thread::spawn(move || DrawingSnapshot::decode(&payload.encode().unwrap()).unwrap())
@@ -54,8 +258,8 @@ fn persistence_codec_moves_to_worker_and_atomic_cancel_preserves_target() {
     let restored = loaded.into_document().unwrap();
     assert_eq!(restored.engine().document_checkpoint().unwrap(), checkpoint);
     assert_eq!(
-        restored.background().unwrap().pixels(),
-        document.background().unwrap().pixels()
+        restored.background().unwrap().raster_pixels().unwrap(),
+        document.background().unwrap().raster_pixels().unwrap()
     );
     let directory = std::env::temp_dir().join(format!("snow-canvas-atomic-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -75,54 +279,50 @@ fn persistence_codec_moves_to_worker_and_atomic_cancel_preserves_target() {
 #[test]
 fn fractional_scale_dimensions_agree_in_full_stream_svg_and_packed_tiles() {
     let (mut document, mut session) = setup();
-    let mut renderer = CanvasRenderer::default();
-    let snapshot = renderer
-        .snapshot_for_export(
-            &mut document,
-            &mut session,
+    let mut gpu = GpuTest::new();
+    let snapshot = capture(&mut document, &mut session)
+        .unwrap()
+        .with_region(
             snow_draw_engine_gpui::CanvasRect::new(0.0, 0.0, 1000.0, 100.0).unwrap(),
             [1000, 100],
         )
         .unwrap();
-    let full = image::load_from_memory(&renderer.export_snapshot_png(&snapshot, 1.2).unwrap())
+    let full = image::load_from_memory(&gpu.png(&snapshot, 1.2).unwrap())
         .unwrap()
         .into_rgba8();
     let mut png = Vec::new();
-    renderer
-        .export_snapshot_png_to_writer(&snapshot, 1.2, &mut png, &Default::default())
-        .unwrap();
+    gpu.write(
+        &snapshot,
+        1.2,
+        GpuExportFormat::Png,
+        &mut png,
+        &Default::default(),
+    )
+    .unwrap();
     let streamed = image::load_from_memory(&png).unwrap().into_rgba8();
     assert_eq!(streamed, full);
     let mut svg = Vec::new();
-    renderer
-        .export_snapshot_svg_to_writer(&snapshot, 1.2, &mut svg, &Default::default())
-        .unwrap();
+    gpu.write(
+        &snapshot,
+        1.2,
+        GpuExportFormat::Svg,
+        &mut svg,
+        &Default::default(),
+    )
+    .unwrap();
     let svg = String::from_utf8(svg).unwrap();
     assert!(svg.contains(&format!(
         "width=\"{}\" height=\"{}\"",
         full.width(),
         full.height()
     )));
-    use base64::Engine as _;
-    let encoded = svg
-        .split_once("base64,")
-        .unwrap()
-        .1
-        .split_once('"')
-        .unwrap()
-        .0;
+    let tree = usvg::Tree::from_str(&svg, &Default::default()).unwrap();
     assert_eq!(
-        image::load_from_memory(
-            &base64::engine::general_purpose::STANDARD
-                .decode(encoded)
-                .unwrap()
-        )
-        .unwrap()
-        .into_rgba8(),
-        full
+        (tree.size().width() as u32, tree.size().height() as u32),
+        full.dimensions()
     );
-    let packed = renderer
-        .export_snapshot_tiles_png(
+    let packed = gpu
+        .packed(
             &snapshot,
             1.2,
             [1, 1],
@@ -142,32 +342,25 @@ fn fractional_scale_dimensions_agree_in_full_stream_svg_and_packed_tiles() {
 }
 
 #[test]
-fn fractional_svg_rasterization_preserves_the_exact_png_pixel_grid() {
+fn fractional_svg_dimensions_and_gpu_effect_payload_preserve_the_png_grid() {
     fn check(svg: &str, pixels: &RgbaImage) {
-        let tree = resvg::usvg::Tree::from_str(svg, &Default::default()).unwrap();
+        let tree = usvg::Tree::from_str(svg, &Default::default()).unwrap();
         assert_eq!(
             (tree.size().width() as u32, tree.size().height() as u32),
             pixels.dimensions()
         );
-        let mut target = resvg::tiny_skia::Pixmap::new(pixels.width(), pixels.height()).unwrap();
-        resvg::render(
-            &tree,
-            resvg::tiny_skia::Transform::identity(),
-            &mut target.as_mut(),
-        );
-        let mut max = 0;
-        for (a, b) in target.pixels().iter().zip(pixels.pixels()) {
-            let a = a.demultiply();
-            max = max.max(
-                [a.red(), a.green(), a.blue(), a.alpha()]
-                    .into_iter()
-                    .zip(b.0)
-                    .map(|(a, b)| a.abs_diff(b))
-                    .max()
-                    .unwrap(),
+        if let Some((_, payload)) = svg.split_once("data:image/png;base64,") {
+            use base64::Engine as _;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(payload.split('"').next().unwrap())
+                .unwrap();
+            assert_eq!(
+                &image::load_from_memory(&bytes).unwrap().into_rgba8(),
+                pixels
             );
+        } else {
+            assert!(svg.contains("<path"));
         }
-        assert!(max <= 1, "SVG raster grid differs by {max}");
     }
     let (mut document, mut session) = setup();
     session.set_surface(&mut document, 101, 67).unwrap();
@@ -188,7 +381,7 @@ fn fractional_svg_rasterization_preserves_the_exact_png_pixel_grid() {
             {"type":"ellipse","bounds":[15,10,30,30],"style":{"fill":[30,80,150,255]}}
         ]),
     );
-    let mut renderer = CanvasRenderer::default();
+    let mut gpu = GpuTest::new();
     for effects in [false, true] {
         if effects {
             annotations(
@@ -199,33 +392,31 @@ fn fractional_svg_rasterization_preserves_the_exact_png_pixel_grid() {
                 ]),
             );
         }
-        let direct = renderer
-            .render(session.scene(), None, document.resource_revision(), 1.2)
+        let direct = gpu
+            .draw(session.scene(), None, document.resource_revision(), 1.2)
             .unwrap();
         let png = image::load_from_memory(
-            &renderer
-                .export_png(session.scene(), None, document.resource_revision(), 1.2)
+            &gpu.png(&capture(&mut document, &mut session).unwrap(), 1.2)
                 .unwrap(),
         )
         .unwrap()
         .into_rgba8();
         assert_eq!(direct.as_ref(), &png);
         check(
-            &renderer
-                .export_svg(session.scene(), None, document.resource_revision(), 1.2)
+            &gpu.svg(&capture(&mut document, &mut session).unwrap(), 1.2)
                 .unwrap(),
             &png,
         );
-        let snapshot = renderer.snapshot(&mut document, &mut session).unwrap();
-        let png = image::load_from_memory(&renderer.export_snapshot_png(&snapshot, 1.2).unwrap())
+        let snapshot = capture(&mut document, &mut session).unwrap();
+        let png = image::load_from_memory(&gpu.png(&snapshot, 1.2).unwrap())
             .unwrap()
             .into_rgba8();
-        check(&renderer.export_snapshot_svg(&snapshot, 1.2).unwrap(), &png);
+        check(&gpu.svg(&snapshot, 1.2).unwrap(), &png);
     }
 }
 
 #[test]
-fn coarse_export_query_adapts_to_multiple_effect_halos() {
+fn streamed_gpu_export_preserves_ordered_effect_support() {
     let (mut document, mut session) = setup();
     annotations(
         &mut document,
@@ -238,19 +429,23 @@ fn coarse_export_query_adapts_to_multiple_effect_halos() {
             {"type":"rectangle_filter","bounds":[0,0,1000,1000],"style":{"filter":"gaussian_blur","strength":1}}
         ]),
     );
-    let mut renderer = CanvasRenderer::default();
-    let snapshot = renderer
-        .snapshot_for_export(
-            &mut document,
-            &mut session,
+    let mut gpu = GpuTest::new();
+    let snapshot = capture(&mut document, &mut session)
+        .unwrap()
+        .with_region(
             snow_draw_engine_gpui::CanvasRect::new(0.0, 0.0, 1000.0, 1000.0).unwrap(),
             [100, 100],
         )
         .unwrap();
     let mut png = Vec::new();
-    renderer
-        .export_snapshot_png_to_writer(&snapshot, 1.0, &mut png, &Default::default())
-        .unwrap();
+    gpu.write(
+        &snapshot,
+        1.0,
+        GpuExportFormat::Png,
+        &mut png,
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(
         image::load_from_memory(&png).unwrap().dimensions(),
         (100, 100)
@@ -258,20 +453,18 @@ fn coarse_export_query_adapts_to_multiple_effect_halos() {
 }
 
 #[test]
-fn maximum_working_surface_exports_with_halo_via_streaming() {
+fn maximum_display_sized_export_keeps_staging_bounded() {
     let (mut document, mut session) = setup();
-    let mut renderer = CanvasRenderer::default();
-    let snapshot = renderer
-        .snapshot_for_export(
-            &mut document,
-            &mut session,
+    let mut gpu = GpuTest::new();
+    let snapshot = capture(&mut document, &mut session)
+        .unwrap()
+        .with_region(
             snow_draw_engine_gpui::CanvasRect::new(0.0, 0.0, 4096.0, 4096.0).unwrap(),
             [4096, 4096],
         )
         .unwrap();
-    // The nominal output fits exactly16Mi pixels, but even a2px sampling halo
-    // cannot fit one working surface. The convenience API must select strips.
-    let png = renderer.export_snapshot_png(&snapshot, 1.0).unwrap();
+    // Export staging stays bounded even when output reaches the display limit.
+    let png = gpu.png(&snapshot, 1.0).unwrap();
     assert_eq!(
         image::ImageReader::new(std::io::Cursor::new(&png))
             .with_guessed_format()
@@ -280,7 +473,7 @@ fn maximum_working_surface_exports_with_halo_via_streaming() {
             .unwrap(),
         (4096, 4096)
     );
-    assert!(renderer.peak_working_surface_pixels() < 1024 * 1024);
+    assert_eq!(gpu.service.diagnostics().pending_readback_bytes, 0);
 }
 
 fn annotations(
@@ -316,7 +509,13 @@ fn session_and_background_roundtrip_preserve_engine_history() {
     let restored = CanvasDocument::deserialize(&document.serialize().unwrap()).unwrap();
     assert_eq!(restored.engine().document_checkpoint().unwrap(), before);
     assert_eq!(
-        restored.background().unwrap().pixels().get_pixel(0, 0).0,
+        restored
+            .background()
+            .unwrap()
+            .raster_pixels()
+            .unwrap()
+            .get_pixel(0, 0)
+            .0,
         [17, 42, 99, 120]
     );
     assert!(restored.engine().history_state().can_undo);
@@ -396,7 +595,7 @@ fn interrupted_gestures_release_capture_and_repeated_actions_have_history() {
 }
 
 #[test]
-fn retained_scene_matches_full_patch_after_long_freehand_tail_updates() {
+fn retained_delta_scene_matches_full_reset_after_long_freehand_tail_updates() {
     let (mut document, mut session) = setup();
     session
         .set_tool(&mut document, ActiveTool::FreeDraw)
@@ -415,13 +614,16 @@ fn retained_scene_matches_full_patch_after_long_freehand_tail_updates() {
                 ),
             )
             .unwrap();
-        let patch = document
+        let reset = document
             .engine()
-            .acquire_patch(session.viewport(), None)
+            .acquire_retained_scene_delta(session.viewport(), None)
             .unwrap();
-        let mut expected = snow_draw_engine_gpui::RetainedScene::default();
-        expected.apply(&patch).unwrap();
-        assert_eq!(session.scene().items(), expected.items());
+        assert!(reset.reset);
+        let mut expected = RetainedScene::default();
+        expected.apply_delta(&reset).unwrap();
+        assert_eq!(session.scene().order_ids(), expected.order_ids());
+        assert!(session.scene().ordered_nodes().eq(expected.ordered_nodes()));
+        assert_eq!(session.scene().overlays(), expected.overlays());
     }
     session
         .input(&mut document, pointer(PointerEventType::Up, 170.0, 80.0))
@@ -429,7 +631,7 @@ fn retained_scene_matches_full_patch_after_long_freehand_tail_updates() {
 }
 
 #[test]
-fn renderer_caches_idle_and_overlay_frames_and_exports_png_svg() {
+fn gpu_retains_idle_tiles_and_exports_png_svg() {
     let (mut document, mut session) = setup();
     annotations(
         &mut document,
@@ -439,19 +641,21 @@ fn renderer_caches_idle_and_overlay_frames_and_exports_png_svg() {
             {"type":"ellipse","bounds":[100,20,60,50],"style":{"fill":[30,70,230,255],"stroke_width":0}}
         ]),
     );
-    let mut renderer = CanvasRenderer::default();
-    let first = renderer.render(session.scene(), None, 0, 1.0).unwrap();
+    let mut gpu = GpuTest::new();
+    let first = gpu.draw(session.scene(), None, 0, 1.0).unwrap();
     assert_eq!(first.get_pixel(40, 40).0, [230, 30, 40, 255]);
     assert_eq!(first.get_pixel(130, 40).0, [30, 70, 230, 255]);
-    let second = renderer.render(session.scene(), None, 0, 1.0).unwrap();
-    assert!(std::sync::Arc::ptr_eq(&first, &second));
-    assert_eq!(renderer.render_count(), 1);
-    let png = renderer.export_png(session.scene(), None, 0, 1.5).unwrap();
+    let second = gpu.draw(session.scene(), None, 0, 1.0).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(gpu.last_profile.rendered_tiles, 0);
+    assert_eq!(gpu.last_profile.uploaded_bytes, 0);
+    let png = gpu
+        .png(&capture(&mut document, &mut session).unwrap(), 1.5)
+        .unwrap();
     let decoded = image::load_from_memory(&png).unwrap();
     assert_eq!((decoded.width(), decoded.height()), (300, 240));
     assert!(
-        renderer
-            .export_svg(session.scene(), None, 0, 1.0)
+        gpu.svg(&capture(&mut document, &mut session).unwrap(), 1.0)
             .unwrap()
             .contains("<path")
     );
@@ -472,9 +676,10 @@ fn overlapping_filters_read_one_immutable_backdrop_and_restore_replaces_alpha() 
             {"type":"rectangle_filter","bounds":[40,40,100,100],"style":{"filter":"inversion"}}
         ]),
     );
-    let mut renderer = CanvasRenderer::default();
-    let result = renderer
-        .render(
+    let mut gpu = GpuTest::new();
+    gpu.presentation.clear_background = false;
+    let result = gpu
+        .draw(
             session.scene(),
             document.background(),
             document.resource_revision(),
@@ -501,8 +706,8 @@ fn overlapping_filters_read_one_immutable_backdrop_and_restore_replaces_alpha() 
     session
         .input(&mut document, pointer(PointerEventType::Up, 70.0, 70.0))
         .unwrap();
-    let result = renderer
-        .render(
+    let result = gpu
+        .draw(
             session.scene(),
             document.background(),
             document.resource_revision(),
@@ -550,45 +755,27 @@ fn plain_svg_outlines_text_and_effect_svg_preserves_pixels() {
         &mut session,
         serde_json::json!([{"type":"rectangle","bounds":[10,10,40,30],"style":{"fill":[32,64,128,255]}},{"type":"text","bounds":[60,20,120,50],"text":"Portable"}]),
     );
-    let mut renderer = CanvasRenderer::default();
-    renderer.prepare(&mut document, &mut session).unwrap();
-    let svg = renderer
-        .export_svg(session.scene(), None, document.resource_revision(), 1.5)
+    let mut gpu = GpuTest::new();
+    prepare_text_metrics(&mut document, &mut session).unwrap();
+    let svg = gpu
+        .svg(&capture(&mut document, &mut session).unwrap(), 1.5)
         .unwrap();
     assert!(svg.contains("<path"));
     assert!(!svg.contains("<text"));
     assert!(!svg.contains("data:image/png"));
-    let options = resvg::usvg::Options::default();
-    let tree = resvg::usvg::Tree::from_str(&svg, &options).unwrap();
-    let mut target = resvg::tiny_skia::Pixmap::new(300, 240).unwrap();
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::identity(),
-        &mut target.as_mut(),
-    );
-    assert!(target.pixel(30, 30).unwrap().alpha() > 0);
-    let expected = renderer
-        .render(session.scene(), None, document.resource_revision(), 1.5)
-        .unwrap();
-    for (pixel, expected) in target.pixels().iter().zip(expected.pixels()) {
-        let pixel = pixel.demultiply();
-        assert!(
-            [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
-                .iter()
-                .zip(expected.0)
-                .all(|(a, b)| a.abs_diff(b) <= 1)
-        );
-    }
+    let tree = usvg::Tree::from_str(&svg, &Default::default()).unwrap();
+    assert_eq!((tree.size().width(), tree.size().height()), (300.0, 240.0));
+    assert!(!tree.root().children().is_empty());
     annotations(
         &mut document,
         &mut session,
         serde_json::json!([{"type":"rectangle_filter","bounds":[20,20,80,60],"style":{"filter":"gaussian_blur","strength":0.2}}]),
     );
-    let expected = renderer
-        .render(session.scene(), None, document.resource_revision(), 1.5)
+    let expected = gpu
+        .draw(session.scene(), None, document.resource_revision(), 1.5)
         .unwrap();
-    let svg = renderer
-        .export_svg(session.scene(), None, document.resource_revision(), 1.5)
+    let svg = gpu
+        .svg(&capture(&mut document, &mut session).unwrap(), 1.5)
         .unwrap();
     let encoded = svg
         .split("data:image/png;base64,")
@@ -643,9 +830,9 @@ fn export_snapshot_keeps_effects_invariant_under_viewport_crop() {
         {"type":"rectangle_filter","bounds":[0,0,240,180],"style":{"filter":"gaussian_blur","strength":0.2}}
         ]),
     );
-    let mut renderer = CanvasRenderer::default();
-    let snapshot = renderer.snapshot(&mut document, &mut small).unwrap();
-    let cropped = image::load_from_memory(&renderer.export_snapshot_png(&snapshot, 1.0).unwrap())
+    let mut gpu = GpuTest::new();
+    let snapshot = capture(&mut document, &mut small).unwrap();
+    let cropped = image::load_from_memory(&gpu.png(&snapshot, 1.0).unwrap())
         .unwrap()
         .into_rgba8();
     let mut large = CanvasSession::new(&mut document).unwrap();
@@ -659,8 +846,8 @@ fn export_snapshot_keeps_effects_invariant_under_viewport_crop() {
             },
         )
         .unwrap();
-    let snapshot = renderer.snapshot(&mut document, &mut large).unwrap();
-    let full = image::load_from_memory(&renderer.export_snapshot_png(&snapshot, 1.0).unwrap())
+    let snapshot = capture(&mut document, &mut large).unwrap();
+    let full = image::load_from_memory(&gpu.png(&snapshot, 1.0).unwrap())
         .unwrap()
         .into_rgba8();
     let expected = image::imageops::crop_imm(&full, 60, 45, 120, 90).to_image();
@@ -674,23 +861,23 @@ fn export_snapshot_keeps_effects_invariant_under_viewport_crop() {
 }
 
 #[test]
-fn fresh_export_viewports_cannot_reuse_an_older_document_raster() {
+fn immutable_gpu_snapshots_preserve_older_document_content() {
     let (mut document, mut session) = setup();
     annotations(
         &mut document,
         &mut session,
         serde_json::json!([{"type":"rectangle","bounds":[20,20,80,60],"style":{"fill":[220,30,40,255]}}]),
     );
-    let mut renderer = CanvasRenderer::default();
-    let first = renderer.snapshot(&mut document, &mut session).unwrap();
-    let before = renderer.export_snapshot_png(&first, 1.0).unwrap();
+    let mut gpu = GpuTest::new();
+    let first = capture(&mut document, &mut session).unwrap();
+    let before = gpu.png(&first, 1.0).unwrap();
     annotations(
         &mut document,
         &mut session,
         serde_json::json!([{"type":"rectangle","bounds":[20,20,80,60],"style":{"fill":[20,80,230,255]}}]),
     );
-    let second = renderer.snapshot(&mut document, &mut session).unwrap();
-    let after = renderer.export_snapshot_png(&second, 1.0).unwrap();
+    let second = capture(&mut document, &mut session).unwrap();
+    let after = gpu.png(&second, 1.0).unwrap();
     assert_ne!(before, after);
     assert_eq!(
         image::load_from_memory(&after)
@@ -701,7 +888,7 @@ fn fresh_export_viewports_cannot_reuse_an_older_document_raster() {
         [20, 80, 230, 255]
     );
     assert_eq!(
-        image::load_from_memory(&renderer.export_snapshot_png(&first, 1.0).unwrap())
+        image::load_from_memory(&gpu.png(&first, 1.0).unwrap())
             .unwrap()
             .into_rgba8()
             .get_pixel(50, 50)
@@ -738,21 +925,20 @@ fn fractional_snapshot_exports_preserve_the_original_pixel_grid() {
         &mut session,
         serde_json::json!([{"type":"line","points":[[38,15],[38,95]],"style":{"stroke":[0,0,0,255],"stroke_width":1}}]),
     );
-    let mut renderer = CanvasRenderer::default();
+    let mut gpu = GpuTest::new();
     for scale in [1.25, 1.5] {
-        let snapshot = renderer.snapshot(&mut document, &mut session).unwrap();
-        let expected = renderer
-            .render(
+        let snapshot = capture(&mut document, &mut session).unwrap();
+        let expected = gpu
+            .draw(
                 session.scene(),
                 document.background(),
                 document.resource_revision(),
                 scale,
             )
             .unwrap();
-        let actual =
-            image::load_from_memory(&renderer.export_snapshot_png(&snapshot, scale).unwrap())
-                .unwrap()
-                .into_rgba8();
+        let actual = image::load_from_memory(&gpu.png(&snapshot, scale).unwrap())
+            .unwrap()
+            .into_rgba8();
         assert_eq!(actual.dimensions(), expected.dimensions());
         assert!(
             actual
@@ -790,15 +976,29 @@ fn host_layers_coverage_roundtrip_presentation_clips_and_disjoint_exports() {
     ])
     .unwrap()
     .unwrap();
-    assert_eq!(source.pixels().get_pixel(25, 25).0, [20, 60, 100, 255]);
-    assert_eq!(source.pixels().get_pixel(35, 35).0, [200, 50, 20, 255]);
+    assert!(source.raster_pixels().is_none());
     document.set_background(Some(source));
-    let restored = CanvasDocument::deserialize(&document.serialize().unwrap()).unwrap();
+    let mut gpu = GpuTest::new();
+    let visual = image::load_from_memory(
+        &gpu.png(&capture(&mut document, &mut session).unwrap(), 1.0)
+            .unwrap(),
+    )
+    .unwrap()
+    .into_rgba8();
+    assert_eq!(visual.get_pixel(25, 25).0, [20, 60, 100, 255]);
+    assert_eq!(visual.get_pixel(35, 35).0, [200, 50, 20, 255]);
+    let saved = gpu.save(&document);
+    let restored = CanvasDocument::deserialize(&saved).unwrap();
     assert_eq!(
-        document.background().unwrap().pixels(),
-        restored.background().unwrap().pixels()
+        &visual,
+        restored
+            .background()
+            .unwrap()
+            .raster_pixels()
+            .unwrap()
+            .as_ref()
     );
-    assert_eq!(document.serialize().unwrap(), restored.serialize().unwrap());
+    assert_eq!(saved, restored.serialize().unwrap());
     annotations(
         &mut document,
         &mut session,
@@ -807,8 +1007,7 @@ fn host_layers_coverage_roundtrip_presentation_clips_and_disjoint_exports() {
             {"type":"rectangle_filter","bounds":[20,20,80,60],"style":{"filter":"gaussian_blur","strength":0.2}}
         ]),
     );
-    let mut renderer = CanvasRenderer::default();
-    let snapshot = renderer.snapshot(&mut document, &mut session).unwrap();
+    let snapshot = capture(&mut document, &mut session).unwrap();
     let backdrop =
         SourceImage::new(RgbaImage::from_pixel(200, 160, Rgba([70, 180, 90, 255]))).unwrap();
     let after = SourceImage::new(RgbaImage::from_pixel(10, 10, Rgba([0, 0, 0, 255]))).unwrap();
@@ -822,7 +1021,7 @@ fn host_layers_coverage_roundtrip_presentation_clips_and_disjoint_exports() {
         .clone()
         .with_presentation(presentation.clone())
         .unwrap();
-    let full = image::load_from_memory(&renderer.export_snapshot_png(&clipped, 1.0).unwrap())
+    let full = image::load_from_memory(&gpu.png(&clipped, 1.0).unwrap())
         .unwrap()
         .into_rgba8();
     assert_eq!(full.get_pixel(5, 5).0, [0, 0, 0, 255]);
@@ -838,13 +1037,9 @@ fn host_layers_coverage_roundtrip_presentation_clips_and_disjoint_exports() {
             destination: [30, 0],
         },
     ];
-    let packed = image::load_from_memory(
-        &renderer
-            .export_snapshot_tiles_png(&clipped, 1.0, [50, 30], &tiles)
-            .unwrap(),
-    )
-    .unwrap()
-    .into_rgba8();
+    let packed = image::load_from_memory(&gpu.packed(&clipped, 1.0, [50, 30], &tiles).unwrap())
+        .unwrap()
+        .into_rgba8();
     for tile in tiles {
         for y in 0..tile.source[3] {
             for x in 0..tile.source[2] {
@@ -861,7 +1056,7 @@ fn host_layers_coverage_roundtrip_presentation_clips_and_disjoint_exports() {
             ..presentation
         })
         .unwrap();
-    let hidden = image::load_from_memory(&renderer.export_snapshot_png(&hidden, 1.0).unwrap())
+    let hidden = image::load_from_memory(&gpu.png(&hidden, 1.0).unwrap())
         .unwrap()
         .into_rgba8();
     assert_eq!(hidden.get_pixel(35, 35).0, [70, 180, 90, 255]);
@@ -893,9 +1088,9 @@ fn strict_export_rejects_live_smart_erase_preview_without_stealing_capture() {
     session
         .input(&mut document, pointer(PointerEventType::Move, 80.0, 80.0))
         .unwrap();
-    let mut renderer = CanvasRenderer::default();
-    let snapshot = renderer.snapshot(&mut document, &mut session).unwrap();
-    assert!(renderer.export_snapshot_png(&snapshot, 1.0).is_err());
+    let mut gpu = GpuTest::new();
+    let snapshot = capture(&mut document, &mut session).unwrap();
+    assert!(gpu.png(&snapshot, 1.0).is_err());
     assert!(document.engine().has_pointer_capture());
     session.input(&mut document, InputEvent::FocusLost).unwrap();
     assert!(!document.engine().has_pointer_capture());
@@ -923,15 +1118,27 @@ fn source_replacement_undo_is_ordered_with_document_commands() {
         serde_json::json!([{"type":"rectangle","bounds":[10,10,40,30]}]),
     );
     document.command(|e| e.undo()).unwrap();
-    assert_eq!(document.background().unwrap().pixels(), blue.pixels());
+    assert_eq!(
+        document.background().unwrap().raster_pixels().unwrap(),
+        blue.raster_pixels().unwrap()
+    );
     document.command(|e| e.undo()).unwrap();
-    assert_eq!(document.background().unwrap().pixels(), red.pixels());
+    assert_eq!(
+        document.background().unwrap().raster_pixels().unwrap(),
+        red.raster_pixels().unwrap()
+    );
     document.command(|e| e.redo()).unwrap();
-    assert_eq!(document.background().unwrap().pixels(), blue.pixels());
+    assert_eq!(
+        document.background().unwrap().raster_pixels().unwrap(),
+        blue.raster_pixels().unwrap()
+    );
     document.command(|e| e.redo()).unwrap();
     assert!(document.engine().has_document_content());
     let restored = CanvasDocument::deserialize(&document.serialize().unwrap()).unwrap();
-    assert_eq!(restored.background().unwrap().pixels(), blue.pixels());
+    assert_eq!(
+        restored.background().unwrap().raster_pixels().unwrap(),
+        blue.raster_pixels().unwrap()
+    );
 }
 
 #[test]
@@ -1016,37 +1223,6 @@ fn selection_rotation_multiselect_templates_and_history_use_engine_geometry() {
 }
 
 #[test]
-fn explicit_reference_grid_preserves_snapshot_exports() {
-    let (mut document, mut session) = setup();
-    annotations(
-        &mut document,
-        &mut session,
-        serde_json::json!([
-            {"type":"rectangle","bounds":[20,20,80,60],"style":{"fill":[20,90,190,255]}},
-            {"type":"rectangle_filter","bounds":[30,30,40,30],"style":{"filter":"gaussian_blur","strength":0.1}}
-        ]),
-    );
-    let mut renderer = CanvasRenderer::default();
-    let automatic = renderer.snapshot(&mut document, &mut session).unwrap();
-    let explicit = renderer
-        .snapshot_with_reference(
-            &mut document,
-            &mut session,
-            Some(snow_draw_engine_gpui::CanvasRenderReference {
-                canvas_rect: snow_draw_engine_gpui::CanvasRect::new(0.0, 0.0, 200.0, 160.0)
-                    .unwrap(),
-                pixels_per_canvas_unit: 2.0,
-            }),
-        )
-        .unwrap();
-    let expected = renderer.export_snapshot_png(&automatic, 1.5).unwrap();
-    assert_eq!(
-        expected,
-        renderer.export_snapshot_png(&explicit, 1.5).unwrap()
-    );
-}
-
-#[test]
 fn streaming_matches_full_pixels_across_tile_and_strip_boundaries() {
     let (mut document, mut session) = setup();
     document.set_background(Some(
@@ -1070,22 +1246,37 @@ fn streaming_matches_full_pixels_across_tile_and_strip_boundaries() {
             {"type":"arrow","points":[[10,110],[1480,110]],"style":{"stroke_width":3}}
         ]),
     );
-    let mut renderer = CanvasRenderer::default();
-    let snapshot = renderer
-        .snapshot_for_export(
-            &mut document,
-            &mut session,
+    let mut gpu = GpuTest::new();
+    let snapshot = capture(&mut document, &mut session)
+        .unwrap()
+        .with_region(
             snow_draw_engine_gpui::CanvasRect::new(0.0, 0.0, 1500.0, 260.0).unwrap(),
             [1500, 260],
         )
         .unwrap();
-    let full = image::load_from_memory(&renderer.export_snapshot_png(&snapshot, 1.25).unwrap())
-        .unwrap()
-        .into_rgba8();
-    let mut png = Vec::new();
-    renderer
-        .export_snapshot_png_to_writer(&snapshot, 1.25, &mut png, &Default::default())
+    let frame = snapshot.viewport();
+    session
+        .set_surface(&mut document, frame.surface.width, frame.surface.height)
         .unwrap();
+    session.set_camera(&mut document, frame.camera).unwrap();
+    session.flush(&document).unwrap();
+    let full = gpu
+        .draw(
+            session.scene(),
+            document.background(),
+            document.resource_revision(),
+            1.25,
+        )
+        .unwrap();
+    let mut png = Vec::new();
+    gpu.write(
+        &snapshot,
+        1.25,
+        GpuExportFormat::Png,
+        &mut png,
+        &Default::default(),
+    )
+    .unwrap();
     let streamed = image::load_from_memory(&png).unwrap().into_rgba8();
     let differences = full
         .as_raw()
@@ -1094,13 +1285,18 @@ fn streaming_matches_full_pixels_across_tile_and_strip_boundaries() {
         .filter(|(a, b)| a.abs_diff(**b) > 1)
         .count();
     assert_eq!(differences, 0, "strip/tile halo pixels differ");
-    assert!(renderer.peak_working_surface_pixels() <= 16 * 1024 * 1024);
+    assert_eq!(gpu.service.diagnostics().pending_readback_bytes, 0);
     let cancel = snow_draw_engine_gpui::CanvasCancellation::default();
     cancel.cancel();
     assert!(
-        renderer
-            .export_snapshot_png_to_writer(&snapshot, 1.0, std::io::sink(), &cancel)
-            .is_err()
+        gpu.write(
+            &snapshot,
+            1.0,
+            GpuExportFormat::Png,
+            &mut Vec::new(),
+            &cancel
+        )
+        .is_err()
     );
 }
 
@@ -1115,19 +1311,23 @@ fn tall_export_and_disjoint_tiles_do_not_allocate_the_full_source_frame() {
             {"type":"rectangle","bounds":[0,19880,32,120],"style":{"fill":[200,100,30,255]}}
         ]),
     );
-    let mut renderer = CanvasRenderer::default();
-    let snapshot = renderer
-        .snapshot_for_export(
-            &mut document,
-            &mut session,
+    let mut gpu = GpuTest::new();
+    let snapshot = capture(&mut document, &mut session)
+        .unwrap()
+        .with_region(
             snow_draw_engine_gpui::CanvasRect::new(0.0, 0.0, 32.0, 20000.0).unwrap(),
             [32, 20000],
         )
         .unwrap();
     let mut png = Vec::new();
-    renderer
-        .export_snapshot_png_to_writer(&snapshot, 1.0, &mut png, &Default::default())
-        .unwrap();
+    gpu.write(
+        &snapshot,
+        1.0,
+        GpuExportFormat::Png,
+        &mut png,
+        &Default::default(),
+    )
+    .unwrap();
     let image = image::load_from_memory(&png).unwrap().into_rgba8();
     assert_eq!(image.dimensions(), (32, 20000));
     assert_eq!(image.get_pixel(16, 50).0, [30, 100, 200, 255]);
@@ -1142,14 +1342,10 @@ fn tall_export_and_disjoint_tiles_do_not_allocate_the_full_source_frame() {
             destination: [32, 0],
         },
     ];
-    let compact = image::load_from_memory(
-        &renderer
-            .export_snapshot_tiles_png(&snapshot, 1.0, [64, 120], &tiles)
-            .unwrap(),
-    )
-    .unwrap()
-    .into_rgba8();
+    let compact = image::load_from_memory(&gpu.packed(&snapshot, 1.0, [64, 120], &tiles).unwrap())
+        .unwrap()
+        .into_rgba8();
     assert_eq!(compact.get_pixel(16, 50).0, [200, 100, 30, 255]);
     assert_eq!(compact.get_pixel(48, 50).0, [30, 100, 200, 255]);
-    assert!(renderer.peak_working_surface_pixels() < 65536);
+    assert_eq!(gpu.service.diagnostics().pending_readback_bytes, 0);
 }

@@ -1,9 +1,11 @@
 use gpui::{prelude::*, *};
 #[cfg(feature = "native-capture")]
+mod native_text_validation;
+#[cfg(feature = "native-capture")]
 mod native_validation;
 use snow_draw_engine_gpui::{
-    CanvasDocument, CanvasEvent, CanvasRenderer, CanvasSession, CanvasView, SourceImage,
-    engine as draw, showcase_document, write_atomic,
+    CanvasDocument, CanvasEvent, CanvasSession, CanvasView, GpuExportFormat, GpuExportJob,
+    GpuSavePreparation, SourceImage, engine as draw, showcase_document, write_atomic,
 };
 #[cfg(feature = "native-capture")]
 use std::time::{Duration, Instant};
@@ -403,36 +405,62 @@ impl Demo {
         let drawing =
             (format == "drawing").then(|| self.canvas.read(cx).document().persistence_snapshot());
         let snapshot = self.canvas.read(cx).snapshot();
+        let smart = self.canvas.read(cx).smart_erase_snapshot();
+        let service = cx
+            .gpu_service()
+            .map_err(|error| snow_draw_engine_gpui::CanvasError::Gpu(error.to_string()));
         self.io_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = match dialog.await {
                 Ok(Ok(Some(path))) => Some(
-                    cx.background_executor()
-                        .spawn(async move {
-                            if format == "png" {
-                                return snapshot.and_then(|snapshot| {
-                                    snow_draw_engine_gpui::write_atomic_with(&path, |writer| {
-                                        CanvasRenderer::default().export_snapshot_png_to_writer(
-                                            &snapshot,
-                                            2.0,
-                                            writer,
-                                            &Default::default(),
-                                        )
-                                    })
-                                });
-                            }
-                            let bytes = if format == "svg" {
-                                snapshot
-                                    .and_then(|snapshot| {
-                                        CanvasRenderer::default()
-                                            .export_snapshot_svg(&snapshot, 2.0)
-                                    })
-                                    .map(String::into_bytes)
-                            } else {
-                                drawing.expect("drawing format")?.encode()
+                    async {
+                        let service = service?;
+                        if format == "drawing" {
+                            let mut preparation = GpuSavePreparation::new(
+                                service,
+                                drawing.expect("drawing format")?,
+                                Default::default(),
+                            )?;
+                            let prepared = loop {
+                                if let std::task::Poll::Ready(result) = preparation.poll() {
+                                    break result?;
+                                }
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_millis(2))
+                                    .await;
                             };
-                            bytes.and_then(|bytes| write_atomic(&path, &bytes))
-                        })
-                        .await,
+                            cx.background_executor()
+                                .spawn(async move {
+                                    prepared
+                                        .encode()
+                                        .and_then(|bytes| write_atomic(&path, &bytes))
+                                })
+                                .await
+                        } else {
+                            let format = if format == "svg" {
+                                GpuExportFormat::Svg
+                            } else {
+                                GpuExportFormat::Png
+                            };
+                            let mut job = GpuExportJob::to_path(
+                                service,
+                                snapshot?,
+                                2.0,
+                                smart,
+                                format,
+                                path,
+                                Default::default(),
+                            )?;
+                            loop {
+                                if let std::task::Poll::Ready(result) = job.poll() {
+                                    break result;
+                                }
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_millis(2))
+                                    .await;
+                            }
+                        }
+                    }
+                    .await,
                 ),
                 Ok(Ok(None)) => None,
                 other => Some(Err(snow_draw_engine_gpui::CanvasError::InvalidFile(
@@ -677,7 +705,7 @@ impl Render for Demo {
                     cx.notify();
                 },cx))
                 .child(format!("{selected} selected"))
-                .child("GPUI 0.3.9 · Apache-2.0"))
+                .child("GPUI · Apache-2.0"))
     }
 }
 
@@ -700,25 +728,68 @@ fn main() {
                 },
             )
             .unwrap();
-        let mut renderer = CanvasRenderer::default();
-        renderer.prepare(&mut document, &mut session).unwrap();
-        let bytes = renderer
-            .export_png(
-                session.scene(),
-                document.background(),
-                document.resource_revision(),
-                1.0,
-            )
-            .unwrap();
-        write_atomic(&destination, &bytes).expect("write sample export");
+        snow_draw_engine_gpui::prepare_text_metrics(&mut document, &mut session).unwrap();
+        let snapshot = snow_draw_engine_gpui::CanvasSnapshot::capture(&document, &session).unwrap();
+        let source = document.background().cloned();
+        let filters: Vec<_> = session
+            .scene()
+            .nodes()
+            .filter_map(|(_, node)| {
+                if let draw::SceneDisplayItem::Filter(filter) = node.item.as_ref()
+                    && filter.filter.filter_type == draw::DisplayFilterType::SmartErase
+                {
+                    Some(filter.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let smart = std::thread::spawn(move || {
+            let mut service = snow_draw_engine_gpui::SmartEraseService::default();
+            if let Some(source) = source {
+                for filter in filters {
+                    service
+                        .solve(&filter, &source, &Default::default())
+                        .expect("sample Smart Erase");
+                }
+            }
+            service.snapshot()
+        })
+        .join()
+        .expect("Smart Erase worker");
+        let host =
+            gpui_windows::gpu_extensions::OffscreenGpuHost::new().expect("GPUI offscreen host");
+        let mut job = GpuExportJob::to_path(
+            host.service(),
+            snapshot,
+            1.0,
+            smart,
+            GpuExportFormat::Png,
+            destination,
+            Default::default(),
+        )
+        .expect("sample GPU export");
+        loop {
+            if let std::task::Poll::Ready(result) = job.poll() {
+                result.expect("write sample export");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
         return;
     }
-    let capture = if arguments
+    let text_capture = arguments
         .first()
-        .is_some_and(|argument| argument == "--capture")
+        .is_some_and(|argument| argument == "--capture-text");
+    let capture = if text_capture
+        || arguments
+            .first()
+            .is_some_and(|argument| argument == "--capture")
     {
         Some(PathBuf::from(
-            arguments.get(1).expect("--capture <output directory>"),
+            arguments
+                .get(1)
+                .expect("--capture[-text] <output directory>"),
         ))
     } else {
         None
@@ -759,8 +830,12 @@ fn main() {
         if let Some(directory) = capture {
             #[cfg(feature = "native-capture")]
             cx.spawn(async move |cx| {
-                if let Err(error) = native_validation::run(window.into(), demo, directory, cx).await
-                {
+                let result = if text_capture {
+                    native_text_validation::run(window.into(), demo, directory, cx).await
+                } else {
+                    native_validation::run(window.into(), demo, directory, cx).await
+                };
+                if let Err(error) = result {
                     capture_failed.store(true, std::sync::atomic::Ordering::Relaxed);
                     eprintln!("Native validation failed: {error:#}");
                 }
@@ -769,7 +844,7 @@ fn main() {
             .detach();
             #[cfg(not(feature = "native-capture"))]
             {
-                let _ = (directory, window, demo);
+                let _ = (directory, window, demo, text_capture);
                 eprintln!("Native capture requires --features native-capture");
                 capture_failed.store(true, std::sync::atomic::Ordering::Relaxed);
                 cx.quit();

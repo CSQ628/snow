@@ -120,7 +120,7 @@ fn drag(
         },
     );
 }
-fn key(window: &mut Window, cx: &mut App, key: &str) {
+fn key(window: &mut Window, cx: &mut App, key: &'static str) {
     window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
 }
 fn capture(
@@ -531,12 +531,22 @@ pub(super) async fn run(
         view.update(cx, |v, cx| v.replace_document(plain, window, cx))
     })??;
     settle(&demo, cx).await?;
-    let selected = view.read_with(cx, |v, _| match &v.session().scene().items()[0] {
-        draw::SceneDisplayItem::Rectangle(r) => draw::ElementId {
-            index: r.id.index,
-            generation: r.id.generation,
-        },
-        _ => unreachable!(),
+    let selected = view.read_with(cx, |v, _| {
+        match v
+            .session()
+            .scene()
+            .ordered_nodes()
+            .next()
+            .unwrap()
+            .item
+            .as_ref()
+        {
+            draw::SceneDisplayItem::Rectangle(r) => draw::ElementId {
+                index: r.id.index,
+                generation: r.id.generation,
+            },
+            _ => unreachable!(),
+        }
     });
     cx.update_window(window, |_, window, cx| {
         view.update(cx, |v, cx| {
@@ -580,7 +590,7 @@ pub(super) async fn run(
     let (scale, size) = cx.update_window(window, |_, window, _| {
         (window.scale_factor(), window.viewport_size())
     })?;
-    let report = serde_json::json!({"result":"passed","input_method":"GPUI Window::dispatch_event / dispatch_keystroke on Windows native window; EntityInputHandler composition protocol","os_ime_candidate_ui":"not automated","visual_assertions":{"light_content_pixels":light_content,"dark_content_pixels":dark_content,"canvas_mean_rgb_difference":canvas_mean_rgb_difference,"custom_crosshair_pixels":crosshair_pixels},"partial_path_pixel_equivalence":"CPU regressions; native run checks visible repeated plain-scene edits, not internal renderer instrumentation","cleanup":{"pending":cleanup.pending,"completed":cleanup.completed,"overflow_drops":cleanup.overflow_drops,"last_drop_ms":cleanup.last_drop_ms,"maximum_drop_ms":cleanup.maximum_drop_ms},"scale":scale,"logical_size":[f32::from(size.width),f32::from(size.height)],"elapsed_ms":start.elapsed().as_secs_f64()*1000.0,"checks":checks});
+    let report = serde_json::json!({"result":"passed","input_method":"GPUI Window::dispatch_event / dispatch_keystroke on Windows native window; EntityInputHandler composition protocol","os_ime_candidate_ui":"not automated","visual_assertions":{"light_content_pixels":light_content,"dark_content_pixels":dark_content,"canvas_mean_rgb_difference":canvas_mean_rgb_difference,"custom_crosshair_pixels":crosshair_pixels},"partial_path_pixel_equivalence":"Device-backed incremental/full-render regressions run separately; native run checks visible repeated edits","cleanup":{"pending":cleanup.pending,"completed":cleanup.completed,"overflow_drops":cleanup.overflow_drops,"last_drop_ms":cleanup.last_drop_ms,"maximum_drop_ms":cleanup.maximum_drop_ms},"scale":scale,"logical_size":[f32::from(size.width),f32::from(size.height)],"elapsed_ms":start.elapsed().as_secs_f64()*1000.0,"checks":checks});
     std::fs::write(
         directory.join("validation.json"),
         serde_json::to_vec_pretty(&report)?,

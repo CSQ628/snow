@@ -590,6 +590,9 @@ impl Editor {
                     self.set_selection_state_with_document(Some(document), vec![id], Some(id));
                 }
                 self.set_hovered_element(None);
+                // Hosts consume the accepted intent after input dispatch; selection
+                // and cursor feedback alone do not open their native text editor.
+                self.state.pending_text_edit = Some(id);
                 Ok(InteractionOutput {
                     consumed: true,
                     capture: PointerCaptureCommand::NoChange,

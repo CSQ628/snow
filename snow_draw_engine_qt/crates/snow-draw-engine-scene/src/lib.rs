@@ -4,6 +4,8 @@ mod item_conversions;
 #[cfg(test)]
 mod magnifier_damage_tests;
 mod overlay_composition;
+mod retained;
+pub use retained::RetainedSceneComposer;
 mod scene_cache;
 mod scene_composition;
 mod scene_order;

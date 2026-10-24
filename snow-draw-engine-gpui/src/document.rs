@@ -31,6 +31,7 @@ static NEXT_PIXELS: AtomicU64 = AtomicU64::new(1);
 pub enum CanvasError {
     Engine(ErrorCode),
     InvalidFile(String),
+    Gpu(String),
     ResourceLimit,
     Unsupported(&'static str),
     Cancelled,
@@ -41,6 +42,7 @@ impl fmt::Display for CanvasError {
         match self {
             Self::Engine(error) => write!(f, "Drawing command failed: {error:?}"),
             Self::InvalidFile(error) => write!(f, "Could not read drawing: {error}"),
+            Self::Gpu(error) => write!(f, "GPU rendering failed: {error}"),
             Self::ResourceLimit => {
                 f.write_str("The image or drawing exceeds the canvas size limit")
             }
@@ -65,17 +67,43 @@ pub struct SourceImage {
     units_per_pixel: f64,
     pub(crate) smart_erase_pixels: Option<Arc<RgbaImage>>,
     pixels_identity: u64,
+    layers: Option<Arc<[crate::ImageSourceLayer]>>,
+    dimensions: [u32; 2],
 }
 
 impl SourceImage {
+    pub(crate) fn eligible_for_rendering(&self) -> Self {
+        let mut source = self.clone();
+        source.pixels_identity = NEXT_PIXELS.fetch_add(1, Ordering::Relaxed);
+        if let Some(layers) = &self.layers {
+            source.layers = Some(
+                layers
+                    .iter()
+                    .filter(|layer| layer.smart_erase_source)
+                    .map(|layer| crate::ImageSourceLayer {
+                        image: layer.image.eligible_for_rendering(),
+                        ..layer.clone()
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            );
+        } else if let Some(pixels) = &self.smart_erase_pixels {
+            source.pixels = pixels.clone();
+        }
+        source.smart_erase_pixels = None;
+        source
+    }
     pub fn new(pixels: RgbaImage) -> Result<Self, CanvasError> {
         validate_raster(pixels.width(), pixels.height())?;
+        let dimensions = [pixels.width(), pixels.height()];
         Ok(Self {
             pixels: Arc::new(pixels),
             origin: Point::new(0.0, 0.0),
             units_per_pixel: 1.0,
             smart_erase_pixels: None,
             pixels_identity: NEXT_PIXELS.fetch_add(1, Ordering::Relaxed),
+            layers: None,
+            dimensions,
         })
     }
 
@@ -130,21 +158,55 @@ impl SourceImage {
         {
             return Err(ErrorCode::InvalidArgument.into());
         }
-        let right = origin.x + f64::from(self.pixels.width()) * units_per_pixel;
-        let bottom = origin.y + f64::from(self.pixels.height()) * units_per_pixel;
+        let right = origin.x + f64::from(self.width()) * units_per_pixel;
+        let bottom = origin.y + f64::from(self.height()) * units_per_pixel;
         if [origin.x, origin.y, right, bottom]
             .into_iter()
             .any(|value| !value.is_finite() || value.abs() > 1.0e9)
         {
             return Err(ErrorCode::InvalidArgument.into());
         }
+        if let Some(layers) = &self.layers {
+            let scale = units_per_pixel / self.units_per_pixel;
+            let map = |rect: crate::CanvasRect| crate::CanvasRect {
+                x: origin.x + (rect.x - self.origin.x) * scale,
+                y: origin.y + (rect.y - self.origin.y) * scale,
+                width: rect.width * scale,
+                height: rect.height * scale,
+            };
+            self.layers = Some(
+                layers
+                    .iter()
+                    .map(|layer| crate::ImageSourceLayer {
+                        image: layer.image.clone(),
+                        canvas_rect: Some(map(layer.placement())),
+                        coverage: layer.coverage.map(map),
+                        smart_erase_source: layer.smart_erase_source,
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            );
+        }
         self.origin = origin;
         self.units_per_pixel = units_per_pixel;
         Ok(self)
     }
 
-    pub fn pixels(&self) -> &Arc<RgbaImage> {
-        &self.pixels
+    pub fn layers(&self) -> Option<&[crate::ImageSourceLayer]> {
+        self.layers.as_deref()
+    }
+    pub fn dimensions(&self) -> [u32; 2] {
+        self.dimensions
+    }
+    pub fn width(&self) -> u32 {
+        self.dimensions[0]
+    }
+    pub fn height(&self) -> u32 {
+        self.dimensions[1]
+    }
+    /// Returns immutable pixels for leaf uploads; layered sources have no raster.
+    pub fn raster_pixels(&self) -> Option<&Arc<RgbaImage>> {
+        self.layers.is_none().then_some(&self.pixels)
     }
     pub fn origin(&self) -> Point<f64> {
         self.origin
@@ -156,9 +218,21 @@ impl SourceImage {
         self.pixels_identity
     }
     pub(crate) fn smart_erase_pixels(&self) -> &Arc<RgbaImage> {
+        debug_assert!(
+            self.layers.is_none(),
+            "CPU donor access requires a leaf source"
+        );
         self.smart_erase_pixels.as_ref().unwrap_or(&self.pixels)
     }
     fn retained_bytes(&self) -> usize {
+        if let Some(layers) = &self.layers {
+            let mut ids = std::collections::HashSet::new();
+            return layers
+                .iter()
+                .filter(|layer| ids.insert(layer.image.pixels_identity()))
+                .map(|layer| layer.image.retained_bytes())
+                .sum();
+        }
         self.pixels.as_raw().len()
             + self
                 .smart_erase_pixels
@@ -166,8 +240,8 @@ impl SourceImage {
                 .map_or(0, |pixels| pixels.as_raw().len())
     }
 
-    /// Projects layered pristine inputs to a bounded common native grid. Layer
-    /// coverage clips sampling, and visual-only layers never become erase donors.
+    /// Retains layered pristine inputs without allocating a composite image.
+    /// Coverage, anisotropic placement and donor eligibility remain explicit.
     pub fn from_layers(layers: &[crate::ImageSourceLayer]) -> Result<Option<Self>, CanvasError> {
         Self::from_layers_cancellable(layers, &Default::default())
     }
@@ -179,6 +253,7 @@ impl SourceImage {
         if layers.is_empty() {
             return Ok(None);
         }
+        let layers = normalize_source_layers(layers)?;
         if layers.len() > 128
             || layers
                 .iter()
@@ -193,7 +268,7 @@ impl SourceImage {
         let mut right = f64::NEG_INFINITY;
         let mut bottom = f64::NEG_INFINITY;
         let mut units = f64::INFINITY;
-        for layer in layers {
+        for layer in &layers {
             if let Some(coverage) = layer.coverage {
                 coverage.validate()?;
             }
@@ -220,8 +295,8 @@ impl SourceImage {
             right = right.max(bounds.2);
             bottom = bottom.max(bounds.3);
             units = units
-                .min(placement.width / f64::from(image.pixels.width()))
-                .min(placement.height / f64::from(image.pixels.height()));
+                .min(placement.width / f64::from(image.width()))
+                .min(placement.height / f64::from(image.height()));
         }
         if !left.is_finite() {
             return Ok(None);
@@ -232,50 +307,150 @@ impl SourceImage {
         if u64::from(width) * u64::from(height) * 4 > 512 * 1024 * 1024 {
             return Err(CanvasError::ResourceLimit);
         }
-        let pixels = project_layers(
-            layers,
-            Point::new(left, top),
-            units,
-            width,
-            height,
-            false,
-            cancel,
-        )?;
-        let eligible = project_layers(
-            layers,
-            Point::new(left, top),
-            units,
-            width,
-            height,
-            true,
-            cancel,
-        )?;
-        let mut image = Self::new(pixels)?.with_placement(Point::new(left, top), units)?;
-        image.smart_erase_pixels = Some(Arc::new(eligible));
-        Ok(Some(image))
+        let samples: f64 = layers
+            .iter()
+            .map(|layer| {
+                let bounds = effective_layer_bounds(layer);
+                ((bounds.width / units).ceil() + 1.0) * ((bounds.height / units).ceil() + 1.0)
+            })
+            .sum();
+        if samples > 128.0 * 1024.0 * 1024.0 {
+            return Err(CanvasError::ResourceLimit);
+        }
+        cancel.check()?;
+        Ok(Some(Self {
+            pixels: Arc::new(RgbaImage::new(0, 0)),
+            origin: Point::new(left, top),
+            units_per_pixel: units,
+            smart_erase_pixels: None,
+            pixels_identity: NEXT_PIXELS.fetch_add(1, Ordering::Relaxed),
+            layers: Some(layers.into()),
+            dimensions: [width, height],
+        }))
+    }
+
+    /// CPU work is limited to the Smart Erase donor neighborhood, in the common
+    /// source grid. Visual-only layers never enter the reconstruction input.
+    pub(crate) fn eligible_region(
+        &self,
+        region: [u32; 4],
+        cancel: &crate::CanvasCancellation,
+    ) -> Result<RgbaImage, CanvasError> {
+        let [x, y, width, height] = region;
+        if width == 0
+            || height == 0
+            || x.checked_add(width).is_none_or(|v| v > self.width())
+            || y.checked_add(height).is_none_or(|v| v > self.height())
+        {
+            return Err(ErrorCode::InvalidArgument.into());
+        }
+        cancel.check()?;
+        if let Some(layers) = &self.layers {
+            sample_donor_layers(
+                layers,
+                Point::new(
+                    self.origin.x + f64::from(x) * self.units_per_pixel,
+                    self.origin.y + f64::from(y) * self.units_per_pixel,
+                ),
+                self.units_per_pixel,
+                width,
+                height,
+                cancel,
+            )
+        } else {
+            let pixels = self.smart_erase_pixels();
+            Ok(image::imageops::crop_imm(pixels.as_ref(), x, y, width, height).to_image())
+        }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn project_layers(
+fn intersect_rect(a: crate::CanvasRect, b: crate::CanvasRect) -> crate::CanvasRect {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    crate::CanvasRect {
+        x,
+        y,
+        width: ((a.x + a.width).min(b.x + b.width) - x).max(0.0),
+        height: ((a.y + a.height).min(b.y + b.height) - y).max(0.0),
+    }
+}
+
+fn effective_layer_bounds(layer: &crate::ImageSourceLayer) -> crate::CanvasRect {
+    let rect = layer.placement();
+    layer
+        .coverage
+        .map_or(rect, |coverage| intersect_rect(rect, coverage))
+}
+
+fn normalize_source_layers(
+    layers: &[crate::ImageSourceLayer],
+) -> Result<Vec<crate::ImageSourceLayer>, CanvasError> {
+    let mut result = Vec::new();
+    for layer in layers {
+        let placement = layer.placement();
+        placement.validate()?;
+        if let Some(coverage) = layer.coverage {
+            coverage.validate()?;
+        }
+        if placement.width <= 0.0 || placement.height <= 0.0 {
+            continue;
+        }
+        if let Some(children) = layer.image.layers() {
+            let origin = layer.image.origin();
+            let x_scale =
+                placement.width / (f64::from(layer.image.width()) * layer.image.units_per_pixel());
+            let y_scale = placement.height
+                / (f64::from(layer.image.height()) * layer.image.units_per_pixel());
+            let map = |rect: crate::CanvasRect| crate::CanvasRect {
+                x: placement.x + (rect.x - origin.x) * x_scale,
+                y: placement.y + (rect.y - origin.y) * y_scale,
+                width: rect.width * x_scale,
+                height: rect.height * y_scale,
+            };
+            for child in children {
+                let rect = map(child.placement());
+                let mut coverage = intersect_rect(map(effective_layer_bounds(child)), placement);
+                if let Some(parent_coverage) = layer.coverage {
+                    coverage = intersect_rect(coverage, parent_coverage);
+                }
+                rect.validate()?;
+                coverage.validate()?;
+                result.push(crate::ImageSourceLayer {
+                    image: child.image.clone(),
+                    canvas_rect: Some(rect),
+                    coverage: Some(coverage),
+                    smart_erase_source: layer.smart_erase_source && child.smart_erase_source,
+                });
+                if result.len() > 128 {
+                    return Err(CanvasError::ResourceLimit);
+                }
+            }
+        } else {
+            result.push(layer.clone());
+            if result.len() > 128 {
+                return Err(CanvasError::ResourceLimit);
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn sample_donor_layers(
     layers: &[crate::ImageSourceLayer],
     origin: Point<f64>,
     units: f64,
     width: u32,
     height: u32,
-    eligible_only: bool,
     cancel: &crate::CanvasCancellation,
 ) -> Result<RgbaImage, CanvasError> {
     let mut output = RgbaImage::new(width, height);
     let mut samples = 0_u64;
     for layer in layers {
-        if eligible_only && !layer.smart_erase_source {
+        if !layer.smart_erase_source {
             continue;
         }
         let mut source = layer.image.clone();
-        if eligible_only {
-            source.pixels = source.smart_erase_pixels().clone();
-        }
+        source.pixels = source.smart_erase_pixels().clone();
         let placement = layer.placement();
         if placement.width <= 0.0 || placement.height <= 0.0 {
             continue;
@@ -326,7 +501,7 @@ fn project_layers(
                             / placement.height,
                 );
                 if layer.coverage.is_none_or(|area| area.contains(world))
-                    && let Some(pixel) = crate::renderer::sample_source(&source, mapped)
+                    && let Some(pixel) = crate::source_geometry::sample_source(&source, mapped)
                 {
                     output.get_pixel_mut(x, y).blend(&pixel);
                 }
@@ -496,17 +671,19 @@ pub struct CanvasSession {
     document_identity: u64,
     viewport: ViewportId,
     scene: RetainedScene,
+    deferred_composition: bool,
 }
 
 impl CanvasSession {
     pub fn new(document: &mut CanvasDocument) -> Result<Self, CanvasError> {
         let mut config = ViewportConfig::default();
         config.engine.min_zoom = 1.0e-6;
-        let viewport = document.engine.create_viewport(config)?;
+        let viewport = document.engine.create_retained_viewport(config)?;
         let mut session = Self {
             document_identity: document.identity,
             viewport,
             scene: RetainedScene::default(),
+            deferred_composition: false,
         };
         session.refresh(document)?;
         Ok(session)
@@ -516,6 +693,20 @@ impl CanvasSession {
     }
     pub fn scene(&self) -> &RetainedScene {
         &self.scene
+    }
+    /// Coalesce presentation work until `flush`, while interaction transforms
+    /// and engine queries continue to reflect every input event immediately.
+    pub fn set_deferred_composition(&mut self, enabled: bool) {
+        self.deferred_composition = enabled;
+    }
+    pub fn snapshot_scene(&self, document: &CanvasDocument) -> Result<RetainedScene, CanvasError> {
+        self.check_document(document)?;
+        let mut scene = self.scene.clone();
+        let delta = document
+            .engine
+            .acquire_retained_scene_delta(self.viewport, scene.retained_revision())?;
+        scene.apply_delta(&delta)?;
+        Ok(scene)
     }
     pub fn close(self, document: &mut CanvasDocument) -> Result<Option<InputUpdate>, CanvasError> {
         self.check_document(document)?;
@@ -534,14 +725,26 @@ impl CanvasSession {
     }
     pub fn refresh(&mut self, document: &CanvasDocument) -> Result<bool, CanvasError> {
         self.check_document(document)?;
+        if self.deferred_composition {
+            let frame = document.engine.viewport_frame(self.viewport)?;
+            self.scene = self.scene.with_frame(frame);
+            return Ok(true);
+        }
+        self.flush(document)
+    }
+    /// Publish all input updates accumulated since the previous presentation.
+    pub fn flush(&mut self, document: &CanvasDocument) -> Result<bool, CanvasError> {
+        self.check_document(document)?;
         let patch = document
             .engine
-            .acquire_patch(self.viewport, self.scene.cursor())?;
-        match self.scene.apply(&patch) {
+            .acquire_retained_scene_delta(self.viewport, self.scene.retained_revision())?;
+        match self.scene.apply_delta(&patch) {
             Ok(changed) => Ok(changed),
             Err(_) => {
-                let reset = document.engine.acquire_patch(self.viewport, None)?;
-                self.scene.apply(&reset)
+                let reset = document
+                    .engine
+                    .acquire_retained_scene_delta(self.viewport, None)?;
+                self.scene.apply_delta(&reset)
             }
         }
     }

@@ -96,11 +96,9 @@ impl CanvasView {
             self.fail("Text exceeds the 64 KiB editing limit or contains NUL", cx);
             return;
         }
-        let layout = self.metrics.as_mut().unwrap().layout(
-            &text,
-            &style,
-            if auto_resize { 1.0e8 } else { width },
-        );
+        let layout = self
+            .metrics
+            .layout(&text, &style, if auto_resize { 1.0e8 } else { width });
         self.draft = Some(TextDraft {
             buffer: TextBuffer::new(text),
             target,
@@ -142,7 +140,7 @@ impl CanvasView {
             return;
         }
         let selected = self.document.engine().selected_ids();
-        let serial = self.session.scene().items().iter().any(|item| matches!(item, draw::SceneDisplayItem::SerialNumber(item)
+        let serial = self.session.scene().ordered_nodes().map(|node| node.item.as_ref()).any(|item| matches!(item, draw::SceneDisplayItem::SerialNumber(item)
             if selected.iter().any(|id| id.index == item.id.index && id.generation == item.id.generation)));
         if serial {
             self.create_serial_number_text(window, cx);
@@ -167,11 +165,7 @@ impl CanvasView {
         else {
             return;
         };
-        let layout = self
-            .metrics
-            .as_mut()
-            .unwrap()
-            .layout("", &state.text_style, 1.0e8);
+        let layout = self.metrics.layout("", &state.text_style, 1.0e8);
         let result = self.document.command(|engine| {
             engine.create_serial_number_text_with_viewport_changes(
                 viewport,
@@ -202,7 +196,9 @@ impl CanvasView {
         let Some(draft) = &mut self.draft else {
             return;
         };
-        draft.layout = self.metrics.as_mut().unwrap().layout(
+        draft.preferred_x = None;
+        draft.caret_affinity = None;
+        draft.layout = self.metrics.layout(
             &draft.buffer.text,
             &draft.style,
             if draft.auto_resize {
@@ -269,7 +265,7 @@ impl CanvasView {
             .buffer
             .text
             .graphemes(true)
-            .map(|g| self.metrics.as_mut().unwrap().text_width(g, &draft.style))
+            .map(|g| self.metrics.text_width(g, &draft.style))
             .fold(1.0, f64::max);
         draft.minimum_grapheme_width = minimum;
         let viewport = self.session.viewport();
@@ -286,6 +282,7 @@ impl CanvasView {
         }) {
             self.fail(error, cx);
         }
+        self.reset_text_caret(window, cx);
         self.changed(window, cx);
     }
 
@@ -295,9 +292,14 @@ impl CanvasView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.stop_text_caret(cx);
+        self.text_selection_overlay.clear(window);
         let Some(mut draft) = self.draft.take() else {
             return;
         };
+        if !commit {
+            self.invalidate_render();
+        }
         draft.buffer.unmark();
         let viewport = self.session.viewport();
         let result = self.document.command(|engine| {
@@ -332,6 +334,9 @@ impl CanvasView {
         });
         if let Err(error) = result {
             self.fail(error, cx);
+        }
+        if self.selecting_text {
+            window.release_pointer();
         }
         self.selecting_text = false;
         self.changed(window, cx);
@@ -545,10 +550,10 @@ impl CanvasView {
         if self.draft.is_some() && event.prefer_character_input {
             return;
         }
-        let resolved_key = self.command_key(&event.keystroke);
+        let resolved_key = self.command_key(&event.keystroke, cx);
         let key = resolved_key.as_ref();
         let modifiers = event.keystroke.modifiers;
-        let command = modifiers.secondary();
+        let command = modifiers.secondary(cx);
         if key == "delete" && self.draft.is_some() && !self.options.delete_text_after_cursor {
             let draft = self.draft.as_mut().unwrap();
             draft.buffer.anchor = 0;
@@ -572,7 +577,7 @@ impl CanvasView {
             }
             if matches!(key, "up" | "down") {
                 self.move_text_vertical(key == "down", modifiers.shift);
-                cx.notify();
+                self.reset_text_caret(window, cx);
                 cx.stop_propagation();
                 return;
             }
@@ -679,7 +684,7 @@ impl CanvasView {
                 self.draft.as_mut().unwrap().changed = true;
                 self.update_draft(window, cx);
             } else {
-                cx.notify();
+                self.reset_text_caret(window, cx);
             }
             cx.stop_propagation();
             return;
@@ -827,10 +832,10 @@ impl EntityInputHandler for CanvasView {
             .clone()
             .map(|range| draft.buffer.utf16(range))
     }
-    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(draft) = &mut self.draft {
             draft.buffer.unmark();
-            cx.notify();
+            self.reset_text_caret(window, cx);
         }
     }
     fn replace_text_in_range(
@@ -918,14 +923,16 @@ impl EntityInputHandler for CanvasView {
     fn set_selected_text_range(
         &mut self,
         range: Range<usize>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(draft) = &mut self.draft {
             let range = draft.buffer.byte_range_from_utf16(range);
             draft.buffer.anchor = range.start;
             draft.buffer.caret = range.end;
-            cx.notify();
+            draft.preferred_x = None;
+            draft.caret_affinity = None;
+            self.reset_text_caret(window, cx);
         }
     }
     fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
