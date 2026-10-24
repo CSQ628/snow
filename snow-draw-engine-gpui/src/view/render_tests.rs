@@ -29,18 +29,19 @@ fn assert_drag_paints_current_frames(
                 assert_eq!(view.rendered_generation, view.generation);
                 frames
                     .borrow_mut()
-                    .push((view.rendered_generation, view.image.clone().unwrap()));
+                    .push((view.rendered_generation, view.gpu_frame.clone().unwrap()));
             }
         })
     });
     for step in 0..3 {
-        let previous = view.read_with(cx, |v, _| v.image.clone().unwrap());
+        let previous = view.read_with(cx, |v, _| v.gpu_frame.clone().unwrap());
         let delta = 15.0 + step as f32 * 30.0;
         let first = origin + point(px(delta), px(delta));
         drag_move(cx, first);
         let generation = view.read_with(cx, |v, _| v.generation);
         drag_move(cx, first + point(px(4.0), px(4.0)));
         drag_move(cx, first + point(px(8.0), px(8.0)));
+        cx.update(|_, cx| view.update(cx, |v, _| v.prepare_logical_frame().unwrap()));
         let latest = view.read_with(cx, |v, _| v.generation);
         assert!(latest > generation);
         // Paint without executing any background tasks or waiting for idle.
@@ -48,33 +49,30 @@ fn assert_drag_paints_current_frames(
         let frames = published.borrow();
         let (painted, image) = frames.last().unwrap();
         assert_eq!(*painted, latest, "paint published stale geometry");
-        assert_ne!(image.as_bytes(0), previous.as_bytes(0));
+        assert_ne!(image.revision, previous.revision);
         view.read_with(cx, |v, _| {
             assert!(v.document.engine().has_pointer_capture());
             assert_eq!(v.rendered_generation, v.generation);
             assert!(!v.is_rendering());
             assert!(v.error.is_none());
-            let scene = v
-                .reference_session
-                .scene()
-                .with_frame(v.image_frame.unwrap());
-            let expected = CanvasRenderer::default()
-                .render_with_presentation(
-                    &scene,
+            let service = v.gpu_canvas.as_ref().unwrap().service();
+            let mut renderer = crate::GpuCanvas::new(service.clone()).unwrap();
+            let expected = renderer
+                .prepare(
+                    v.session.scene(),
                     v.document.background(),
                     v.document.resource_revision(),
-                    1.0,
+                    v.scale,
                     &v.options.presentation,
+                    &v.smart_service.snapshot(),
+                    &Default::default(),
                 )
                 .unwrap();
-            let actual = v.image.as_ref().unwrap().as_bytes(0).unwrap();
-            for (bgra, rgba) in actual.chunks_exact(4).zip(expected.pixels()) {
-                assert_eq!(
-                    bgra,
-                    &[rgba[2], rgba[1], rgba[0], rgba[3]],
-                    "painted pixels do not match the live scene"
-                );
-            }
+            assert_eq!(
+                frame_pixels(v),
+                crate::gpu_tests::read_frame(&service, &expected).unwrap(),
+                "GPU pixels do not match the live scene"
+            );
         });
     }
 }
@@ -110,7 +108,15 @@ fn live_selection_paints_latest_move_resize_and_rotation_without_waiting_for_wor
         let origin = visual.update(|window, cx| {
             view.update(cx, |v, cx| {
                 v.set_tool(draw::ActiveTool::Select, window, cx);
-                let draw::SceneDisplayItem::Rectangle(rect) = &v.session.scene().items()[0] else {
+                let draw::SceneDisplayItem::Rectangle(rect) = v
+                    .session
+                    .scene()
+                    .ordered_nodes()
+                    .next()
+                    .unwrap()
+                    .item
+                    .as_ref()
+                else {
                     panic!("expected rectangle");
                 };
                 let id = draw::ElementId {
@@ -122,6 +128,7 @@ fn live_selection_paints_latest_move_resize_and_rotation_without_waiting_for_wor
                     window,
                     cx,
                 );
+                v.prepare_logical_frame().unwrap();
                 let world = if let Some(kind) = handle {
                     v.session
                         .scene()

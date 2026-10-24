@@ -1,6 +1,6 @@
 //! Selection decoration in logical view pixels, matching the Qt overlay painter.
 use super::*;
-use resvg::tiny_skia as skia;
+use usvg::tiny_skia_path as skia;
 
 #[cfg(test)]
 #[path = "selection_overlay_tests.rs"]

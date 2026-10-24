@@ -1,30 +1,81 @@
 //! Backend-independent vector lowering. The same shaped outlines feed preview and export.
-use std::{collections::HashMap, fmt::Write, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt::Write,
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
+};
 #[cfg(test)]
 #[path = "vector_tests.rs"]
 mod tests;
 
-use resvg::usvg;
 use snow_draw_engine::*;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::CanvasError;
 
-pub(crate) fn xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+fn font_families(value: &str) -> Vec<String> {
+    let mut families = Vec::new();
+    let mut name = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            name.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if quote == Some(character) {
+            quote = None;
+        } else if quote.is_none() && matches!(character, '\'' | '"') {
+            quote = Some(character);
+        } else if quote.is_none() && character == ',' {
+            if !name.trim().is_empty() {
+                families.push(name.trim().to_owned());
+            }
+            name.clear();
+        } else {
+            name.push(character);
+        }
+    }
+    if !name.trim().is_empty() {
+        families.push(name.trim().to_owned());
+    }
+    families
+}
+
+struct GlyphPath(lyon::path::Builder);
+
+impl Default for GlyphPath {
+    fn default() -> Self {
+        Self(lyon::path::Path::builder())
+    }
+}
+
+impl rustybuzz::ttf_parser::OutlineBuilder for GlyphPath {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.0.begin(lyon::math::point(x, y));
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.0.line_to(lyon::math::point(x, y));
+    }
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        self.0
+            .quadratic_bezier_to(lyon::math::point(x1, y1), lyon::math::point(x, y));
+    }
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        self.0.cubic_bezier_to(
+            lyon::math::point(x1, y1),
+            lyon::math::point(x2, y2),
+            lyon::math::point(x, y),
+        );
+    }
+    fn close(&mut self) {
+        self.0.end(true);
+    }
 }
 
 pub(crate) fn color(value: ColorRgba8) -> String {
     format!("#{:02x}{:02x}{:02x}", value.r, value.g, value.b)
-}
-
-pub(crate) fn wrap_svg(content: &str) -> String {
-    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">{content}</svg>"#)
 }
 
 pub(crate) fn path_commands(commands: impl IntoIterator<Item = PathCommand>) -> String {
@@ -108,13 +159,25 @@ fn transform(item: &RectangleDisplayItem) -> String {
     )
 }
 
-fn fill_attributes(fill: ColorRgba8, style: DisplayFillStyle) -> String {
+struct SvgIds {
+    item: usize,
+    next: usize,
+}
+
+impl SvgIds {
+    fn allocate(&mut self) -> String {
+        let id = format!("item-{}-{}", self.item, self.next);
+        self.next += 1;
+        id
+    }
+}
+
+fn fill_attributes(fill: ColorRgba8, style: DisplayFillStyle, id: &str) -> String {
     if !style.is_visible(fill) {
         return "fill=\"none\"".into();
     }
     let paint = match style {
-        DisplayFillStyle::Line => "url(#hatch)".into(),
-        DisplayFillStyle::CrossLine => "url(#cross)".into(),
+        DisplayFillStyle::Line | DisplayFillStyle::CrossLine => format!("url(#{id})"),
         _ => color(fill),
     };
     format!(
@@ -123,17 +186,20 @@ fn fill_attributes(fill: ColorRgba8, style: DisplayFillStyle) -> String {
     )
 }
 
-fn patterns(fill: ColorRgba8, style: DisplayFillStyle) -> String {
-    // Definitions are inert for solid/border fills but make every parsed tree
-    // and its conservative cache accounting substantially larger.
+fn pattern(fill: ColorRgba8, style: DisplayFillStyle, id: &str) -> String {
     if !matches!(style, DisplayFillStyle::Line | DisplayFillStyle::CrossLine)
         || !style.is_visible(fill)
     {
         return String::new();
     }
     let c = color(fill);
+    let path = if style == DisplayFillStyle::Line {
+        "M-2 2 L2 -2 M0 8 L8 0 M6 10 L10 6"
+    } else {
+        "M0 0 L8 8 M0 8 L8 0"
+    };
     format!(
-        r#"<defs><pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M-2 2 L2 -2 M0 8 L8 0 M6 10 L10 6" stroke="{c}" stroke-width="1"/></pattern><pattern id="cross" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0 L8 8 M0 8 L8 0" stroke="{c}" stroke-width="1"/></pattern></defs>"#
+        r#"<defs><pattern id="{id}" width="8" height="8" patternUnits="userSpaceOnUse"><path d="{path}" stroke="{c}" stroke-width="1"/></pattern></defs>"#
     )
 }
 
@@ -150,44 +216,21 @@ fn stroke_attributes(stroke: ColorRgba8, width: f64, style: StrokeStyle) -> Stri
     )
 }
 
-fn rectangle(item: &RectangleDisplayItem) -> String {
+fn rectangle(item: &RectangleDisplayItem, ids: &mut SvgIds) -> String {
+    let id = ids.allocate();
     let path = rectangle_path(item);
-    let fill = fill_attributes(item.fill, item.fill_style);
+    let fill = fill_attributes(item.fill, item.fill_style, &id);
     let stroke = stroke_attributes(item.stroke, item.stroke_width, item.stroke_style);
     format!(
-        "{}<g transform=\"{}\" opacity=\"{}\">{}</g>",
-        patterns(item.fill, item.fill_style),
+        "{}<g transform=\"{}\" opacity=\"{}\"><path d=\"{path}\" {fill} {stroke}/></g>",
+        pattern(item.fill, item.fill_style, &id),
         transform(item),
         item.opacity,
-        styled_path(
-            &path,
-            &fill,
-            &stroke,
-            item.stroke_rendering_style,
-            item.stroke_rendering_seed,
-            item.width.min(item.height)
-        )
     )
 }
 
-fn styled_path(
-    path: &str,
-    fill: &str,
-    stroke: &str,
-    style: StrokeRenderingStyle,
-    seed: u32,
-    scale: f64,
-) -> String {
-    if style == StrokeRenderingStyle::Architect {
-        return format!("<path d=\"{path}\" {fill} {stroke}/>");
-    }
-    let displacement = snow_draw_engine_core::arrow::stroke_rendering_outset(style, scale) * 2.0;
-    format!(
-        r#"<defs><filter id="rough" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="2" seed="{seed}" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="{displacement}" xChannelSelector="R" yChannelSelector="G"/></filter></defs><path d="{path}" {fill} stroke="none"/><path d="{path}" fill="none" {stroke} filter="url(#rough)"/>"#
-    )
-}
-
-fn arrow(item: &ArrowDisplayItem, background: ColorRgba8) -> String {
+fn arrow(item: &ArrowDisplayItem, background: ColorRgba8, ids: &mut SvgIds) -> String {
+    let id = ids.allocate();
     let mut path = if item.geometry.chunks.is_empty() {
         path_commands(item.path_commands.iter().copied())
     } else {
@@ -203,9 +246,9 @@ fn arrow(item: &ArrowDisplayItem, background: ColorRgba8) -> String {
     }
     let tapered = item.arrow_shaft_type == snow_draw_engine_core::arrow::ArrowShaftType::Tapered;
     let fill = if tapered {
-        fill_attributes(item.stroke, DisplayFillStyle::Solid)
+        fill_attributes(item.stroke, DisplayFillStyle::Solid, &id)
     } else {
-        fill_attributes(item.fill, item.fill_style)
+        fill_attributes(item.fill, item.fill_style, &id)
     };
     let stroke = stroke_attributes(
         item.stroke,
@@ -215,18 +258,19 @@ fn arrow(item: &ArrowDisplayItem, background: ColorRgba8) -> String {
     let mut output = if tapered {
         String::new()
     } else {
-        patterns(item.fill, item.fill_style)
+        pattern(item.fill, item.fill_style, &id)
     };
     write!(output, "<g opacity=\"{}\">", item.opacity).unwrap();
     let clipped =
         item.bound_text_id.is_some() && !item.bound_text_overlay && item.label_bounds.is_some();
     if clipped {
+        let clip_id = ids.allocate();
         let bounds = item.label_bounds.unwrap();
         let left = bounds.min_x - 5.0;
         let top = bounds.min_y - 5.0;
         let right = bounds.max_x + 5.0;
         let bottom = bounds.max_y + 5.0;
-        write!(output,r#"<defs><clipPath id="label-gap"><path clip-rule="evenodd" d="M-100000000 -100000000 H100000000 V100000000 H-100000000 Z M{left} {top} H{right} V{bottom} H{left} Z"/></clipPath></defs><g clip-path="url(#label-gap)">"#).unwrap();
+        write!(output,r#"<defs><clipPath id="{clip_id}"><path clip-rule="evenodd" d="M-100000000 -100000000 H100000000 V100000000 H-100000000 Z M{left} {top} H{right} V{bottom} H{left} Z"/></clipPath></defs><g clip-path="url(#{clip_id})">"#).unwrap();
     }
     if let Some(pressure) = &item.pressure_geometry {
         let outline = path_commands(
@@ -238,18 +282,11 @@ fn arrow(item: &ArrowDisplayItem, background: ColorRgba8) -> String {
         write!(
             output,
             "<path d=\"{outline}\" {}/>",
-            fill_attributes(item.stroke, DisplayFillStyle::Solid)
+            fill_attributes(item.stroke, DisplayFillStyle::Solid, &id)
         )
         .unwrap();
     } else {
-        output.push_str(&styled_path(
-            &path,
-            &fill,
-            &stroke,
-            item.stroke_rendering_style,
-            item.stroke_rendering_seed,
-            item.stroke_width * 10.0,
-        ));
+        write!(output, "<path d=\"{path}\" {fill} {stroke}/>").unwrap();
     }
     for head in &item.arrowhead_primitives {
         let fill_color = match head.fill_mode {
@@ -258,10 +295,10 @@ fn arrow(item: &ArrowDisplayItem, background: ColorRgba8) -> String {
         };
         let fill = color(fill_color);
         let fill_alpha = f64::from(fill_color.a) / 255.0;
-        let head_style = if head.dash_mode == ArrowheadDisplayDashMode::Inherit {
-            item.stroke_style
-        } else {
-            StrokeStyle::Solid
+        let head_style = match head.dash_mode {
+            ArrowheadDisplayDashMode::Inherit => item.stroke_style,
+            ArrowheadDisplayDashMode::Solid => StrokeStyle::Solid,
+            ArrowheadDisplayDashMode::DottedCap => StrokeStyle::Dotted,
         };
         let head_stroke = stroke_attributes(item.stroke, item.stroke_width, head_style);
         match head.kind {
@@ -302,13 +339,34 @@ fn arrow(item: &ArrowDisplayItem, background: ColorRgba8) -> String {
 }
 
 #[derive(Clone)]
+pub(crate) struct ShapedGlyph {
+    pub font: usvg::fontdb::ID,
+    pub id: u16,
+    pub x: f64,
+    pub y: f64,
+    pub scale: f64,
+}
+
+/// Immutable font asset and native color-glyph geometry. Positions use font
+/// units with y upwards, matching ordinary outline meshes.
+pub(crate) struct ColorGlyph {
+    pub font_id: usvg::fontdb::ID,
+    pub glyph_id: u16,
+    pub face_index: u32,
+    pub source: usvg::fontdb::Source,
+    pub units_per_em: f64,
+    pub bounds: [f64; 4],
+}
+
+#[derive(Clone)]
 pub(crate) struct TextLine {
-    pub text: String,
+    pub text: Arc<str>,
     pub width: f64,
     pub start: usize,
-    pub carets: Vec<(usize, f64)>,
-    pub clusters: Vec<(std::ops::Range<usize>, f64, f64)>,
+    pub carets: Arc<[(usize, f64)]>,
+    pub clusters: Arc<[(std::ops::Range<usize>, f64, f64)]>,
     pub ink_reserve: f64,
+    pub glyphs: Arc<[ShapedGlyph]>,
 }
 
 impl TextLine {
@@ -355,116 +413,80 @@ pub(crate) struct TextLayout {
     pub ink_reserve: f64,
 }
 
-/// Font database and parsed outlines are retained per renderer, never rebuilt each frame.
-pub(crate) struct VectorCache {
-    pub profiling: bool,
-    pub profile: crate::CanvasRenderProfile,
-    options: usvg::Options<'static>,
-    items: HashMap<DisplayItemId, (SceneDisplayItem, Arc<usvg::Tree>, usize)>,
-    item_bytes: usize,
-    lines: HashMap<String, TextLine>,
-    line_bytes: usize,
-    pub builds: u64,
+/// Immutable shaped runs are shared by interaction, GPU geometry and exports.
+/// Font discovery is lazy and occurs once for the process, including when new
+/// canvases and export workers are created.
+struct SharedTextCache {
+    fontdb: Arc<usvg::fontdb::Database>,
+    select_fallback: usvg::FallbackSelectionFn<'static>,
+    font_bytes: crate::font_cache::Cache,
+    fallbacks: crate::font_cache::FallbackSelections,
+    lines: HashMap<LineKey, (TextLine, usize)>,
+    order: VecDeque<LineKey>,
+    bytes: usize,
+    color_glyphs: HashMap<(usvg::fontdb::ID, u16), Option<Arc<ColorGlyph>>>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct LineKey {
+    family: Arc<str>,
+    text: Arc<str>,
+    size: u64,
+    bold: bool,
+    italic: bool,
+}
+
+fn shared_text() -> MutexGuard<'static, SharedTextCache> {
+    static CACHE: OnceLock<Mutex<SharedTextCache>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let (select_fallback, font_bytes) = crate::font_cache::fallback_resolver();
+            let mut fontdb = usvg::fontdb::Database::new();
+            fontdb.load_system_fonts();
+            Mutex::new(SharedTextCache {
+                fontdb: Arc::new(fontdb),
+                select_fallback,
+                font_bytes,
+                fallbacks: Default::default(),
+                lines: HashMap::new(),
+                order: VecDeque::new(),
+                bytes: 0,
+                color_glyphs: HashMap::new(),
+            })
+        })
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub(crate) fn resolve_fallback(
+    character: char,
+    used: &[usvg::fontdb::ID],
+    database: &mut Arc<usvg::fontdb::Database>,
+) -> Option<usvg::fontdb::ID> {
+    let mut shared = shared_text();
+    let SharedTextCache {
+        fontdb,
+        select_fallback,
+        fallbacks,
+        ..
+    } = &mut *shared;
+    // The inventory is fixed after discovery. Later additions own the bytes of
+    // an existing face and introduce no new glyph repertoire or style choice.
+    let selected = fallbacks.get_or_resolve(character, used, || {
+        (select_fallback)(character, used, fontdb)
+    });
+    *database = fontdb.clone();
+    selected
+}
+
+/// Shared text shaping and portable outline serialization.
+pub(crate) struct VectorContext {
     clear_color: ColorRgba8,
 }
 
-#[derive(Clone)]
-struct ClusterAdvance {
-    glyphs: Vec<(u16, i32, i32)>, // glyph id, x advance, x offset in font units
-    units: f64,
-}
-type ShapingMetrics = HashMap<(usvg::fontdb::ID, usize), HashMap<usize, ClusterAdvance>>;
-
-#[allow(clippy::too_many_arguments)]
-fn cluster_advance(
-    cache: &mut ShapingMetrics,
-    tree: &usvg::Tree,
-    font: usvg::fontdb::ID,
-    run_index: usize,
-    run: std::ops::Range<usize>,
-    text: &str,
-    rtl: bool,
-    start: usize,
-) -> Option<ClusterAdvance> {
-    cache
-        .entry((font, run_index))
-        .or_insert_with(|| {
-            tree.fontdb()
-                .with_face_data(font, |data, face_index| {
-                    let Some(face) = rustybuzz::Face::from_slice(data, face_index) else {
-                        return HashMap::new();
-                    };
-                    let mut buffer = rustybuzz::UnicodeBuffer::new();
-                    buffer.push_str(&text[run.clone()]);
-                    buffer.set_direction(if rtl {
-                        rustybuzz::Direction::RightToLeft
-                    } else {
-                        rustybuzz::Direction::LeftToRight
-                    });
-                    let shaped = rustybuzz::shape(&face, &[], buffer);
-                    let mut map: HashMap<usize, ClusterAdvance> = HashMap::new();
-                    for (info, position) in
-                        shaped.glyph_infos().iter().zip(shaped.glyph_positions())
-                    {
-                        map.entry(info.cluster as usize)
-                            .or_insert_with(|| ClusterAdvance {
-                                glyphs: Vec::new(),
-                                units: f64::from(face.units_per_em()),
-                            })
-                            .glyphs
-                            .push((info.glyph_id as u16, position.x_advance, position.x_offset));
-                    }
-                    map
-                })
-                .unwrap_or_default()
-        })
-        .get(&(start - run.start))
-        .cloned()
-}
-
-fn tree_storage(group: &usvg::Group) -> usize {
-    group.children().iter().fold(1024_usize, |bytes, node| {
-        bytes.saturating_add(match node {
-            usvg::Node::Group(group) => tree_storage(group),
-            usvg::Node::Path(path) => {
-                1024_usize.saturating_add(path.data().segments().count().saturating_mul(64))
-            }
-            usvg::Node::Text(text) => tree_storage(text.flattened()).saturating_add(
-                text.layouted()
-                    .iter()
-                    .flat_map(|span| &span.positioned_glyphs)
-                    .map(|glyph| 256 + glyph.text.len())
-                    .sum::<usize>(),
-            ),
-            usvg::Node::Image(image) => match image.kind() {
-                usvg::ImageKind::SVG(tree) => tree_storage(tree.root()),
-                usvg::ImageKind::JPEG(data)
-                | usvg::ImageKind::PNG(data)
-                | usvg::ImageKind::GIF(data)
-                | usvg::ImageKind::WEBP(data) => data.len().saturating_add(1024),
-            },
-        })
-    })
-}
-
-impl Default for VectorCache {
+impl Default for VectorContext {
     fn default() -> Self {
-        let (font_resolver, _font_cache) = crate::font_cache::resolver();
-        let mut options = usvg::Options {
-            font_family: "Segoe UI".into(),
-            font_resolver,
-            ..Default::default()
-        };
-        options.fontdb_mut().load_system_fonts();
         Self {
-            profiling: false,
-            profile: Default::default(),
-            options,
-            items: HashMap::new(),
-            item_bytes: 0,
-            lines: HashMap::new(),
-            line_bytes: 0,
-            builds: 0,
             clear_color: ColorRgba8 {
                 r: 255,
                 g: 255,
@@ -475,34 +497,24 @@ impl Default for VectorCache {
     }
 }
 
-impl VectorCache {
-    pub fn take_cached_payload(&mut self) -> impl Send + 'static {
-        self.item_bytes = 0;
-        self.line_bytes = 0;
-        (
-            std::mem::take(&mut self.items),
-            std::mem::take(&mut self.lines),
-        )
-    }
-    pub fn retained_bytes(&self) -> (usize, usize) {
-        (self.item_bytes, self.line_bytes)
-    }
-    pub fn clear(&mut self) {
-        self.items.clear();
-        self.item_bytes = 0;
-        self.lines.clear();
-        self.line_bytes = 0;
-    }
+impl VectorContext {
     pub fn set_clear_color(&mut self, color: ColorRgba8) {
-        if color != self.clear_color {
-            self.items.clear();
-            self.item_bytes = 0;
-            self.clear_color = color;
-        }
+        self.clear_color = color;
     }
-    pub fn parse(&self, content: &str) -> Result<usvg::Tree, CanvasError> {
-        usvg::Tree::from_str(&wrap_svg(content), &self.options)
-            .map_err(|error| CanvasError::InvalidFile(error.to_string()))
+
+    /// Serialize an outlined fragment with document-unique definition IDs.
+    pub fn export_svg_content(
+        &mut self,
+        item: &SceneDisplayItem,
+        index: usize,
+    ) -> Result<String, CanvasError> {
+        self.content(
+            item,
+            &mut SvgIds {
+                item: index,
+                next: 0,
+            },
+        )
     }
 
     pub fn text_width(&mut self, text: &str, style: &TextStyle) -> f64 {
@@ -510,222 +522,203 @@ impl VectorCache {
     }
 
     fn shape_line(&mut self, text: &str, style: &TextStyle) -> TextLine {
-        let key = format!(
-            "{}|{}|{}|{}|{text}",
-            style.font_family.as_deref().unwrap_or("Segoe UI"),
-            style.font_size,
-            style.bold,
-            style.italic
-        );
-        if let Some(line) = self.lines.get(&key) {
+        let key = LineKey {
+            family: style.font_family.as_deref().unwrap_or("Segoe UI").into(),
+            text: text.into(),
+            size: style.font_size.to_bits(),
+            bold: style.bold,
+            italic: style.italic,
+        };
+        let mut shared = shared_text();
+        if let Some((line, _)) = shared.lines.get(&key) {
             return line.clone();
         }
-        if text.len() > 2048 {
-            // Obtain the parsed CSS font specification from the same pinned SVG
-            // parser, including quoted family lists and generic family names.
-            let font = self
-                .parse(&text_span("M", style, 0.0, style.font_size))
-                .ok()
-                .and_then(|tree| {
-                    tree.root().children().iter().find_map(|node| {
-                        if let usvg::Node::Text(text) = node {
-                            text.chunks()
-                                .first()?
-                                .spans()
-                                .first()
-                                .map(|span| span.font().clone())
-                        } else {
-                            None
-                        }
-                    })
-                });
-            if let Some(font) = font
-                && let Some(line) =
-                    crate::text_shaping::shape(&mut self.options, text, style, &font)
-            {
-                return self.store_line(key, line);
-            }
+        let font = shared.resolve_font(style);
+        let database = shared.fontdb.clone();
+        drop(shared);
+        // Shaping can be lengthy on an export worker. Only
+        // cache lookup and additive font resolution hold the process lock.
+        let line = font
+            .and_then(|font| crate::text_shaping::shape(database, text, style, font))
+            .unwrap_or_else(|| TextLine {
+                text: text.into(),
+                width: 0.0,
+                start: 0,
+                carets: vec![(0, 0.0)].into(),
+                clusters: Default::default(),
+                ink_reserve: 0.0,
+                glyphs: Default::default(),
+            });
+        let mut shared = shared_text();
+        if let Some((existing, _)) = shared.lines.get(&key) {
+            return existing.clone();
         }
-        let content = text_span(
-            text,
-            &TextStyle {
-                color: ColorRgba8 {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                },
-                ..style.clone()
-            },
-            0.0,
-            style.font_size,
-        );
-        let mut line = TextLine {
-            text: text.into(),
-            width: 0.0,
-            start: 0,
-            carets: vec![(0, 0.0)],
-            clusters: Vec::new(),
-            ink_reserve: 0.0,
-        };
-        if let Ok(tree) = self.parse(&content)
-            && let Some(shaped) = tree.root().children().iter().find_map(|node| match node {
-                usvg::Node::Text(text) => Some(text),
-                _ => None,
-            })
-        {
-            line.width = f64::from(shaped.bounding_box().width());
-            let ink = shaped.flattened().bounding_box();
-            line.ink_reserve = (-f64::from(ink.x()))
-                .max(f64::from(ink.right()) - line.width)
-                .max(0.0);
-            let all_glyphs: Vec<_> = shaped
-                .layouted()
-                .iter()
-                .flat_map(|span| span.positioned_glyphs.iter())
-                .collect();
-            let glyphs: Vec<_> = all_glyphs
-                .iter()
-                .copied()
-                .enumerate()
-                .filter(|(_, g)| !g.text.is_empty())
-                .collect();
-            let bidi = unicode_bidi::BidiInfo::new(text, Some(unicode_bidi::Level::ltr()));
-            if let Some(paragraph) = bidi.paragraphs.first() {
-                let (levels, runs) = bidi.visual_runs(paragraph, paragraph.range.clone());
-                let mut run_index = 0;
-                let mut consumed = 0;
-                let mut clusters = Vec::new();
-                // Recover the cluster cursor from the same HarfBuzz font and full bidi
-                // run used by usvg. PositionedGlyph::transform includes mark offsets;
-                // using it directly gives incorrect caret positions for combining glyphs.
-                let mut offsets = ShapingMetrics::new();
-                for (raw_index, glyph) in glyphs {
-                    while run_index < runs.len() && consumed >= runs[run_index].len() {
-                        run_index += 1;
-                        consumed = 0;
-                    }
-                    let Some(run) = runs.get(run_index) else {
-                        break;
-                    };
-                    let rtl = levels[run.start].is_rtl();
-                    let length = glyph.text.len().min(run.len().saturating_sub(consumed));
-                    let start = if rtl {
-                        run.end - consumed - length
-                    } else {
-                        run.start + consumed
-                    };
-                    let end = start + length;
-                    let mut delta = 0.0;
-                    if let Some(metrics) = cluster_advance(
-                        &mut offsets,
-                        &tree,
-                        glyph.font,
-                        run_index,
-                        run.clone(),
-                        text,
-                        rtl,
-                        start,
-                    ) {
-                        let marker = if rtl { 0 } else { metrics.glyphs.len() - 1 };
-                        if metrics.glyphs[marker].0 == glyph.id.0 {
-                            let begin = if rtl {
-                                raw_index
-                            } else {
-                                raw_index
-                                    .saturating_add(1)
-                                    .saturating_sub(metrics.glyphs.len())
-                            };
-                            let mut advance = 0_i64;
-                            // usvg merges fallback glyphs before positioning a cluster.
-                            // Mirror that actual merged sequence, rather than using
-                            // preceding advances from the final mark's font.
-                            for part in 0..marker {
-                                let actual = all_glyphs.get(begin + part).copied().unwrap_or(glyph);
-                                let value = cluster_advance(
-                                    &mut offsets,
-                                    &tree,
-                                    actual.font,
-                                    run_index,
-                                    run.clone(),
-                                    text,
-                                    rtl,
-                                    start,
-                                )
-                                .and_then(|m| m.glyphs.get(part).copied())
-                                .filter(|m| m.0 == actual.id.0)
-                                .map_or(metrics.glyphs[part].1, |m| m.1);
-                                advance += i64::from(value);
-                            }
-                            delta = (advance as f64 + f64::from(metrics.glyphs[marker].2))
-                                * style.font_size
-                                / metrics.units;
-                        }
-                    }
-                    clusters.push((start, end, rtl, f64::from(glyph.transform().tx) - delta));
-                    consumed += length;
-                }
-                line.carets.clear();
-                for (index, (start, end, rtl, left)) in clusters.iter().copied().enumerate() {
-                    let right = clusters
-                        .get(index + 1)
-                        .map_or(f64::from(shaped.bounding_box().right()), |c| c.3);
-                    let boundaries: Vec<_> = text[start..end]
-                        .grapheme_indices(true)
-                        .map(|(offset, _)| start + offset)
-                        .chain([end])
-                        .collect();
-                    let count = boundaries.len().saturating_sub(1).max(1) as f64;
-                    for (part, boundary) in boundaries.iter().copied().enumerate() {
-                        let f = part as f64 / count;
-                        line.carets.push((
-                            boundary,
-                            if rtl {
-                                right - (right - left) * f
-                            } else {
-                                left + (right - left) * f
-                            },
-                        ));
-                    }
-                    for (part, pair) in boundaries.windows(2).enumerate() {
-                        let a = part as f64 / count;
-                        let b = (part + 1) as f64 / count;
-                        let (x0, x1) = if rtl {
-                            (right - (right - left) * a, right - (right - left) * b)
-                        } else {
-                            (left + (right - left) * a, left + (right - left) * b)
-                        };
-                        line.clusters
-                            .push((pair[0]..pair[1], x0.min(x1), x0.max(x1)));
-                    }
-                }
-            }
-        }
-        if line.carets.is_empty() {
-            line.carets.push((0, 0.0));
-        }
-        if !line.carets.iter().any(|(index, _)| *index == text.len()) {
-            line.carets.push((text.len(), line.width));
-        }
-        self.store_line(key, line)
-    }
-    fn store_line(&mut self, key: String, line: TextLine) -> TextLine {
-        let bytes = key.len()
-            + line.text.len()
-            + line.carets.len() * std::mem::size_of::<(usize, f64)>()
-            + line.clusters.len() * std::mem::size_of::<(std::ops::Range<usize>, f64, f64)>();
-        const LINE_BUDGET: usize = 16 * 1024 * 1024;
-        if self.lines.len() >= 4096 || self.line_bytes.saturating_add(bytes) > LINE_BUDGET {
-            self.lines.clear();
-            self.line_bytes = 0;
-        }
-        if bytes <= LINE_BUDGET {
-            self.lines.insert(key, line.clone());
-            self.line_bytes += bytes;
-        }
-        line
+        shared.store_line(key, line)
     }
 
+    /// Font-unit paths shared by GPU tessellation and portable vector export.
+    pub fn glyph_path(&self, font: usvg::fontdb::ID, glyph: u16) -> Option<lyon::path::Path> {
+        let database = shared_text().fontdb.clone();
+        database.with_face_data(font, |bytes, index| {
+            let face = rustybuzz::ttf_parser::Face::parse(bytes, index).ok()?;
+            let mut outline = GlyphPath::default();
+            face.outline_glyph(rustybuzz::ttf_parser::GlyphId(glyph), &mut outline)?;
+            Some(outline.0.build())
+        })?
+    }
+
+    pub fn color_glyph(&self, font: usvg::fontdb::ID, glyph: u16) -> Option<Arc<ColorGlyph>> {
+        let key = (font, glyph);
+        let shared = shared_text();
+        if let Some(cached) = shared.color_glyphs.get(&key) {
+            return cached.clone();
+        }
+        let database = shared.fontdb.clone();
+        drop(shared);
+        let info = database.face(font)?;
+        let glyph = database.with_face_data(font, |bytes, index| {
+            let face = rustybuzz::ttf_parser::Face::parse(bytes, index).ok()?;
+            let id = rustybuzz::ttf_parser::GlyphId(glyph);
+            if !face.is_color_glyph(id)
+                && face.glyph_svg_image(id).is_none()
+                && face.glyph_raster_image(id, u16::MAX).is_none()
+            {
+                return None;
+            }
+            // COLR v0 layers may extend outside the monochrome base glyph.
+            // The font-wide bounds include every layer outline; v1 clip boxes
+            // below provide a tighter, authoritative rectangle when available.
+            let bbox = if face.is_color_glyph(id) {
+                face.global_bounding_box()
+            } else {
+                face.glyph_bounding_box(id)
+                    .unwrap_or_else(|| face.global_bounding_box())
+            };
+            let mut bounds = [bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max].map(f64::from);
+            if let Some(clip) = face
+                .tables()
+                .colr
+                .and_then(|colr| colr.clip_box(id, face.variation_coordinates()))
+            {
+                bounds = [clip.x_min, clip.y_min, clip.x_max, clip.y_max].map(f64::from);
+            }
+            Some(Arc::new(ColorGlyph {
+                font_id: font,
+                glyph_id: glyph,
+                face_index: index,
+                source: info.source.clone(),
+                units_per_em: f64::from(face.units_per_em()),
+                bounds,
+            }))
+        })?;
+        let mut shared = shared_text();
+        if shared.color_glyphs.len() >= 8192 {
+            shared.color_glyphs.clear();
+        }
+        shared.color_glyphs.insert(key, glyph.clone());
+        glyph
+    }
+
+    pub fn item_uses_color_fonts(&mut self, item: &SceneDisplayItem) -> bool {
+        let item = match item {
+            SceneDisplayItem::Text(item) => item.clone(),
+            SceneDisplayItem::SerialNumber(item)
+                if item.serial_number_type != DisplaySerialNumberType::Circle =>
+            {
+                TextDisplayItem {
+                    text: item.label.clone(),
+                    font_family: item.font_family.clone(),
+                    font_size: item.font_size,
+                    ..Default::default()
+                }
+            }
+            _ => return false,
+        };
+        let style = TextStyle {
+            color: item.color,
+            font_size: item.font_size.max(1.0),
+            bold: item.bold,
+            italic: item.italic,
+            font_family: item.font_family,
+            fill: item.fill,
+            fill_style: FillStyle::Solid,
+            stroke: item.stroke,
+            stroke_width: item.stroke_width,
+            corner_radii: item.corner_radii,
+            horizontal_align: TextHorizontalAlign::Left,
+            vertical_align: TextVerticalAlign::Center,
+            opacity: item.opacity,
+        };
+        item.text.split('\n').any(|line| {
+            self.shape_line(line, &style)
+                .glyphs
+                .iter()
+                .any(|glyph| self.color_glyph(glyph.font, glyph.id).is_some())
+        })
+    }
+}
+
+impl SharedTextCache {
+    fn resolve_font(&mut self, style: &TextStyle) -> Option<usvg::fontdb::ID> {
+        use usvg::fontdb::{Family, Query, Stretch, Style, Weight};
+        let names = font_families(style.font_family.as_deref().unwrap_or("Segoe UI"));
+        let families: Vec<_> = names
+            .iter()
+            .map(|family| match family.as_str() {
+                "serif" => Family::Serif,
+                "sans-serif" => Family::SansSerif,
+                "monospace" => Family::Monospace,
+                "cursive" => Family::Cursive,
+                "fantasy" => Family::Fantasy,
+                name => Family::Name(name),
+            })
+            .chain([Family::SansSerif])
+            .collect();
+        let font = self.fontdb.query(&Query {
+            families: &families,
+            weight: if style.bold {
+                Weight::BOLD
+            } else {
+                Weight::NORMAL
+            },
+            stretch: Stretch::Normal,
+            style: if style.italic {
+                Style::Italic
+            } else {
+                Style::Normal
+            },
+        })?;
+        crate::font_cache::owned_font(font, &mut self.fontdb, &self.font_bytes)
+    }
+
+    fn store_line(&mut self, key: LineKey, line: TextLine) -> TextLine {
+        let bytes = std::mem::size_of::<LineKey>() * 2
+            + key.family.len()
+            + key.text.len()
+            + line.text.len()
+            + line.carets.len() * std::mem::size_of::<(usize, f64)>()
+            + line.clusters.len() * std::mem::size_of::<(std::ops::Range<usize>, f64, f64)>()
+            + line.glyphs.len() * std::mem::size_of::<ShapedGlyph>();
+        const LINE_BUDGET: usize = 16 * 1024 * 1024;
+        if bytes > LINE_BUDGET {
+            return line;
+        }
+        while self.lines.len() >= 4096 || self.bytes.saturating_add(bytes) > LINE_BUDGET {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some((_, bytes)) = self.lines.remove(&oldest) {
+                self.bytes -= bytes;
+            }
+        }
+        self.order.push_back(key.clone());
+        self.lines.insert(key, (line.clone(), bytes));
+        self.bytes += bytes;
+        line
+    }
+}
+
+impl VectorContext {
     pub fn layout(&mut self, text: &str, style: &TextStyle, max_width: f64) -> TextLayout {
         let mut lines = Vec::new();
         for paragraph in text.split('\n') {
@@ -813,87 +806,16 @@ impl VectorCache {
         }
     }
 
-    pub fn item(&mut self, item: &SceneDisplayItem) -> Result<Arc<usvg::Tree>, CanvasError> {
-        let lookup_start = self.profiling.then(std::time::Instant::now);
-        if self.profiling {
-            self.profile.vector_requests += 1;
-        }
-        let id = item_id(item);
-        if let Some((old, tree, _)) = id.and_then(|id| self.items.get(&id))
-            && old == item
-        {
-            if self.profiling {
-                self.profile.vector_hits += 1;
-                self.profile.vector_cache_ms += crate::profile::elapsed(lookup_start);
-            }
-            return Ok(tree.clone());
-        }
-        if self.profiling {
-            self.profile.vector_cache_ms += crate::profile::elapsed(lookup_start);
-        }
-        let lower_start = self.profiling.then(std::time::Instant::now);
-        let content = self.content(item)?;
-        if self.profiling {
-            self.profile.vector_lower_and_layout_ms += crate::profile::elapsed(lower_start);
-        }
-        let parse_start = self.profiling.then(std::time::Instant::now);
-        let tree = Arc::new(self.parse(&content)?);
-        if self.profiling {
-            self.profile.svg_parse_and_shape_ms += crate::profile::elapsed(parse_start);
-            self.profile.vector_builds += 1;
-        }
-        let cache_start = self.profiling.then(std::time::Instant::now);
-        self.builds += 1;
-        // Count flattened outline segments and positioned glyphs as well as source
-        // bytes: a short text string can expand into substantial outline storage.
-        let estimate = content
-            .len()
-            .saturating_mul(8)
-            .saturating_add(tree_storage(tree.root()));
-        const ITEM_BUDGET: usize = 64 * 1024 * 1024;
-        if let Some(id) = id
-            && estimate <= ITEM_BUDGET
-        {
-            if let Some((_, _, bytes)) = self.items.remove(&id) {
-                self.item_bytes -= bytes;
-            }
-            while self.item_bytes.saturating_add(estimate) > ITEM_BUDGET
-                || self.items.len() >= 16384
-            {
-                let Some(victim) = self.items.keys().next().copied() else {
-                    break;
-                };
-                if let Some((_, _, bytes)) = self.items.remove(&victim) {
-                    self.item_bytes -= bytes;
-                }
-            }
-            self.items
-                .insert(id, (item.clone(), tree.clone(), estimate));
-            self.item_bytes += estimate;
-        }
-        if self.profiling {
-            self.profile.vector_cache_ms += crate::profile::elapsed(cache_start);
-        }
-        Ok(tree)
-    }
-
-    pub fn retain(&mut self, items: &[SceneDisplayItem]) {
-        let ids: std::collections::HashSet<_> = items.iter().filter_map(item_id).collect();
-        self.items.retain(|id, (_, _, bytes)| {
-            let keep = ids.contains(id);
-            if !keep {
-                self.item_bytes -= *bytes;
-            }
-            keep
-        });
-    }
-
-    pub fn content(&mut self, item: &SceneDisplayItem) -> Result<String, CanvasError> {
+    fn content(
+        &mut self,
+        item: &SceneDisplayItem,
+        ids: &mut SvgIds,
+    ) -> Result<String, CanvasError> {
         Ok(match item {
-            SceneDisplayItem::Rectangle(item) => rectangle(item),
-            SceneDisplayItem::Arrow(item) => arrow(item, self.clear_color),
-            SceneDisplayItem::SpeechBubble(item) => arrow(&item.path, self.clear_color),
-            SceneDisplayItem::Text(item) => self.text(item),
+            SceneDisplayItem::Rectangle(item) => rectangle(item, ids),
+            SceneDisplayItem::Arrow(item) => arrow(item, self.clear_color, ids),
+            SceneDisplayItem::SpeechBubble(item) => arrow(&item.path, self.clear_color, ids),
+            SceneDisplayItem::Text(item) => self.text(item, ids),
             SceneDisplayItem::SerialNumber(item) => {
                 let square = matches!(
                     item.serial_number_type,
@@ -926,30 +848,35 @@ impl VectorCache {
                     } else {
                         item.fill_style
                     },
-                    opacity: item.opacity,
+                    opacity: 1.0,
                     ..Default::default()
                 };
-                let mut output = rectangle(&shape);
+                let mut output = format!("<g opacity=\"{}\">", item.opacity);
+                output.push_str(&rectangle(&shape, ids));
                 if item.serial_number_type != DisplaySerialNumberType::Circle {
-                    output.push_str(&self.text(&TextDisplayItem {
-                        center_x: item.center_x,
-                        center_y: item.center_y,
-                        width: item.diameter,
-                        height: item.diameter,
-                        rotation: item.rotation,
-                        text: item.label.clone(),
-                        color: if solid {
-                            serial_text_color(item.color)
-                        } else {
-                            item.color
+                    output.push_str(&self.text(
+                        &TextDisplayItem {
+                            center_x: item.center_x,
+                            center_y: item.center_y,
+                            width: item.diameter,
+                            height: item.diameter,
+                            rotation: item.rotation,
+                            text: item.label.clone(),
+                            color: if solid {
+                                serial_text_color(item.color)
+                            } else {
+                                item.color
+                            },
+                            font_size: item.font_size,
+                            font_family: item.font_family.clone(),
+                            horizontal_align: DisplayTextHorizontalAlign::Center,
+                            opacity: 1.0,
+                            ..Default::default()
                         },
-                        font_size: item.font_size,
-                        font_family: item.font_family.clone(),
-                        horizontal_align: DisplayTextHorizontalAlign::Center,
-                        opacity: item.opacity,
-                        ..Default::default()
-                    }));
+                        ids,
+                    ));
                 }
+                output.push_str("</g>");
                 output
             }
             SceneDisplayItem::SerialNumberConnector(item) => {
@@ -974,17 +901,20 @@ impl VectorCache {
                     stroke_attributes(item.stroke, item.stroke_width, StrokeStyle::Solid)
                 )
             }
-            SceneDisplayItem::Magnifier(item) => rectangle(&item.lens),
-            SceneDisplayItem::Filter(_) => String::new(),
+            SceneDisplayItem::Magnifier(_) | SceneDisplayItem::Filter(_) => {
+                return Err(CanvasError::Unsupported(
+                    "vector serialization of GPU effects",
+                ));
+            }
             SceneDisplayItem::Image | SceneDisplayItem::Stroke => {
                 return Err(CanvasError::Unsupported(
-                    "payload-free legacy scene placeholders",
+                    "scene items without rendering payloads",
                 ));
             }
         })
     }
 
-    fn text(&mut self, item: &TextDisplayItem) -> String {
+    fn text(&mut self, item: &TextDisplayItem, ids: &mut SvgIds) -> String {
         let style = TextStyle {
             color: item.color,
             font_size: item.font_size.max(1.0),
@@ -1045,26 +975,83 @@ impl VectorCache {
             };
             let y = top + index as f64 * layout.line_height;
             if item.fill.a != 0 {
-                output.push_str(&rectangle(&RectangleDisplayItem {
-                    center_x: x + line.width / 2.0,
-                    center_y: y + layout.line_height / 2.0,
-                    width: line.width + padding_x * 2.0,
-                    height: layout.line_height + padding_y * 2.0,
-                    fill: item.fill,
-                    fill_style: item.fill_style,
-                    stroke_width: 0.0,
-                    corner_radii: item.corner_radii,
-                    ..Default::default()
-                }));
+                output.push_str(&rectangle(
+                    &RectangleDisplayItem {
+                        center_x: x + line.width / 2.0,
+                        center_y: y + layout.line_height / 2.0,
+                        width: line.width + padding_x * 2.0,
+                        height: layout.line_height + padding_y * 2.0,
+                        fill: item.fill,
+                        fill_style: item.fill_style,
+                        stroke_width: 0.0,
+                        corner_radii: item.corner_radii,
+                        ..Default::default()
+                    },
+                    ids,
+                ));
             }
-            output.push_str(&text_span(&line.text, &style, x, y + style.font_size));
+            output.push_str(&self.outlined_text_span(line, &style, x, y + style.font_size));
         }
         output.push_str("</g>");
         output
     }
+
+    fn outlined_text_span(&self, line: &TextLine, style: &TextStyle, x: f64, y: f64) -> String {
+        let mut data = String::new();
+        for glyph in line.glyphs.iter() {
+            let Some(path) = self.glyph_path(glyph.font, glyph.id) else {
+                continue;
+            };
+            let point = |p: lyon::math::Point| {
+                (
+                    x + glyph.x + f64::from(p.x) * glyph.scale,
+                    y + glyph.y - f64::from(p.y) * glyph.scale,
+                )
+            };
+            for event in path.iter() {
+                use lyon::path::Event;
+                match event {
+                    Event::Begin { at } => {
+                        let (x, y) = point(at);
+                        write!(data, "M{x} {y}").unwrap();
+                    }
+                    Event::Line { to, .. } => {
+                        let (x, y) = point(to);
+                        write!(data, "L{x} {y}").unwrap();
+                    }
+                    Event::Quadratic { ctrl, to, .. } => {
+                        let (cx, cy) = point(ctrl);
+                        let (x, y) = point(to);
+                        write!(data, "Q{cx} {cy} {x} {y}").unwrap();
+                    }
+                    Event::Cubic {
+                        ctrl1, ctrl2, to, ..
+                    } => {
+                        let (ax, ay) = point(ctrl1);
+                        let (bx, by) = point(ctrl2);
+                        let (x, y) = point(to);
+                        write!(data, "C{ax} {ay} {bx} {by} {x} {y}").unwrap();
+                    }
+                    Event::End { close, .. } => {
+                        if close {
+                            data.push('Z');
+                        }
+                    }
+                }
+            }
+        }
+        format!(
+            "<path d=\"{data}\" fill=\"{}\" fill-opacity=\"{}\" stroke=\"{}\" stroke-opacity=\"{}\" stroke-width=\"{}\" paint-order=\"stroke fill\"/>",
+            color(style.color),
+            f64::from(style.color.a) / 255.0,
+            color(style.stroke),
+            f64::from(style.stroke.a) / 255.0,
+            style.stroke_width,
+        )
+    }
 }
 
-fn serial_text_color(fill: ColorRgba8) -> ColorRgba8 {
+pub(crate) fn serial_text_color(fill: ColorRgba8) -> ColorRgba8 {
     let linear = |channel: u8| {
         let value = f64::from(channel) / 255.0;
         if value <= 0.04045 {
@@ -1089,34 +1076,4 @@ fn serial_text_color(fill: ColorRgba8) -> ColorRgba8 {
             a: 224,
         }
     }
-}
-
-pub(crate) fn text_span(text: &str, style: &TextStyle, x: f64, y: f64) -> String {
-    format!(
-        "<text x=\"{x}\" y=\"{y}\" xml:space=\"preserve\" font-family=\"{}\" font-size=\"{}\" font-weight=\"{}\" font-style=\"{}\" fill=\"{}\" fill-opacity=\"{}\" stroke=\"{}\" stroke-opacity=\"{}\" stroke-width=\"{}\" paint-order=\"stroke fill\">{}</text>",
-        xml(style.font_family.as_deref().unwrap_or("Segoe UI")),
-        style.font_size,
-        if style.bold { "bold" } else { "normal" },
-        if style.italic { "italic" } else { "normal" },
-        color(style.color),
-        f64::from(style.color.a) / 255.0,
-        color(style.stroke),
-        f64::from(style.stroke.a) / 255.0,
-        style.stroke_width,
-        xml(text)
-    )
-}
-
-pub(crate) fn item_id(item: &SceneDisplayItem) -> Option<DisplayItemId> {
-    Some(match item {
-        SceneDisplayItem::Rectangle(item) => item.id,
-        SceneDisplayItem::Arrow(item) => item.id,
-        SceneDisplayItem::Text(item) => item.id,
-        SceneDisplayItem::Filter(item) => item.id,
-        SceneDisplayItem::SerialNumber(item) => item.id,
-        SceneDisplayItem::SerialNumberConnector(item) => item.id,
-        SceneDisplayItem::SpeechBubble(item) => item.body.id,
-        SceneDisplayItem::Magnifier(item) => item.lens.id,
-        _ => return None,
-    })
 }

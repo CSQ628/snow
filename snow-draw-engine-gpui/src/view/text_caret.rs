@@ -13,7 +13,10 @@ impl CanvasView {
     }
 
     pub(super) fn text_caret_visible(&self, window: &Window, _: &App) -> bool {
-        self.caret_visible && self.text_caret_can_blink(window)
+        self.caret_visible
+            && self.text_selection_overlay.has_published_caret()
+            && self.focus.is_focused(window)
+            && window.is_window_active()
     }
 
     /// Editing and caret movement start a fresh visible phase. Holding the task

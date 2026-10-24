@@ -738,7 +738,8 @@ mod tests {
 
     #[test]
     fn compact_display_views_stay_below_the_abi_size_budget() {
-        assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 408);
+        // Matches the published C header, including stroke style/seed and text ink reserve.
+        assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 424);
         assert!(std::mem::size_of::<SnowOverlayDisplayItem>() <= 384);
     }
 

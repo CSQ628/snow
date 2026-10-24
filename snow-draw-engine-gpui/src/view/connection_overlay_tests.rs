@@ -38,7 +38,9 @@ fn ink(
     let p = point(px(211.0 + x), px(167.0 + y));
     paths.iter().rev().find_map(|(path, color)| {
         path.vertices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .any(|t| {
                 let cross = |a: Point<Pixels>, b: Point<Pixels>, c: Point<Pixels>| {
                     f32::from(b.x - a.x) * f32::from(c.y - a.y)

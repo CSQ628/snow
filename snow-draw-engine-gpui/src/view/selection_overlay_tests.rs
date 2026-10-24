@@ -56,7 +56,9 @@ impl PaintedControl {
             );
         self.paths.iter().rev().find_map(|(path, color)| {
             path.vertices
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .any(|triangle| {
                     let a = triangle[0].xy_position;
                     let b = triangle[1].xy_position;

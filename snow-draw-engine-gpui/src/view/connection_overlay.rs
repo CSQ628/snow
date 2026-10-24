@@ -1,7 +1,7 @@
 //! Connections use their stroke style; pen filters expose only the brush boundary.
 use super::*;
-use resvg::tiny_skia as skia;
 use std::collections::BTreeMap;
+use usvg::tiny_skia_path as skia;
 
 #[cfg(test)]
 #[path = "connection_overlay_tests.rs"]
@@ -233,7 +233,7 @@ fn append_mesh(mesh: &mut Option<gpui::Path<Pixels>>, path: gpui::Path<Pixels>) 
         *mesh = Some(path);
         return;
     };
-    for t in path.vertices.chunks_exact(3) {
+    for t in path.vertices.as_chunks::<3>().0.iter() {
         mesh.push_triangle(
             (t[0].xy_position, t[1].xy_position, t[2].xy_position),
             (t[0].st_position, t[1].st_position, t[2].st_position),
@@ -394,7 +394,7 @@ fn union_boundary(footprint: &skia::Path) -> Option<skia::Path> {
         (canonical(p.x), canonical(p.y))
     };
     let mut edges = BTreeMap::<(Vertex, Vertex), usize>::new();
-    for triangle in mesh.vertices.chunks_exact(3) {
+    for triangle in mesh.vertices.as_chunks::<3>().0.iter() {
         let [a, b, c] = [
             triangle[0].xy_position,
             triangle[1].xy_position,

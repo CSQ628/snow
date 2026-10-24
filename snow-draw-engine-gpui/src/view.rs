@@ -2,7 +2,6 @@ mod connection_overlay;
 mod element;
 mod host_controls;
 mod overlay_geometry;
-mod raster;
 mod selection_guides;
 mod selection_input;
 #[cfg(test)]
@@ -20,20 +19,20 @@ mod text_overlay;
 use std::sync::Arc;
 
 use gpui::{
-    App, Bounds, ClipboardItem, ContentMask, Context, Corners, CursorStyle, Element, ElementId,
+    App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, KeyDownEvent, KeyUpEvent,
     LayoutId, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
-    Pixels, Point, RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, Style, Subscription,
-    Task, UTF16Selection, Window, div, fill, point, prelude::*, px, relative, rgb, rgba,
+    Pixels, Point, ScrollDelta, ScrollEvent, SharedString, Style, Subscription, Task,
+    UTF16Selection, Window, div, fill, point, prelude::*, px, relative, rgb, rgba,
 };
 use snow_draw_engine as draw;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
-    CanvasDocument, CanvasError, CanvasRenderer, CanvasSession, SourceImage,
+    CanvasDocument, CanvasError, CanvasSession, SourceImage,
     text_buffer::TextBuffer,
-    vector::{TextLayout, VectorCache},
+    vector::{TextLayout, VectorContext},
 };
 
 /// Semantic notifications for a containing toolbar or future Snow Shot shell.
@@ -69,10 +68,10 @@ impl Drop for CanvasView {
 struct ViewRenderKey {
     scene: draw::SceneRevision,
     decoration: draw::DecorationRevision,
-    reference: draw::FrameView,
-    viewport: draw::FrameView,
+    frame: draw::FrameView,
     resources: u64,
     scale: u32,
+    presentation: u64,
 }
 
 /// Retained native canvas. Domain state, transient viewport state and render caches have
@@ -89,18 +88,23 @@ pub struct CanvasView {
     text_style_popup_depth: u32,
     document: CanvasDocument,
     session: CanvasSession,
-    reference_session: CanvasSession,
-    reference_valid: bool,
+    logical_frame_ready: bool,
+    logical_failure: bool,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
     scale: f32,
-    image: Option<Arc<RenderImage>>,
+    #[cfg(target_os = "windows")]
+    gpu_canvas: Option<crate::GpuCanvas>,
+    #[cfg(target_os = "windows")]
+    gpu_frame: Option<crate::GpuCanvasFrame>,
     image_frame: Option<draw::FrameView>,
     image_key: Option<ViewRenderKey>,
     image_scene: Option<crate::RetainedScene>,
-    renderer: Option<CanvasRenderer>,
-    metrics: Option<VectorCache>,
+    image_presentation: Option<crate::CanvasPresentation>,
+    smart_service: crate::SmartEraseService,
+    metrics: VectorContext,
     clipboard_task: Option<Task<()>>,
+    gpu_wait_task: Option<Task<()>>,
     smart_task: Option<Task<()>>,
     smart_cancel: crate::CanvasCancellation,
     smart_requested_generation: Option<u64>,
@@ -134,24 +138,25 @@ impl CanvasView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Self, CanvasError> {
-        let session = CanvasSession::new(&mut document)?;
-        let reference_session = CanvasSession::new(&mut document)?;
+        let mut session = CanvasSession::new(&mut document)?;
+        session.set_deferred_composition(true);
         let focus = cx.focus_handle().tab_stop(true);
         let subscriptions = vec![
             cx.on_release_in(window, |this, window, cx| {
                 this.smart_cancel.cancel();
                 this.caret_blink_task = None;
-                this.text_selection_overlay.clear(window);
-                if let Some(image) = this.image.take() {
-                    let _ = window.drop_image(image);
+                this.text_selection_overlay.clear_published(window);
+                #[cfg(target_os = "windows")]
+                {
+                    this.gpu_frame = None;
+                    this.gpu_canvas = None;
                 }
                 if this.selecting_text || this.document.engine().has_pointer_capture() {
                     window.release_pointer();
                 }
                 crate::cleanup::retire_send_resources(
                     (
-                        this.renderer.take(),
-                        this.metrics.take(),
+                        std::mem::take(&mut this.smart_service),
                         this.draft.take().map(|draft| draft.layout),
                     ),
                     cx,
@@ -188,18 +193,23 @@ impl CanvasView {
             text_style_popup_depth: 0,
             document,
             session,
-            reference_session,
-            reference_valid: false,
+            logical_frame_ready: false,
+            logical_failure: false,
             focus,
             bounds: Bounds::default(),
             scale: window.scale_factor(),
-            image: None,
+            #[cfg(target_os = "windows")]
+            gpu_canvas: None,
+            #[cfg(target_os = "windows")]
+            gpu_frame: None,
             image_frame: None,
             image_key: None,
             image_scene: None,
-            renderer: Some(CanvasRenderer::default()),
-            metrics: Some(VectorCache::default()),
+            image_presentation: None,
+            smart_service: crate::SmartEraseService::default(),
+            metrics: VectorContext::default(),
             clipboard_task: None,
+            gpu_wait_task: None,
             smart_task: None,
             smart_cancel: Default::default(),
             smart_requested_generation: None,
@@ -237,9 +247,6 @@ impl CanvasView {
         options.presentation.validate()?;
         if let Some(area) = options.text_editing_bounds {
             area.validate()?;
-        }
-        if let Some(reference) = options.filter_render_reference {
-            reference.validate()?;
         }
         if !options.interaction_enabled {
             self.finish_text(true, window, cx);
@@ -297,32 +304,29 @@ impl CanvasView {
         self.bounds
     }
     pub fn snapshot(&self) -> Result<crate::CanvasSnapshot, CanvasError> {
-        if !self.reference_valid {
-            return Err(draw::ErrorCode::InvalidState.into());
-        }
-        crate::CanvasSnapshot::from_reference(
-            &self.document,
-            &self.reference_session,
-            self.session.scene().frame(),
-        )
-        .with_presentation(self.options.presentation.clone())
+        crate::CanvasSnapshot::capture(&self.document, &self.session)?
+            .with_presentation(self.options.presentation.clone())
+    }
+    pub fn smart_erase_snapshot(&self) -> crate::SmartEraseSnapshot {
+        self.smart_service.snapshot()
     }
     pub fn error(&self) -> Option<&SharedString> {
         self.error.as_ref()
     }
     pub fn is_rendering(&self) -> bool {
         self.smart_task.is_some()
-            || (self.reference_valid && self.rendered_generation != self.generation)
+            || (!self.logical_failure
+                && (!self.logical_frame_ready || self.rendered_generation != self.generation))
     }
     #[doc(hidden)]
     pub fn render_diagnostics(&self) -> String {
         format!(
-            "generation={} rendered={} pending={} bounds={:?} reference={:?} error={:?}",
+            "generation={} rendered={} pending={} bounds={:?} frame={:?} error={:?}",
             self.generation,
             self.rendered_generation,
             self.is_rendering(),
             self.bounds,
-            self.reference_session.scene().frame(),
+            self.session.scene().frame(),
             self.error
         )
     }
@@ -345,16 +349,35 @@ impl CanvasView {
             }
         };
         let scale = window.scale_factor();
-        let smart_erase = self.renderer.as_ref().unwrap().smart_erase_snapshot();
+        let smart_erase = self.smart_service.snapshot();
+        let mut job = match cx
+            .gpu_service()
+            .map_err(|error| CanvasError::Gpu(error.to_string()))
+            .and_then(|service| {
+                crate::GpuExportJob::bytes(
+                    service,
+                    snapshot,
+                    scale,
+                    smart_erase,
+                    crate::GpuExportFormat::Png,
+                    Default::default(),
+                )
+            }) {
+            Ok(job) => job,
+            Err(error) => {
+                self.fail(error, cx);
+                return;
+            }
+        };
         self.clipboard_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let mut renderer = CanvasRenderer::default();
-                    renderer.seed_smart_erase_snapshot(&smart_erase);
-                    renderer.export_snapshot_png(&snapshot, scale)
-                })
-                .await;
+            let result = loop {
+                if let std::task::Poll::Ready(result) = job.poll() {
+                    break result;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(2))
+                    .await;
+            };
             let _ = this.update_in(cx, |this, _, cx| {
                 this.clipboard_task = None;
                 match result {
@@ -416,7 +439,7 @@ impl CanvasView {
     ) -> Result<(), CanvasError> {
         self.cancel_gesture(window, cx);
         let mut session = CanvasSession::new(&mut document)?;
-        let reference_session = CanvasSession::new(&mut document)?;
+        session.set_deferred_composition(true);
         if self.bounds.size.width > px(0.0) && self.bounds.size.height > px(0.0) {
             session.set_surface(
                 &mut document,
@@ -427,14 +450,16 @@ impl CanvasView {
         self.invalidate_render();
         let previous_document = std::mem::replace(&mut self.document, document);
         crate::retire_canvas_document(previous_document, cx);
-        if let Some(previous) = self.image.take() {
-            let _ = window.drop_image(previous);
+        #[cfg(target_os = "windows")]
+        {
+            self.gpu_frame = None;
+            self.gpu_canvas = None;
         }
         self.image_frame = None;
         self.image_key = None;
         self.image_scene = None;
+        self.image_presentation = None;
         self.session = session;
-        self.reference_session = reference_session;
         self.draft = None;
         self.requested_key = None;
         self.error = None;
@@ -461,8 +486,8 @@ impl CanvasView {
     pub fn fit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let surface = self.session.scene().frame().surface;
         let (center, width, height) = if let Some(image) = self.document.background() {
-            let width = f64::from(image.pixels().width()) * image.units_per_pixel();
-            let height = f64::from(image.pixels().height()) * image.units_per_pixel();
+            let width = f64::from(image.width()) * image.units_per_pixel();
+            let height = f64::from(image.height()) * image.units_per_pixel();
             (
                 draw::Point::new(
                     image.origin().x + width / 2.0,
@@ -503,40 +528,33 @@ impl CanvasView {
     }
 
     fn changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.reference_valid = false;
-        if let Err(error) = self.sync_text_measurements() {
-            self.invalidate_render();
-            self.fail(error, cx);
-            return;
+        self.logical_frame_ready = false;
+        self.logical_failure = false;
+        cx.emit(CanvasEvent::Changed);
+        cx.notify();
+    }
+
+    fn prepare_logical_frame(&mut self) -> Result<(), CanvasError> {
+        if self.logical_frame_ready {
+            return Ok(());
         }
-        if let Err(error) = self.session.refresh(&self.document) {
-            self.invalidate_render();
-            self.fail(error, cx);
-            return;
-        }
-        if let Err(error) = self.update_reference() {
-            self.invalidate_render();
-            self.fail(error, cx);
-            return;
-        }
-        self.reference_valid = true;
-        let cursor = self.reference_session.scene().cursor().unwrap_or_default();
+        self.sync_text_measurements()?;
+        self.session.flush(&self.document)?;
+        self.logical_frame_ready = true;
+        let cursor = self.session.scene().cursor().unwrap_or_default();
         let key = ViewRenderKey {
             scene: cursor.scene_revision,
             decoration: cursor.decoration_revision,
-            reference: self.reference_session.scene().frame(),
-            viewport: self.session.scene().frame(),
+            frame: self.session.scene().frame(),
             resources: self.document.resource_revision(),
             scale: self.scale.to_bits(),
+            presentation: self.options.presentation.cache_key(),
         };
         if self.requested_key != Some(key) {
-            // Input only invalidates. The next GPUI frame consumes the latest
-            // state once, including all pointer events since the previous paint.
             self.requested_key = Some(key);
             self.generation = self.generation.wrapping_add(1);
         }
-        cx.emit(CanvasEvent::Changed);
-        cx.notify();
+        Ok(())
     }
 
     fn invalidate_render(&mut self) {
@@ -547,56 +565,113 @@ impl CanvasView {
     }
 
     fn prepare_display_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.reference_valid
+        #[cfg(target_os = "windows")]
+        if let Ok(service) = window.gpu_service()
+            && self.gpu_frame.as_ref().is_some_and(|frame| {
+                frame.tiles.iter().any(|tile| {
+                    tile.texture.service_id() != service.service_id()
+                        || tile.texture.epoch() != service.epoch()
+                })
+            })
+        {
+            self.gpu_canvas = None;
+            self.rendered_generation = self.generation.wrapping_sub(1);
+        }
+        if self.logical_failure {
+            return;
+        }
+        if let Err(error) = self.prepare_logical_frame() {
+            self.logical_failure = true;
+            self.fail(error, cx);
+            return;
+        }
+        #[cfg(target_os = "windows")]
+        if self
+            .gpu_canvas
+            .as_mut()
+            .is_some_and(|canvas| matches!(canvas.is_ready(), Ok(false)))
+            || matches!(self.text_selection_overlay.is_ready(), Ok(false))
+        {
+            if self.gpu_wait_task.is_none() {
+                self.gpu_wait_task = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(1))
+                        .await;
+                    let _ = this.update_in(cx, |this, _, cx| {
+                        this.gpu_wait_task = None;
+                        cx.notify();
+                    });
+                }));
+            }
+            return;
+        }
+        if self.logical_frame_ready
+            && self.rendered_generation == self.generation
+            && self.image_key == self.requested_key
+        {
+            match text_overlay::prepare_publication(self, window) {
+                Ok(publication) => self.text_selection_overlay.publish(publication),
+                Err(error) => self.fail(error, cx),
+            }
+            return;
+        }
+        if !self.logical_frame_ready
             || self.rendered_generation == self.generation
             || self.bounds.size.width <= px(0.0)
             || self.bounds.size.height <= px(0.0)
         {
             return;
         }
+        #[cfg(target_os = "windows")]
         let result = (|| {
-            let renderer = self.renderer.as_mut().unwrap();
-            if std::mem::take(&mut self.clear_renderer_pending) {
-                renderer.clear_render_state();
+            let overlay = text_overlay::prepare_publication(self, window)?;
+            let service = window
+                .gpu_service()
+                .map_err(|e| CanvasError::Gpu(e.to_string()))?;
+            if self
+                .gpu_canvas
+                .as_ref()
+                .is_none_or(|canvas| canvas.service().service_id() != service.service_id())
+            {
+                self.gpu_canvas = Some(
+                    crate::GpuCanvas::new(service).map_err(|e| CanvasError::Gpu(e.to_string()))?,
+                );
             }
-            renderer.defer_smart_erase();
-            // Retain offscreen effect dependencies but rasterize at display DPI.
-            let image_frame = raster::frame(
-                self.reference_session.scene(),
-                self.session.scene().frame(),
-                self.scale,
-            )?;
-            let scene = self.reference_session.scene().with_frame(image_frame);
-            let image = renderer.render_presented_cancellable(
-                &scene,
-                self.document.background(),
-                self.document.resource_revision(),
-                1.0,
-                &Default::default(),
-                false,
-                &self.options.presentation,
-            )?;
-            Ok::<_, CanvasError>((image, image_frame, renderer.warnings().first().cloned()))
+            let canvas = self.gpu_canvas.as_mut().unwrap();
+            if std::mem::take(&mut self.clear_renderer_pending) {
+                canvas.clear();
+            }
+            canvas
+                .prepare(
+                    self.session.scene(),
+                    self.document.background(),
+                    self.document.resource_revision(),
+                    self.scale,
+                    &self.options.presentation,
+                    &self.smart_service.snapshot(),
+                    &Default::default(),
+                )
+                .map(|frame| (frame, overlay))
+                .map_err(|e| CanvasError::Gpu(e.to_string()))
         })();
-        // Do not retry a failed frame in an idle repaint loop.
+        #[cfg(not(target_os = "windows"))]
+        let result: Result<((), text_overlay::TextOverlayPublication), CanvasError> = Err(
+            CanvasError::Unsupported("GPU canvas requires the Windows backend"),
+        );
+        // Preparation failures keep both content and controls from the last publication.
         self.rendered_generation = self.generation;
         match result {
-            Ok((image, image_frame, warning)) => {
-                let mut bgra = (*image).clone();
-                for pixel in bgra.pixels_mut() {
-                    pixel.0.swap(0, 2);
+            Ok((_frame, overlay)) => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.gpu_frame = Some(_frame);
                 }
-                let image = Arc::new(RenderImage::new(vec![image::Frame::new(bgra)]));
-                if let Some(previous) = self.image.replace(image) {
-                    let _ = window.drop_image(previous);
-                }
-                self.image_frame = Some(image_frame);
+                self.text_selection_overlay.publish(overlay);
+                self.image_frame = Some(self.session.scene().frame());
                 self.image_key = self.requested_key;
                 self.image_scene = Some(self.session.scene().clone());
+                self.image_presentation = Some(self.options.presentation.clone());
                 self.error = None;
-                if let Some(warning) = warning {
-                    self.fail(warning, cx);
-                }
                 cx.emit(CanvasEvent::Rendered);
                 self.prepare_smart_erase(window, cx);
             }
@@ -605,7 +680,7 @@ impl CanvasView {
     }
 
     fn display_scene(&self) -> &crate::RetainedScene {
-        if self.reference_valid && self.image_key == self.requested_key {
+        if self.logical_frame_ready && self.image_key == self.requested_key {
             self.session.scene()
         } else {
             // A failed preparation/composition retains one coherent completed
@@ -614,8 +689,27 @@ impl CanvasView {
         }
     }
 
+    fn display_presentation(&self) -> &crate::CanvasPresentation {
+        self.image_presentation
+            .as_ref()
+            .unwrap_or(&self.options.presentation)
+    }
+
     fn prepare_smart_erase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.renderer.as_ref().unwrap().has_pending_smart_erase() {
+        let seed = self.smart_service.snapshot();
+        #[cfg(target_os = "windows")]
+        let filters = self
+            .gpu_canvas
+            .as_ref()
+            .map_or_else(Vec::new, |canvas| canvas.smart_filters());
+        #[cfg(not(target_os = "windows"))]
+        let filters: Vec<draw::FilterDisplayItem> = Vec::new();
+        let pending = filters.iter().any(|filter| {
+            self.document
+                .background()
+                .is_some_and(|source| seed.patch(filter, source).is_none())
+        });
+        if !pending {
             return;
         }
         if self.smart_requested_generation == Some(self.generation) {
@@ -637,7 +731,13 @@ impl CanvasView {
         let generation = self.generation;
         self.smart_requested_generation = Some(generation);
         self.smart_warning = None;
-        let seed = self.renderer.as_ref().unwrap().smart_erase_snapshot();
+        let seed = self.smart_service.snapshot();
+        let job = crate::smart_erase_service::SmartEraseJob::new(
+            generation,
+            snapshot.background,
+            filters,
+            seed,
+        );
         let cancel = crate::CanvasCancellation::default();
         self.smart_cancel = cancel.clone();
         let worker_cancel = cancel.clone();
@@ -645,21 +745,8 @@ impl CanvasView {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut renderer = CanvasRenderer::default();
-                    renderer.seed_smart_erase_snapshot(&seed);
-                    renderer.render_presented_cancellable(
-                        &snapshot.scene,
-                        snapshot.background.as_ref(),
-                        snapshot.resources,
-                        1.0,
-                        &worker_cancel,
-                        false,
-                        &snapshot.presentation,
-                    )?;
-                    Ok::<_, CanvasError>((
-                        renderer.smart_erase_snapshot(),
-                        renderer.warnings().first().cloned(),
-                    ))
+                    job.run(&worker_cancel)
+                        .map(|output| (output.snapshot, output.warnings.into_iter().next()))
                 })
                 .await;
             let _ = this.update_in(cx, |this, _, cx| {
@@ -669,10 +756,7 @@ impl CanvasView {
                         Ok((results, warning)) => {
                             // Results are keyed by source identity and geometry;
                             // they never replace current display pixels/overlays.
-                            this.renderer
-                                .as_mut()
-                                .unwrap()
-                                .seed_smart_erase_snapshot(&results);
+                            this.smart_service.seed(&results);
                             if generation == this.generation {
                                 this.smart_warning = warning;
                             }
@@ -736,23 +820,9 @@ impl CanvasView {
 
     fn sync_text_measurements(&mut self) -> Result<(), CanvasError> {
         crate::text_layout::synchronize(
-            self.metrics.as_mut().unwrap(),
+            &mut self.metrics,
             &mut self.document,
             self.session.viewport(),
-        )
-    }
-    fn update_reference(&mut self) -> Result<(), CanvasError> {
-        if let Some(reference) = self.options.filter_render_reference {
-            return crate::snapshot::prepare_fixed_reference(
-                &mut self.document,
-                &mut self.reference_session,
-                reference,
-            );
-        }
-        crate::snapshot::prepare_reference(
-            &mut self.document,
-            &mut self.reference_session,
-            self.session.scene().frame(),
         )
     }
 }

@@ -84,13 +84,16 @@ impl Element for CanvasElement {
         let (image, image_frame, focus, editing, cursor, scene, options, crosshair, dirty) =
             self.view.read_with(cx, |this, _| {
                 (
-                    this.image.clone(),
+                    this.gpu_frame.clone(),
                     this.image_frame,
                     this.focus.clone(),
                     this.draft.is_some(),
                     this.effective_cursor(),
                     this.display_scene().clone(),
-                    this.options.clone(),
+                    crate::CanvasViewOptions {
+                        presentation: this.display_presentation().clone(),
+                        ..this.options.clone()
+                    },
                     this.crosshair_cache.and_then(|(_, value)| value),
                     this.show_dirty_regions,
                 )
@@ -98,34 +101,47 @@ impl Element for CanvasElement {
         window.set_cursor_style(cursor, hitbox);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             let clear = scene.frame().clear_color;
-            if options.presentation.clear_background {
+            if options.presentation.clear_background && image.is_none() {
                 window.paint_quad(fill(bounds, gpui_color(clear)));
             }
-            if let Some(image) = image
+            if let Some(frame) = image
                 && let Some(reference) = image_frame
             {
                 let live = scene.frame();
-                let (left, top, right, bottom) =
-                    draw::canvas_viewport(reference.camera, reference.surface);
-                let origin =
-                    draw::canvas_to_view(draw::Point::new(left, top), &live.camera, live.surface);
-                let end = draw::canvas_to_view(
-                    draw::Point::new(right, bottom),
-                    &live.camera,
-                    live.surface,
+                let ratio = live.camera.zoom / reference.camera.zoom;
+                let density = frame.scale;
+                let top_left = draw::view_to_canvas(
+                    draw::Point::new(0.0, 0.0),
+                    &reference.camera,
+                    reference.surface,
                 );
-                let image_bounds = Bounds::from_corners(
-                    bounds.origin + point(px(origin.x as f32), px(origin.y as f32)),
-                    bounds.origin + point(px(end.x as f32), px(end.y as f32)),
-                );
-                let _ = window.paint_image(
-                    bounds,
-                    image_bounds,
-                    Corners::all(px(0.0)),
-                    image,
-                    0,
-                    false,
-                );
+                let origin = draw::canvas_to_view(top_left, &live.camera, live.surface);
+                for tile in frame.tiles.iter() {
+                    let r = tile.region;
+                    let tile_bounds = Bounds::from_corners(
+                        bounds.origin
+                            + point(
+                                px(origin.x as f32 + r.x as f32 / density * ratio as f32),
+                                px(origin.y as f32 + r.y as f32 / density * ratio as f32),
+                            ),
+                        bounds.origin
+                            + point(
+                                px(origin.x as f32
+                                    + (r.x + r.width) as f32 / density * ratio as f32),
+                                px(origin.y as f32
+                                    + (r.y + r.height) as f32 / density * ratio as f32),
+                            ),
+                    );
+                    let _ = window.paint_gpu_texture(
+                        tile_bounds,
+                        tile.texture.clone(),
+                        gpui::GpuTextureOptions {
+                            revision: tile.revision,
+                            linear_filtering: false,
+                            ..Default::default()
+                        },
+                    );
+                }
             }
             if options.presentation.content_visible {
                 paint_overlays(scene.overlays(), scene.frame(), bounds, window, cx);
@@ -136,9 +152,9 @@ impl Element for CanvasElement {
                     ElementInputHandler::new(bounds, self.view.clone()),
                     cx,
                 );
-                self.view
-                    .update(cx, |this, cx| paint_text_selection(this, window, cx));
             }
+            self.view
+                .update(cx, |this, cx| paint_text_selection(this, window, cx));
             if dirty {
                 for (regions, color) in [
                     (scene.dirty_regions(), rgba(0xe34b4be0)),
@@ -191,7 +207,7 @@ impl Element for CanvasElement {
         });
         let entity = self.view.downgrade();
         let hit = hitbox.clone();
-        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+        window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
             if phase.bubble() && hit.should_handle_scroll(window) {
                 let _ = entity.update(cx, |this, cx| {
                     if !this.options.interaction_enabled || !this.options.wheel_zoom_enabled {
@@ -215,7 +231,7 @@ impl Element for CanvasElement {
                             position,
                             delta: draw::Vector2 { x: -x, y: -y },
                             delta_kind: kind,
-                            modifiers: modifiers(event.modifiers),
+                            modifiers: modifiers(event.modifiers, cx),
                         }),
                         &hit,
                         window,
@@ -243,6 +259,7 @@ impl CanvasView {
         position: Point<Pixels>,
         button: Option<MouseButton>,
         modifier: Modifiers,
+        cx: &App,
     ) -> draw::InputEvent {
         draw::InputEvent::Pointer(draw::PointerEvent {
             pointer_id: 1,
@@ -259,7 +276,7 @@ impl CanvasView {
                     _ => 0,
                 }
             }),
-            modifiers: modifiers(modifier),
+            modifiers: modifiers(modifier, cx),
             pressure: None,
             timestamp_ms: 0,
         })
@@ -326,7 +343,13 @@ impl CanvasView {
             draw::PointerEventType::Down
         };
         self.input(
-            self.pointer(kind, event.position, Some(event.button), event.modifiers),
+            self.pointer(
+                kind,
+                event.position,
+                Some(event.button),
+                event.modifiers,
+                cx,
+            ),
             hitbox,
             window,
             cx,
@@ -410,6 +433,7 @@ impl CanvasView {
                 event.position,
                 event.pressed_button,
                 event.modifiers,
+                cx,
             ),
             hitbox,
             window,
@@ -443,6 +467,7 @@ impl CanvasView {
                 event.position,
                 Some(event.button),
                 event.modifiers,
+                cx,
             ),
             hitbox,
             window,
@@ -489,9 +514,9 @@ fn pointer_button(button: MouseButton) -> draw::PointerButton {
         _ => draw::PointerButton::Primary,
     }
 }
-fn modifiers(modifiers: Modifiers) -> draw::Modifiers {
+fn modifiers(modifiers: Modifiers, cx: &App) -> draw::Modifiers {
     draw::Modifiers {
-        ctrl: modifiers.secondary(),
+        ctrl: modifiers.secondary(cx),
         shift: modifiers.shift,
         alt: modifiers.alt,
         meta: modifiers.platform,
@@ -569,42 +594,11 @@ fn paint_overlays(
 }
 
 fn paint_text_selection(this: &mut CanvasView, window: &mut Window, cx: &mut Context<CanvasView>) {
-    let Some(draft) = this.draft.as_ref() else {
-        return;
-    };
-    let selection = draft.buffer.selection();
-    let marked = draft.buffer.marked.clone();
-    let color = text_overlay::editing_color(draft.style.color);
-    let rectangles = if marked.is_none() && !selection.is_empty() {
-        this.text_segments(selection)
-    } else {
-        Vec::new()
-    };
-    for &(left, top, right, bottom) in &rectangles {
-        let points = [(left, top), (right, top), (right, bottom), (left, bottom)]
-            .map(|(x, y)| this.text_world_position(x, y).unwrap());
-        let mut path = PathBuilder::fill();
-        path.add_polygon(&points, true);
-        if let Ok(path) = path.build() {
-            window.paint_path(path, rgba(0x3399ff78));
-        }
-    }
-    if let Err(error) = text_overlay::paint_selected_text(this, &rectangles, window) {
-        this.fail(error, cx);
-    }
-    if this.text_caret_visible(window, cx)
-        && let Some((path, color)) = text_overlay::caret_path(this)
+    let caret_visible = this.text_caret_visible(window, cx);
+    if let Err(error) =
+        this.text_selection_overlay
+            .paint_published(this.bounds, caret_visible, window)
     {
-        window.paint_path(path, gpui_color(color));
-    }
-    if let Some(marked) = marked {
-        for (left, _, right, bottom) in this.text_segments(marked) {
-            let mut path = PathBuilder::stroke(px(1.0));
-            path.move_to(this.text_world_position(left, bottom).unwrap());
-            path.line_to(this.text_world_position(right, bottom).unwrap());
-            if let Ok(path) = path.build() {
-                window.paint_path(path, gpui_color(color));
-            }
-        }
+        this.fail(error, cx);
     }
 }

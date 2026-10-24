@@ -96,11 +96,9 @@ impl CanvasView {
             self.fail("Text exceeds the 64 KiB editing limit or contains NUL", cx);
             return;
         }
-        let layout = self.metrics.as_mut().unwrap().layout(
-            &text,
-            &style,
-            if auto_resize { 1.0e8 } else { width },
-        );
+        let layout = self
+            .metrics
+            .layout(&text, &style, if auto_resize { 1.0e8 } else { width });
         self.draft = Some(TextDraft {
             buffer: TextBuffer::new(text),
             target,
@@ -142,7 +140,7 @@ impl CanvasView {
             return;
         }
         let selected = self.document.engine().selected_ids();
-        let serial = self.session.scene().items().iter().any(|item| matches!(item, draw::SceneDisplayItem::SerialNumber(item)
+        let serial = self.session.scene().ordered_nodes().map(|node| node.item.as_ref()).any(|item| matches!(item, draw::SceneDisplayItem::SerialNumber(item)
             if selected.iter().any(|id| id.index == item.id.index && id.generation == item.id.generation)));
         if serial {
             self.create_serial_number_text(window, cx);
@@ -167,11 +165,7 @@ impl CanvasView {
         else {
             return;
         };
-        let layout = self
-            .metrics
-            .as_mut()
-            .unwrap()
-            .layout("", &state.text_style, 1.0e8);
+        let layout = self.metrics.layout("", &state.text_style, 1.0e8);
         let result = self.document.command(|engine| {
             engine.create_serial_number_text_with_viewport_changes(
                 viewport,
@@ -204,7 +198,7 @@ impl CanvasView {
         };
         draft.preferred_x = None;
         draft.caret_affinity = None;
-        draft.layout = self.metrics.as_mut().unwrap().layout(
+        draft.layout = self.metrics.layout(
             &draft.buffer.text,
             &draft.style,
             if draft.auto_resize {
@@ -271,7 +265,7 @@ impl CanvasView {
             .buffer
             .text
             .graphemes(true)
-            .map(|g| self.metrics.as_mut().unwrap().text_width(g, &draft.style))
+            .map(|g| self.metrics.text_width(g, &draft.style))
             .fold(1.0, f64::max);
         draft.minimum_grapheme_width = minimum;
         let viewport = self.session.viewport();
@@ -556,10 +550,10 @@ impl CanvasView {
         if self.draft.is_some() && event.prefer_character_input {
             return;
         }
-        let resolved_key = self.command_key(&event.keystroke);
+        let resolved_key = self.command_key(&event.keystroke, cx);
         let key = resolved_key.as_ref();
         let modifiers = event.keystroke.modifiers;
-        let command = modifiers.secondary();
+        let command = modifiers.secondary(cx);
         if key == "delete" && self.draft.is_some() && !self.options.delete_text_after_cursor {
             let draft = self.draft.as_mut().unwrap();
             draft.buffer.anchor = 0;

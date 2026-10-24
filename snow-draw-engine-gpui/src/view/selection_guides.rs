@@ -1,5 +1,5 @@
 use super::*;
-use resvg::tiny_skia as skia;
+use usvg::tiny_skia_path as skia;
 
 pub(super) fn guide_paths(
     item: &draw::SnapGuideDisplayItem,
@@ -69,7 +69,7 @@ mod tests {
 
     fn covers(paths: &[gpui::Path<Pixels>], x: f32, y: f32) -> bool {
         paths.iter().any(|path| {
-            path.vertices.chunks_exact(3).any(|t| {
+            path.vertices.as_chunks::<3>().0.iter().any(|t| {
                 let p = point(px(x), px(y));
                 let cross = |a: Point<Pixels>, b: Point<Pixels>, c: Point<Pixels>| {
                     f32::from(b.x - a.x) * f32::from(c.y - a.y)

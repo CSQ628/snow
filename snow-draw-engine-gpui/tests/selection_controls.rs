@@ -93,8 +93,8 @@ fn handle(session: &CanvasSession, kind: UiShapeKind) -> Point<f64> {
 fn rectangle(session: &CanvasSession) -> RectangleDisplayItem {
     session
         .scene()
-        .items()
-        .iter()
+        .ordered_nodes()
+        .map(|node| node.item.as_ref())
         .find_map(|item| match item {
             SceneDisplayItem::Rectangle(rect) => Some(*rect),
             _ => None,
@@ -199,8 +199,8 @@ fn magnifier_grip_moves_lens_independently_with_undo() {
     let magnifier = |session: &CanvasSession| {
         session
             .scene()
-            .items()
-            .iter()
+            .ordered_nodes()
+            .map(|node| node.item.as_ref())
             .find_map(|item| match item {
                 SceneDisplayItem::Magnifier(value) => Some(value.clone()),
                 _ => None,

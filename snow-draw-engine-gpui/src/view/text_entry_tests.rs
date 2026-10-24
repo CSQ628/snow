@@ -25,8 +25,8 @@ fn text_fixture(
             let id = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Text(text) = item {
                         Some(draw::ElementId {
@@ -231,8 +231,8 @@ fn text_entry_finishing_press_does_not_start_a_new_draft(cx: &mut TestAppContext
             let texts: Vec<_> = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .filter_map(|item| match item {
                     draw::SceneDisplayItem::Text(item) => Some(item.text.as_str()),
                     _ => None,
@@ -259,7 +259,7 @@ fn text_entry_finishing_press_can_open_another_existing_element(cx: &mut TestApp
         let draft = view.draft.as_ref().unwrap();
         assert_eq!(draft.target, draw::TextCommitTarget::Existing(id));
         assert_eq!(draft.buffer.text, "Edit this text");
-        assert!(view.session.scene().items().iter().any(|item| {
+        assert!(view.session.scene().ordered_nodes().map(|node| node.item.as_ref()).any(|item| {
             matches!(item, draw::SceneDisplayItem::Text(item) if item.text == "Another annotation")
         }));
     });
@@ -341,8 +341,8 @@ fn text_entry_rotated_wrapped_unicode_click_preserves_visual_line_and_grapheme(
                 let id = view
                     .session
                     .scene()
-                    .items()
-                    .iter()
+                    .ordered_nodes()
+                    .map(|node| node.item.as_ref())
                     .find_map(|item| match item {
                         draw::SceneDisplayItem::Text(item) => Some(draw::ElementId {
                             index: item.id.index,

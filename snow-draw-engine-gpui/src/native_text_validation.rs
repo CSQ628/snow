@@ -41,7 +41,7 @@ fn click(window: &mut Window, cx: &mut App, position: Point<Pixels>) {
     }
 }
 
-fn key(window: &mut Window, cx: &mut App, key: &str) {
+fn key(window: &mut Window, cx: &mut App, key: &'static str) {
     window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
 }
 
@@ -147,8 +147,8 @@ pub(super) async fn run(
         let ids: Vec<_> = view
             .session()
             .scene()
-            .items()
-            .iter()
+            .ordered_nodes()
+            .map(|node| node.item.as_ref())
             .filter_map(|item| {
                 if let draw::SceneDisplayItem::Text(text) = item {
                     Some(draw::ElementId {

@@ -1,5 +1,5 @@
 use super::*;
-use resvg::tiny_skia as skia;
+use usvg::tiny_skia_path as skia;
 
 /// Stroke only the visible part of a straight overlay segment. `dash` supplies
 /// logical pixel intervals and their phase at the original `a`; `None` is solid.
@@ -115,7 +115,7 @@ mod tests {
 
     fn covers(path: &gpui::Path<Pixels>, x: f32, y: f32) -> bool {
         let query = p(x, y);
-        path.vertices.chunks_exact(3).any(|triangle| {
+        path.vertices.as_chunks::<3>().0.iter().any(|triangle| {
             let [a, b, c] = [
                 triangle[0].xy_position,
                 triangle[1].xy_position,

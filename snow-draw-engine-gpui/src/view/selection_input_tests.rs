@@ -130,8 +130,8 @@ fn fixture(cx: &mut TestAppContext, annotation: &[u8]) -> (Entity<CanvasView>, V
             let id = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     let id = match item {
                         draw::SceneDisplayItem::Rectangle(rect) => rect.id,

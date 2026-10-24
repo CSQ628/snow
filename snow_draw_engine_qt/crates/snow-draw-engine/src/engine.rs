@@ -48,6 +48,8 @@ mod mutations;
 #[cfg(test)]
 mod pen_highlight_angle_tests;
 #[cfg(test)]
+mod retained_tests;
+#[cfg(test)]
 mod rounded_diamond_tests;
 #[cfg(test)]
 mod shape_text_tests;
@@ -95,6 +97,7 @@ pub struct InputUpdate {
 struct ViewportSlot {
     view: EditorViewportState,
     composer: ViewportComposer,
+    retained: Option<std::cell::RefCell<snow_draw_engine_scene::RetainedSceneComposer>>,
 }
 
 #[derive(Debug)]
@@ -198,6 +201,9 @@ impl Engine {
         self.scene_cache.sync(&self.model, None);
         for slot in self.viewports.values_mut() {
             slot.composer.reset_document_retained_state();
+            if let Some(retained) = &mut slot.retained {
+                retained.get_mut().invalidate_document();
+            }
         }
         self.refresh_all_viewports()
     }
@@ -219,6 +225,11 @@ impl Engine {
                         ViewportSlot {
                             view: slot.view,
                             composer: ViewportComposer::new(),
+                            retained: slot.retained.as_ref().map(|_| {
+                                std::cell::RefCell::new(
+                                    snow_draw_engine_scene::RetainedSceneComposer::new(),
+                                )
+                            }),
                         },
                     )
                 })

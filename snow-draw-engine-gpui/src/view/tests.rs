@@ -1,3 +1,4 @@
+#![cfg(target_os = "windows")]
 use super::*;
 use gpui::{TestAppContext, VisualTestContext, size};
 
@@ -260,24 +261,22 @@ fn custom_crosshair_paints_current_hover_geometry_and_tracks_moves(cx: &mut Test
 #[gpui::test]
 fn view_cache_reset_is_deferred_until_frame_preparation(cx: &mut TestAppContext) {
     let (view, mut visual) = fixture(cx, crate::showcase_document().unwrap());
-    let builds = view.read_with(&visual, |v, _| {
-        v.renderer.as_ref().unwrap().vector_build_count()
-    });
+    let builds = view.read_with(&visual, |v, _| v.gpu_frame.as_ref().unwrap().revision);
     let before = view.read_with(&visual, |v, _| {
         v.document.engine().document_checkpoint().unwrap()
     });
     visual.update(|window, cx| {
         view.update(cx, |v, cx| {
             v.clear_render_state(window, cx);
-            assert!(v.image.is_some());
-            assert_eq!(v.renderer.as_ref().unwrap().vector_build_count(), builds);
+            assert!(v.gpu_frame.is_some());
+            assert_eq!(v.gpu_frame.as_ref().unwrap().revision, builds);
         })
     });
     paint(&mut visual);
-    assert!(view.read_with(
-        &visual,
-        |v, _| v.renderer.as_ref().unwrap().vector_build_count() > builds
-    ));
+    assert!(
+        view.read_with(&visual, |v, _| v.gpu_frame.as_ref().unwrap().revision
+            > builds)
+    );
     assert_eq!(
         view.read_with(&visual, |v, _| v
             .document
@@ -296,6 +295,15 @@ fn fixture(
     cx: &mut TestAppContext,
     document: CanvasDocument,
 ) -> (Entity<CanvasView>, VisualTestContext) {
+    struct TestGpuHost {
+        _host: gpui_windows::gpu_extensions::OffscreenGpuHost,
+    }
+    impl gpui::Global for TestGpuHost {}
+    if !cx.update(|cx| cx.has_global::<TestGpuHost>()) {
+        let host = gpui_windows::gpu_extensions::OffscreenGpuHost::new().unwrap();
+        cx.set_gpu_service(host.service());
+        cx.update(|cx| cx.set_global(TestGpuHost { _host: host }));
+    }
     let window = cx.open_window(size(px(640.0), px(480.0)), |window, cx| {
         CanvasView::new(document, window, cx).unwrap()
     });
@@ -328,8 +336,8 @@ fn repeated_dense_edits_coalesce_and_finish_with_the_latest_generation(cx: &mut 
     let (view, mut visual) = fixture(cx, document);
     let (original, render_count) = view.read_with(&visual, |v, _| {
         (
-            v.image.clone().unwrap(),
-            v.renderer.as_ref().unwrap().render_count(),
+            v.gpu_frame.clone().unwrap(),
+            v.gpu_frame.as_ref().unwrap().revision,
         )
     });
     visual.update(|window, cx| {
@@ -337,8 +345,8 @@ fn repeated_dense_edits_coalesce_and_finish_with_the_latest_generation(cx: &mut 
             let id = v
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Rectangle(r) = item {
                         Some(draw::ElementId {
@@ -366,13 +374,13 @@ fn repeated_dense_edits_coalesce_and_finish_with_the_latest_generation(cx: &mut 
                     .unwrap();
                 v.changed(window, cx);
             }
-            assert!(v.is_rendering());
-            assert_eq!(v.renderer.as_ref().unwrap().render_count(), render_count);
+            assert!(!v.logical_frame_ready);
+            assert_eq!(v.gpu_frame.as_ref().unwrap().revision, render_count);
             assert!(
-                Arc::ptr_eq(v.image.as_ref().unwrap(), &original),
+                Arc::ptr_eq(&v.gpu_frame.as_ref().unwrap().tiles, &original.tiles),
                 "pending edits removed the last completed image"
             );
-            assert_ne!(v.rendered_generation, v.generation);
+            assert!(!v.logical_frame_ready);
         })
     });
     paint(&mut visual);
@@ -381,7 +389,7 @@ fn repeated_dense_edits_coalesce_and_finish_with_the_latest_generation(cx: &mut 
         assert!(!v.is_rendering());
         assert!(v.error.is_none());
         assert_eq!(
-            v.renderer.as_ref().unwrap().render_count(),
+            v.gpu_frame.as_ref().unwrap().revision,
             render_count + 1,
             "queued every intermediate edit instead of coalescing"
         );
@@ -444,8 +452,8 @@ fn editing_without_changes_preserves_narrow_text_and_ime_commits_once(cx: &mut T
     let id = view.read_with(&visual, |view, _| {
         view.session
             .scene()
-            .items()
-            .iter()
+            .ordered_nodes()
+            .map(|node| node.item.as_ref())
             .find_map(|item| match item {
                 draw::SceneDisplayItem::Text(text) => Some(draw::ElementId {
                     index: text.id.index,
@@ -502,23 +510,20 @@ fn editing_without_changes_preserves_narrow_text_and_ime_commits_once(cx: &mut T
 fn dpi_and_zoom_render_at_device_resolution_without_idle_rendering(cx: &mut TestAppContext) {
     let (view, mut visual) = fixture(cx, CanvasDocument::default());
     for scale in [1.25, 1.5, 2.0, 1.0] {
-        let reference = view.read_with(&visual, |view, _| view.reference_session.scene().frame());
+        let reference = view.read_with(&visual, |view, _| view.session.scene().frame());
         let (generation, count) = view.read_with(&visual, |view, _| {
-            (
-                view.generation,
-                view.renderer.as_ref().unwrap().render_count(),
-            )
+            (view.generation, view.gpu_frame.as_ref().unwrap().revision)
         });
         visual.simulate_scale_factor_change(scale);
         paint(&mut visual);
         view.read_with(&visual, |view, _| {
-            assert_eq!(view.reference_session.scene().frame(), reference);
+            assert_eq!(view.session.scene().frame(), reference);
             assert!(
                 view.generation > generation,
                 "DPI change reused the old raster"
             );
             assert_eq!(view.rendered_generation, view.generation);
-            assert_eq!(view.renderer.as_ref().unwrap().render_count(), count + 1);
+            assert_eq!(view.gpu_frame.as_ref().unwrap().revision, count + 1);
         });
         assert_device_resolution(&view, &mut visual);
         visual.update(|window, cx| view.update(cx, |view, cx| view.zoom(1.5, window, cx)));
@@ -527,52 +532,45 @@ fn dpi_and_zoom_render_at_device_resolution_without_idle_rendering(cx: &mut Test
     }
 }
 
+fn frame_pixels(view: &CanvasView) -> image::RgbaImage {
+    crate::gpu_tests::read_frame(
+        &view.gpu_canvas.as_ref().unwrap().service(),
+        view.gpu_frame.as_ref().unwrap(),
+    )
+    .unwrap()
+}
+
 fn assert_device_resolution(view: &Entity<CanvasView>, visual: &mut VisualTestContext) {
     let generation = visual.update(|window, cx| {
         view.read_with(cx, |view, _| {
             assert!(view.error.is_none(), "{:?}", view.error);
             let live = view.session.scene().frame();
-            let raster = view.image_frame.unwrap();
-            let scale = f64::from(window.scale_factor());
-            assert!(
-                (raster.camera.zoom / live.camera.zoom - scale).abs() < 1.0e-9,
-                "canvas raster density does not match the display"
+            assert_eq!(view.image_frame.unwrap(), live);
+            let size = view.gpu_frame.as_ref().unwrap().size;
+            assert_eq!(
+                size,
+                [
+                    (live.surface.width as f32 * window.scale_factor()).ceil() as u32,
+                    (live.surface.height as f32 * window.scale_factor()).ceil() as u32
+                ]
             );
-            let size = view.image.as_ref().unwrap().size(0);
-            assert_eq!(u32::from(size.width), raster.surface.width);
-            assert_eq!(u32::from(size.height), raster.surface.height);
-            let (left, top, right, bottom) = draw::canvas_viewport(raster.camera, raster.surface);
-            let origin =
-                draw::canvas_to_view(draw::Point::new(left, top), &live.camera, live.surface);
-            let end =
-                draw::canvas_to_view(draw::Point::new(right, bottom), &live.camera, live.surface);
-            assert!(((end.x - origin.x) * scale - f64::from(u32::from(size.width))).abs() < 1.0e-7);
-            assert!(
-                ((end.y - origin.y) * scale - f64::from(u32::from(size.height))).abs() < 1.0e-7
-            );
-            // The padded texture must start on a device pixel and cover the whole view.
-            assert!((origin.x * scale - (origin.x * scale).round()).abs() < 1.0e-7);
-            assert!((origin.y * scale - (origin.y * scale).round()).abs() < 1.0e-7);
-            assert!(origin.x < 0.0 && origin.y < 0.0);
-            assert!(end.x > f64::from(live.surface.width));
-            assert!(end.y > f64::from(live.surface.height));
             view.generation
         })
     });
-    let image = view.read_with(visual, |view, _| view.image.clone().unwrap());
+    let image = view.read_with(visual, |view, _| view.gpu_frame.clone().unwrap());
     paint(visual);
     paint(visual);
     view.read_with(visual, |view, _| {
         assert_eq!(view.generation, generation);
         assert!(
-            Arc::ptr_eq(view.image.as_ref().unwrap(), &image),
-            "idle paint replaced the raster"
+            Arc::ptr_eq(&view.gpu_frame.as_ref().unwrap().tiles, &image.tiles),
+            "idle paint replaced GPU tiles"
         );
     });
 }
 
 #[gpui::test]
-fn device_raster_keeps_single_pixel_edges_with_source_and_fixed_grids(cx: &mut TestAppContext) {
+fn device_raster_keeps_single_pixel_edges_with_source_scaling(cx: &mut TestAppContext) {
     let mut document = CanvasDocument::default();
     document.set_background(Some(
         SourceImage::new(image::RgbaImage::from_pixel(
@@ -587,7 +585,7 @@ fn device_raster_keeps_single_pixel_edges_with_source_and_fixed_grids(cx: &mut T
     document.command(|e| e.apply_annotation_json(br#"{"version":1,"operations":[{"type":"rectangle","bounds":[20,20,0.5,30],"style":{"fill":[0,0,0,255],"stroke_width":0}}]}"#)).unwrap();
     let (view, mut visual) = fixture(cx, document);
     visual.simulate_scale_factor_change(2.0);
-    for fixed in [false, true] {
+    {
         visual.update(|window, cx| {
             view.update(cx, |view, cx| {
                 view.session
@@ -599,14 +597,7 @@ fn device_raster_keeps_single_pixel_edges_with_source_and_fixed_grids(cx: &mut T
                         },
                     )
                     .unwrap();
-                let options = crate::CanvasViewOptions {
-                    filter_render_reference: fixed.then_some(crate::CanvasRenderReference {
-                        canvas_rect: crate::CanvasRect::new(0.0, 0.0, 640.0, 480.0).unwrap(),
-                        pixels_per_canvas_unit: 0.5,
-                    }),
-                    ..Default::default()
-                };
-                view.set_options(options, window, cx).unwrap();
+                view.set_options(Default::default(), window, cx).unwrap();
             })
         });
         paint(&mut visual);
@@ -615,10 +606,11 @@ fn device_raster_keeps_single_pixel_edges_with_source_and_fixed_grids(cx: &mut T
             let frame = view.image_frame.unwrap();
             let position =
                 draw::canvas_to_view(draw::Point::new(20.0, 30.0), &frame.camera, frame.surface);
-            let x = position.x.round() as usize;
-            let y = position.y.round() as usize;
-            let pixels = view.image.as_ref().unwrap().as_bytes(0).unwrap();
-            let offset = (y * frame.surface.width as usize + x) * 4;
+            let x = (position.x * f64::from(view.scale)).round() as usize;
+            let y = (position.y * f64::from(view.scale)).round() as usize;
+            let pixels = frame_pixels(view);
+            let offset = (y * pixels.width() as usize + x) * 4;
+            let pixels = pixels.as_raw();
             assert_eq!(&pixels[offset - 4..offset], &[255; 4]);
             assert_eq!(&pixels[offset..offset + 4], &[0, 0, 0, 255]);
             assert_eq!(&pixels[offset + 4..offset + 8], &[255; 4]);
@@ -657,29 +649,25 @@ fn device_raster_matches_snapshot_with_filter_support_at_fractional_dpi(cx: &mut
         paint(&mut visual);
         assert_device_resolution(&view, &mut visual);
         view.read_with(&visual, |view, _| {
-            let snapshot = view.snapshot().unwrap();
-            let bytes = CanvasRenderer::default()
-                .export_snapshot_png(&snapshot, scale)
+            let mut renderer =
+                crate::GpuCanvas::new(view.gpu_canvas.as_ref().unwrap().service()).unwrap();
+            let expected = renderer
+                .prepare(
+                    view.session.scene(),
+                    view.document.background(),
+                    view.document.resource_revision(),
+                    scale,
+                    &view.options.presentation,
+                    &view.smart_service.snapshot(),
+                    &Default::default(),
+                )
                 .unwrap();
-            let expected = image::load_from_memory(&bytes).unwrap().into_rgba8();
-            let frame = view.image_frame.unwrap();
-            let live = view.session.scene().frame();
-            let origin =
-                draw::view_to_canvas(draw::Point::new(0.0, 0.0), &live.camera, live.surface);
-            let offset = draw::canvas_to_view(origin, &frame.camera, frame.surface);
-            let pixels = view.image.as_ref().unwrap().as_bytes(0).unwrap();
-            for (x, y, pixel) in expected.enumerate_pixels() {
-                let i = ((y as usize + offset.y.round() as usize) * frame.surface.width as usize
-                    + x as usize
-                    + offset.x.round() as usize)
-                    * 4;
-                let [r, g, b, a] = pixel.0;
-                assert_eq!(
-                    &pixels[i..i + 4],
-                    &[b, g, r, a],
-                    "pixel {x},{y} at DPI {scale}"
-                );
-            }
+            let expected = crate::gpu_tests::read_frame(&renderer.service(), &expected).unwrap();
+            assert_eq!(
+                frame_pixels(view),
+                expected,
+                "fractional device scale {scale}"
+            );
         });
     }
 }
@@ -695,8 +683,8 @@ fn wrapped_line_pointer_caret_keeps_visual_affinity(cx: &mut TestAppContext) {
     session.set_surface(&mut document, 1000, 1000).unwrap();
     let id = session
         .scene()
-        .items()
-        .iter()
+        .ordered_nodes()
+        .map(|node| node.item.as_ref())
         .find_map(|item| {
             if let draw::SceneDisplayItem::Text(t) = item {
                 Some(draw::ElementId {
@@ -742,8 +730,10 @@ fn preparation_failure_invalidates_pending_render_and_export(cx: &mut TestAppCon
         view.changed(window, cx);
         let scheduled = view.generation;
         let mut other = CanvasDocument::default();
-        view.reference_session = CanvasSession::new(&mut other).unwrap();
+        view.session = CanvasSession::new(&mut other).unwrap();
+        view.invalidate_render();
         view.changed(window, cx);
+        view.prepare_display_frame(window,cx);
         assert!(view.generation > scheduled);
         assert!(view.snapshot().is_err());
         assert!(view.error.is_some());
@@ -751,7 +741,7 @@ fn preparation_failure_invalidates_pending_render_and_export(cx: &mut TestAppCon
     paint(&mut visual);
     assert!(view.read_with(&visual, |view, _| view.error.is_some()
         && !view.is_rendering()
-        && !view.reference_valid));
+        && !view.logical_frame_ready));
 }
 
 #[gpui::test]
@@ -765,6 +755,21 @@ fn png_clipboard_uses_strict_snapshot_and_text_popup_keeps_draft(cx: &mut TestAp
             (640.0 * window.scale_factor()).ceil() as u32
         });
         paint(&mut visual);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while view.read_with(&visual, |view, _| view.clipboard_task.is_some()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "GPU clipboard readback timed out"
+            );
+            visual
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(1));
+            visual.run_until_parked();
+            std::thread::yield_now();
+        }
+        view.read_with(&visual, |view, _| {
+            assert!(view.error.is_none(), "{:?}", view.error)
+        });
         visual.update(|_, cx| {
             let clipboard = cx.read_from_clipboard().unwrap();
             let gpui::ClipboardEntry::Image(image) = &clipboard.entries()[0] else {
@@ -813,8 +818,8 @@ fn style_only_edits_commit_once_and_delete_label_preserves_owner(cx: &mut TestAp
             let text = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Text(t) = item {
                         Some(draw::ElementId {
@@ -841,8 +846,8 @@ fn style_only_edits_commit_once_and_delete_label_preserves_owner(cx: &mut TestAp
             let arrow = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Arrow(t) = item {
                         Some(draw::ElementId {
@@ -896,8 +901,8 @@ fn content_clip_rejects_new_creation_but_keeps_outside_selection_handles(cx: &mu
             let id = view
                 .session
                 .scene()
-                .items()
-                .iter()
+                .ordered_nodes()
+                .map(|node| node.item.as_ref())
                 .find_map(|item| {
                     if let draw::SceneDisplayItem::Rectangle(r) = item {
                         Some(draw::ElementId {
@@ -921,6 +926,7 @@ fn content_clip_rejects_new_creation_but_keeps_outside_selection_handles(cx: &mu
                 ..Default::default()
             };
             view.set_options(options, window, cx).unwrap();
+            view.prepare_logical_frame().unwrap();
             let handle = view
                 .session
                 .scene()
