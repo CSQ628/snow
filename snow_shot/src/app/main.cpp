@@ -61,6 +61,8 @@
 int runMcpApplicationLifecycleTests(int argc, char** argv);
 #endif
 #ifdef Q_OS_MACOS
+#include "snow_recording_macos.h"
+#include "snow_shot/diagnostics/microphonediagnostics.h"
 #include "snow_shot/platform/macos/loginitemservice.h"
 #include "snow_shot/platform/macos/rastercolorspace.h"
 #include <QScopeGuard>
@@ -523,6 +525,10 @@ int main(int argc, char* argv[]) {
     static_cast<void>(diagnostics.initialize(std::move(diagnosticsOptions)));
     snow_diagnostics_install_panic_hook(snow_diag_panic);
     snow_shot::diagnostics::installFfmpegDiagnostics();
+#ifdef Q_OS_MACOS
+    snow_recording_macos_set_microphone_diagnostic_callback(
+        snow_shot::diagnostics::recordMicrophoneFailure);
+#endif
 
     // Capture overlays embed native window-type children (the floating tool
     // palette) alongside alien, click-through children (selection toolbar,
