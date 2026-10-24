@@ -1,0 +1,68 @@
+[package]
+name = "snow-draw-engine-gpui"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Native GPUI canvas adapter for the shared Snow Draw Engine"
+
+[features]
+native-capture = ["gpui/test-support", "gpui_platform/test-support"]
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+png = "=0.18.1"
+resvg = "=0.45.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+snow-draw-engine = { path = "../snow_draw_engine_qt/crates/snow-draw-engine" }
+snow-draw-engine-core = { path = "../snow_draw_engine_qt/crates/snow-draw-engine-core" }
+snow-draw-engine-document = { path = "../snow_draw_engine_qt/crates/snow-draw-engine-document" }
+snow-draw-engine-editor = { path = "../snow_draw_engine_qt/crates/snow-draw-engine-editor" }
+unicode-segmentation = "1"
+unicode-bidi = "0.3"
+rustybuzz = "=0.20.1"
+
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dev-dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["test-support"] }
+
+[[bin]]
+name = "snow-draw-demo"
+path = "src/main.rs"
+
+[[bench]]
+name = "canvas"
+harness = false
+
+[[bench]]
+name = "dense_profile"
+harness = false
+
+[[bench]]
+name = "teardown"
+harness = false
+
+[profile.canvas-perf]
+inherits = "release"
+opt-level = 3
+debug = "line-tables-only"
+
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
+
+# This exact GPUI Windows snapshot gates the AOT fxc path on debug_assertions.
+# Preserve the runtime-shader path for the native platform in this scoped profile.
+[profile.canvas-perf.package.gpui-pre-windows]
+debug-assertions = true
