@@ -21,12 +21,17 @@ pub struct CanvasRenderer {
     last_key: Option<RenderKey>,
     last_image: Option<Arc<RgbaImage>>,
     last_scene: Option<RetainedScene>,
+    background_cache: Option<BackgroundRaster>,
     damage_enabled: bool,
     renders: u64,
     last_ms: f64,
     peak_working_pixels: u64,
     smart_cache: std::collections::VecDeque<SmartResult>,
     smart_frozen: bool,
+    // Interactive display never runs reconstruction on the UI thread. A separate
+    // worker supplies source-keyed results; until then paint the live mask.
+    smart_deferred: bool,
+    smart_pending: bool,
     warnings: Vec<String>,
 }
 
@@ -37,6 +42,13 @@ struct SmartResult {
     original: SourceImage,
     filled: SourceImage,
     bytes: usize,
+}
+
+struct BackgroundRaster {
+    frame: FrameView,
+    scale: f32,
+    source: Option<SmartSourceKey>,
+    pixels: Arc<RgbaImage>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -91,18 +103,27 @@ impl Default for CanvasRenderer {
             last_key: None,
             last_image: None,
             last_scene: None,
+            background_cache: None,
             damage_enabled: true,
             renders: 0,
             last_ms: 0.0,
             peak_working_pixels: 0,
             smart_cache: Default::default(),
             smart_frozen: false,
+            smart_deferred: false,
+            smart_pending: false,
             warnings: Vec::new(),
         }
     }
 }
 
 impl CanvasRenderer {
+    pub(crate) fn defer_smart_erase(&mut self) {
+        self.smart_deferred = true;
+    }
+    pub(crate) fn has_pending_smart_erase(&self) -> bool {
+        self.smart_pending
+    }
     /// CPU phase timing is opt-in and excludes GPUI upload/presentation.
     pub fn set_profiling(&mut self, enabled: bool) {
         self.profiling = enabled;
@@ -319,8 +340,10 @@ impl CanvasRenderer {
         self.last_key = None;
         self.last_image = None;
         self.last_scene = None;
+        self.background_cache = None;
         self.smart_cache.clear();
         self.smart_frozen = false;
+        self.smart_pending = false;
         self.vectors.clear();
     }
 
@@ -515,6 +538,7 @@ impl CanvasRenderer {
             damage_rect.map_or(profile.output_pixels, |r| u64::from(r[2]) * u64::from(r[3]));
         self.vectors.profile = Default::default();
         self.warnings.clear();
+        self.smart_pending = false;
         let frame = scene.frame();
         self.vectors.set_clear_color(frame.clear_color);
         let [width, height] = crate::export::scaled_dimensions(frame.surface, scale)?;
@@ -533,8 +557,14 @@ impl CanvasRenderer {
             };
         }
         let background_start = self.profiling.then(Instant::now);
-        let pristine = if let Some(rect) = damage_rect {
-            background_region(
+        let source_key = background.map(SmartSourceKey::from);
+        let cached_background = self.background_cache.as_ref().filter(|cached| {
+            cached.frame == background_frame && cached.scale == scale && cached.source == source_key
+        });
+        let pristine = if let Some(cached) = cached_background {
+            cached.pixels.clone()
+        } else if let Some(rect) = damage_rect {
+            Arc::new(background_region(
                 background_frame,
                 background,
                 width,
@@ -542,9 +572,24 @@ impl CanvasRenderer {
                 scale,
                 rect,
                 cancel,
-            )?
+            )?)
         } else {
-            background_surface(background_frame, background, width, height, scale)
+            let pixels = Arc::new(background_surface(
+                background_frame,
+                background,
+                width,
+                height,
+                scale,
+            ));
+            // One immutable sampled background, bounded by the working-surface
+            // limit (64 MiB RGBA). Geometry edits reuse it even on full redraws.
+            self.background_cache = Some(BackgroundRaster {
+                frame: background_frame,
+                scale,
+                source: source_key,
+                pixels: pixels.clone(),
+            });
+            pixels
         };
         let mut target = if let Some(image) = &presentation.background_override {
             image_to_pixmap(&background_surface(
@@ -555,7 +600,7 @@ impl CanvasRenderer {
                 scale,
             ))?
         } else {
-            image_to_pixmap(&pristine)?
+            image_region_to_pixmap(&pristine, damage_rect.unwrap_or([0, 0, width, height]))?
         };
         paint_host_source(
             &mut target,
@@ -616,7 +661,8 @@ impl CanvasRenderer {
                         let w = right.saturating_add(support).min(width) - x;
                         let h = bottom.saturating_add(support).min(height) - y;
                         let source = image::imageops::crop_imm(source, x, y, w, h).to_image();
-                        let original = image::imageops::crop_imm(&pristine, x, y, w, h).to_image();
+                        let original =
+                            image::imageops::crop_imm(pristine.as_ref(), x, y, w, h).to_image();
                         let center = view_to_canvas(
                             Point::new(
                                 (f64::from(x) + f64::from(w) / 2.0) / f64::from(scale),
@@ -688,7 +734,7 @@ impl CanvasRenderer {
                         let alpha: Vec<_> =
                             mask.pixels().iter().map(|pixel| pixel.alpha()).collect();
                         let result = match filter.filter.filter_type {
-                            DisplayFilterType::RestoreBackground => pristine.clone(),
+                            DisplayFilterType::RestoreBackground => (*pristine).clone(),
                             _ => return Err(ErrorCode::InvalidState.into()),
                         };
                         replace_masked(&mut target, &result, &alpha);
@@ -820,6 +866,13 @@ impl CanvasRenderer {
             .smart_cache
             .iter()
             .position(|entry| entry.geometry == geometry && entry.source == key);
+        if cached.is_none() && self.smart_deferred && !self.smart_frozen {
+            self.smart_pending = true;
+            for (pixel, alpha) in target.pixels_mut().iter_mut().zip(mask.pixels()) {
+                *pixel = over(*pixel, [220, 66, 66, 54], f64::from(alpha.alpha()) / 255.0);
+            }
+            return Ok(());
+        }
         let (original_source, filled) = if let Some(index) = cached {
             let entry = self.smart_cache.remove(index).unwrap();
             let result = (entry.original.clone(), entry.filled.clone());
@@ -1697,6 +1750,10 @@ fn background_surface(
     height: u32,
     scale: f32,
 ) -> RgbaImage {
+    if source.is_none() {
+        let color = frame.clear_color;
+        return RgbaImage::from_pixel(width, height, Rgba([color.r, color.g, color.b, color.a]));
+    }
     RgbaImage::from_fn(width, height, |x, y| {
         let world = view_to_canvas(
             Point::new(
@@ -1711,11 +1768,24 @@ fn background_surface(
 }
 
 fn image_to_pixmap(image: &RgbaImage) -> Result<Pixmap, CanvasError> {
+    image_region_to_pixmap(image, [0, 0, image.width(), image.height()])
+}
+
+fn image_region_to_pixmap(image: &RgbaImage, rect: [u32; 4]) -> Result<Pixmap, CanvasError> {
     let mut map = Pixmap::new(image.width(), image.height()).ok_or(CanvasError::ResourceLimit)?;
-    for (destination, source) in map.pixels_mut().iter_mut().zip(image.pixels()) {
-        *destination =
-            resvg::tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
-                .premultiply();
+    let [x, y, width, height] = rect.map(|v| v as usize);
+    let stride = image.width() as usize;
+    // Damage scratch is transparent outside the dirty region. Premultiplying
+    // that untouched full surface dominated small interactive updates.
+    for row in y..y + height {
+        let start = row * stride + x;
+        let source = &image.as_raw()[start * 4..(start + width) * 4];
+        let destination = &mut map.pixels_mut()[start..start + width];
+        for (destination, source) in destination.iter_mut().zip(source.chunks_exact(4)) {
+            *destination =
+                resvg::tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
+                    .premultiply();
+        }
     }
     Ok(map)
 }

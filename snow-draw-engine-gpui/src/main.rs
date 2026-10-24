@@ -1,5 +1,7 @@
 use gpui::{prelude::*, *};
 #[cfg(feature = "native-capture")]
+mod native_text_validation;
+#[cfg(feature = "native-capture")]
 mod native_validation;
 use snow_draw_engine_gpui::{
     CanvasDocument, CanvasEvent, CanvasRenderer, CanvasSession, CanvasView, SourceImage,
@@ -713,12 +715,18 @@ fn main() {
         write_atomic(&destination, &bytes).expect("write sample export");
         return;
     }
-    let capture = if arguments
+    let text_capture = arguments
         .first()
-        .is_some_and(|argument| argument == "--capture")
+        .is_some_and(|argument| argument == "--capture-text");
+    let capture = if text_capture
+        || arguments
+            .first()
+            .is_some_and(|argument| argument == "--capture")
     {
         Some(PathBuf::from(
-            arguments.get(1).expect("--capture <output directory>"),
+            arguments
+                .get(1)
+                .expect("--capture[-text] <output directory>"),
         ))
     } else {
         None
@@ -759,8 +767,12 @@ fn main() {
         if let Some(directory) = capture {
             #[cfg(feature = "native-capture")]
             cx.spawn(async move |cx| {
-                if let Err(error) = native_validation::run(window.into(), demo, directory, cx).await
-                {
+                let result = if text_capture {
+                    native_text_validation::run(window.into(), demo, directory, cx).await
+                } else {
+                    native_validation::run(window.into(), demo, directory, cx).await
+                };
+                if let Err(error) = result {
                     capture_failed.store(true, std::sync::atomic::Ordering::Relaxed);
                     eprintln!("Native validation failed: {error:#}");
                 }
@@ -769,7 +781,7 @@ fn main() {
             .detach();
             #[cfg(not(feature = "native-capture"))]
             {
-                let _ = (directory, window, demo);
+                let _ = (directory, window, demo, text_capture);
                 eprintln!("Native capture requires --features native-capture");
                 capture_failed.store(true, std::sync::atomic::Ordering::Relaxed);
                 cx.quit();

@@ -1,4 +1,84 @@
 use super::*;
+
+#[test]
+fn sampled_background_cache_reuses_full_redraws_and_invalidates_all_sampling_inputs() {
+    let mut document = crate::CanvasDocument::default();
+    let mut session = crate::CanvasSession::new(&mut document).unwrap();
+    session.set_surface(&mut document, 100, 80).unwrap();
+    session
+        .set_camera(
+            &mut document,
+            Camera {
+                center: Point::new(50.0, 40.0),
+                zoom: 1.0,
+            },
+        )
+        .unwrap();
+    document.command(|e| e.apply_annotation_json(br#"{"version":1,"operations":[{"type":"text","bounds":[10,10,70,30],"text":"Cache","style":{"font_size":15}}]}"#)).unwrap();
+    session.refresh(&document).unwrap();
+    let original = session.scene();
+    let source = SourceImage::new(RgbaImage::from_fn(80, 60, |x, y| {
+        Rgba([x as u8, y as u8, 140, 190])
+    }))
+    .unwrap();
+    for case in 0..10 {
+        let mut renderer = CanvasRenderer::default();
+        renderer.render(original, Some(&source), 1, 1.0).unwrap();
+        let cached = renderer.background_cache.as_ref().unwrap().pixels.clone();
+        let mut frame = original.frame();
+        let mut background = Some(source.clone());
+        let mut scale = 1.0;
+        let mut presentation = crate::CanvasPresentation::default();
+        match case {
+            0 => {} // content/resource revision changes do not change sampled pixels
+            1 => {
+                background = Some(
+                    source
+                        .clone()
+                        .with_placement(Point::new(1.25, 2.5), 1.2)
+                        .unwrap(),
+                )
+            }
+            2 => {
+                background = Some(
+                    SourceImage::new(RgbaImage::from_pixel(80, 60, Rgba([90, 50, 20, 130])))
+                        .unwrap(),
+                )
+            }
+            3 => frame.camera.center.x += 2.5,
+            4 => frame.camera.zoom = 1.25,
+            5 => frame.surface.width += 2,
+            6 => {
+                frame.clear_color = ColorRgba8 {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 100,
+                }
+            }
+            7 => scale = 1.5,
+            8 => presentation.clear_background = false,
+            9 => background = None,
+            _ => unreachable!(),
+        }
+        let next = original.culled(frame, |_| true);
+        let actual = renderer
+            .render_with_presentation(&next, background.as_ref(), 2, scale, &presentation)
+            .unwrap();
+        assert_eq!(
+            Arc::ptr_eq(&cached, &renderer.background_cache.as_ref().unwrap().pixels),
+            case == 0,
+            "case {case}"
+        );
+        let expected = CanvasRenderer::default()
+            .render_with_presentation(&next, background.as_ref(), 2, scale, &presentation)
+            .unwrap();
+        assert_eq!(actual, expected, "case {case}");
+        renderer.clear_render_state();
+        assert!(renderer.background_cache.is_none());
+    }
+}
+
 #[test]
 fn profiling_is_pixel_neutral_and_mid_render_cancel_keeps_the_last_completed_image() {
     let mut document = crate::CanvasDocument::default();

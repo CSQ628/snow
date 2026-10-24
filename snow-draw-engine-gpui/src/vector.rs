@@ -1091,7 +1091,7 @@ fn serial_text_color(fill: ColorRgba8) -> ColorRgba8 {
     }
 }
 
-fn text_span(text: &str, style: &TextStyle, x: f64, y: f64) -> String {
+pub(crate) fn text_span(text: &str, style: &TextStyle, x: f64, y: f64) -> String {
     format!(
         "<text x=\"{x}\" y=\"{y}\" xml:space=\"preserve\" font-family=\"{}\" font-size=\"{}\" font-weight=\"{}\" font-style=\"{}\" fill=\"{}\" fill-opacity=\"{}\" stroke=\"{}\" stroke-opacity=\"{}\" stroke-width=\"{}\" paint-order=\"stroke fill\">{}</text>",
         xml(style.font_family.as_deref().unwrap_or("Segoe UI")),

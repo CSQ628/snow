@@ -343,7 +343,7 @@ fn retained_damage_handles_pressure_outline_and_arrow_heads() {
 #[test]
 fn unsafe_damage_dependencies_and_order_changes_fall_back_to_full() {
     let (base, frame, source) = fixture();
-    for case in 0..7 {
+    for case in [0, 2, 3, 4, 5, 6, 7] {
         let mut items = base.clone();
         let mut renderer = CanvasRenderer::default();
         renderer.set_damage_rendering(true);
@@ -353,9 +353,6 @@ fn unsafe_damage_dependencies_and_order_changes_fall_back_to_full() {
             .unwrap();
         match case {
             0 => items.swap(0, 1),
-            1 => {
-                items.pop();
-            }
             2 => {
                 let SceneDisplayItem::Rectangle(r) = &mut items[44] else {
                     unreachable!()
@@ -383,6 +380,7 @@ fn unsafe_damage_dependencies_and_order_changes_fall_back_to_full() {
                     r.opacity = 0.3;
                 }
             }
+            7 => items.push(items[44].clone()), // ambiguous duplicate identity
             _ => items.push(SceneDisplayItem::Text(TextDisplayItem {
                 text: "Fallback".into(),
                 width: 100.0,
@@ -403,5 +401,62 @@ fn unsafe_damage_dependencies_and_order_changes_fall_back_to_full() {
                 .render(&next, Some(&source), 1, 1.0)
                 .unwrap(),
         );
+    }
+}
+
+#[test]
+fn retained_damage_matches_full_for_creation_resize_rotation_removal_and_id_reuse() {
+    let (base, frame, source) = fixture();
+    for scale in [1.0, 1.25, 2.0] {
+        let mut items = base.clone();
+        let mut renderer = CanvasRenderer::default();
+        renderer.set_profiling(true);
+        renderer
+            .render(&scene(items.clone(), frame, 1), Some(&source), 1, scale)
+            .unwrap();
+        for step in 0..5 {
+            match step {
+                0 | 4 => {
+                    let SceneDisplayItem::Rectangle(mut created) = base[44].clone() else {
+                        unreachable!()
+                    };
+                    created.id = DisplayItemId {
+                        index: 200,
+                        generation: 1 + step,
+                    };
+                    created.center_x += 4.0;
+                    created.fill.r = 230;
+                    // Insert below overlapping translucent items as well as above others.
+                    items.insert(40, SceneDisplayItem::Rectangle(created));
+                }
+                1 => {
+                    let SceneDisplayItem::Rectangle(created) = &mut items[40] else {
+                        unreachable!()
+                    };
+                    created.center_x += 7.0;
+                    created.width += 9.0;
+                    created.rotation += 0.7;
+                }
+                2 => {
+                    items.remove(40);
+                }
+                3 => {
+                    items.remove(44);
+                }
+                _ => unreachable!(),
+            }
+            let next = scene(items.clone(), frame, u64::from(step) + 2);
+            let actual = renderer.render(&next, Some(&source), 1, scale).unwrap();
+            assert!(
+                renderer.last_render_profile().partial_recomposition,
+                "step {step}"
+            );
+            compare(
+                &actual,
+                &CanvasRenderer::default()
+                    .render(&next, Some(&source), 1, scale)
+                    .unwrap(),
+            );
+        }
     }
 }

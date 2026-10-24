@@ -1,5 +1,10 @@
 # Dense-render performance follow-up
 
+The asynchronous display scheduling described in this historical record is
+superseded by [interactive frame synchronization](INTERACTIVE_FRAME_SYNC.md).
+Display pixels and controls now share frame preparation; only reconstruction and
+exports use workers. The CPU measurements below retain their original meaning.
+
 Historical first pass. A subsequent accepted retained-damage implementation is
 recorded in [RETAINED_DAMAGE_AND_CLEANUP.md](RETAINED_DAMAGE_AND_CLEANUP.md).
 Its conservative eligible edit path supersedes the warm full-redraw limitation
@@ -110,10 +115,17 @@ operation.
 Deterministic tests prove a cancelled partial render preserves the previous
 completed image/cache key. An offscreen GPUI test applies 24 edits to a 1k document
 before yielding, keeps the previous image available, coalesces intermediate work,
-and publishes only the final generation with at most 2 additional completed renders.
+and finishes on the final generation with at most 2 additional completed renders.
 `CanvasView::schedule_render` owns one worker and one latest pending request;
-generation checks reject stale completion. No idle repaint loop or unbounded edit
-queue is introduced. Existing tests cover unchanged DPI/reference image reuse.
+ordinary edits let that worker finish and publish before composing the latest request.
+Cancelling every superseded generation would starve presentation during continuous
+pointer movement. Explicit invalidation cancels the worker and rejects its result even
+if it finished before the invalidation: gesture/text cancellation, document/source
+replacement, presentation changes, cache reset and snapshot preparation failures retain
+that protection. Offscreen regression tests overlap creation, selection movement,
+resize and rotation events with both worker execution and foreground publication, check changed
+pixels before pointer release, and verify invalidated results never publish. No idle
+repaint loop or unbounded edit queue is introduced.
 
 These mechanisms bound pending work and allow native overlays/previous pixels to
 remain usable. They do **not** turn a 51ms edited-frame composition into a 16.7ms

@@ -1,6 +1,6 @@
 # Source capability and implementation matrix
 
-Updated 2026-10-23. This distinguishes functionality, regression coverage, and
+Updated 2026-10-24. This distinguishes functionality, regression coverage, and
 platform qualification. “Implemented” does not claim pixel identity with QPainter
 or certification of physical input hardware. All source references below are
 relative to `../snow_draw_engine_qt/` unless explicitly local.
@@ -26,6 +26,7 @@ the new package's related tests, not the repository-wide suite.
 | Distance/angle multi-stage tools and value/unit styles | Implemented through shared editor; generated text measured by renderer | Showcase, roundtrip/render tests; style commands exposed through controlled engine API. |
 | Hit testing, rectangular marquee, shift multiselection, quick selection | Implemented through shared indexed editor | Native selection/resize, offscreen rotation/multiselection/template tests. No implemented lasso workflow was found in the baseline. |
 | Move/resize/rotate/duplicate drag, constraints, radii, binding geometry | Implemented through engine input/commands | Interrupted/repeated gestures, outside release, native resize, rotation undo/redo, template regeneration. |
+| Selection controls and feedback (`snow_canvas_renderer.cpp`, `snow_canvas_widget_selection_hit_testing.cpp`) | Qt rounded resize handles, circular radius/rotation controls, dashed group/text/magnifier frames, text/tail plus symbols, magnifier grip, hollow pen-filter contours, and snap ticks/dashes; frame edges and text move rings remain interactive outside the content clip | Offscreen production-path coverage at multiple zooms/rotations, clipped dash phase on huge selections, intersecting pen contours; clipped edge resize and text move, control workflows and undo in `selection_controls.rs`. |
 | Z-order, align/distribute, selected opacity | Implemented controlled engine commands, with demo front/back and duplicate controls | Source engine commands and history/template tests; minimal demo does not expose every command as a button. No user grouping workflow exists in the baseline despite the unused `GroupMember` declaration. |
 
 ## Effects and source resources
@@ -35,7 +36,7 @@ the new package's related tests, not the repository-wide suite.
 | Rectangular/pen mosaic, Gaussian blur, grayscale, inversion, emboss and brightness | Implemented ordered immutable source passes and effect-run masks in `renderer.rs` | Immutable sibling backdrop, crop/full equivalence at fractional scale, premultiplied blur/brightness, canvas-anchored mosaic tests. Blur/emboss are native Rust kernels; no byte-for-byte OpenCV/QPainter parity claim. |
 | Object eraser and rectangle/brush Restore Background | Implemented as distinct engine tools | Restore replaces all premultiplied channels, including alpha; transparent original removes annotations. Covered by compositing and history tests. |
 | Smart Erase (`src/rendering/snow_canvas_smart_erase_algorithm.cpp`) | Implemented affine/periodic paths, Lab/structural guides, conservative pyramid and multiscale PatchMatch | Flat/affine, periodic, noisy bands/remote panel, diagonal/texture-diversity, alpha/known-byte invariance, masked-color independence, cancellation and memory-limit tests. This is inpainting, not blur or harmonic fill. Scalar kernels, random sequence and edge details differ from Qt. |
-| Smart Erase asynchronous preview/cache/export lifecycle | Implemented one worker + latest request, cooperative cancellation, stale-generation rejection, source-grid cache; strict exports reject unresolved previews/errors | Camera/opacity-independent result reuse, frozen/shared cache snapshots, no-donor/error visibility and strict export tests. Budget: 512 MiB conservative scratch estimate, 2 Mi-pixel solve ROI, 128 MiB result cache. Results retain affected pixels plus sampling guards, not donor halos; 20 small results reuse across cameras. Large unsupported solve regions fail explicitly. |
+| Smart Erase asynchronous preview/cache/export lifecycle | Live masks paint with current controls; one reconstruction worker + latest request supplies source/geometry-keyed results, with cooperative cancellation. Workers never replace display frames; strict exports reject unresolved previews/errors | Camera/opacity-independent result reuse, frozen/shared cache snapshots, no-donor/error visibility and strict export tests. Budget: 512 MiB conservative scratch estimate, 2 Mi-pixel solve ROI, 128 MiB result cache. Results retain affected pixels plus sampling guards, not donor halos; 20 small results reuse across cameras. Large unsupported solve regions fail explicitly. |
 | Magnifier lens/source/bridge/outlines, wheel factor | Implemented pristine visual-source sampling and engine geometry | Translated/rotated contour and gradient regression. Axis-aligned source mapping agrees with the discovered Qt contract. |
 | Spotlight cutouts and watermark | Implemented before scene / after scene composition respectively; per-view render areas | Showcase/tool controls, renderer scene path and snapshot exports. Watermark font/raster placement is backend-specific. |
 | Auto Filter recognized regions/categories | Implemented host data path through engine | Demo installs clearly labelled sample regions; no OCR service is included or claimed. |
@@ -63,9 +64,9 @@ the new package's related tests, not the repository-wide suite.
 
 Host customization/diagnostics are implemented in `view/host_controls.rs`:
 command-key resolver, prioritized native cursor layers/DPI crosshair geometry,
-asynchronous one-call view cache reset, and dirty-region debug overlays. Offscreen
+frame-deferred one-call view cache reset, and dirty-region debug overlays. Offscreen
 tests cover editing/native text separation, release after resolver replacement,
-DPI caching, history neutrality, and reset without waiting for a busy renderer.
+DPI caching, history neutrality, and reset without rendering in the host callback.
 Final native readback verifies all four custom crosshair arms, unchanged canvas
 pixels across light/dark theme, history-neutral cache reset, native text protocol,
 repeated alpha edits and completed owner-thread document retirement. The fourteen
@@ -92,15 +93,19 @@ are not claimed as completed parity:
   Arbitrary OS bitmap/persistent-hidden cursors are unavailable in GPUI0.3.9;
   custom crosshair geometry uses native GPUI quads with its native cursor center.
 - GPU tessellation/backdrop-filter composition. Document rendering is retained CPU
-  composition on a worker; native GPUI draws the view, controls and transient overlays.
+  composition during frame preparation; native GPUI draws the view, controls and
+  transient overlays from that same scene. Smart Erase reconstruction stays on a worker.
   Enlarged source-grid text can appear softer than native glyph rasterization.
 
 Use the validation record for measured costs. A cached render timing is a cache hit,
 not evidence that a cold dense document renders at that rate.
 
 Retained partial composition is enabled for safe Architect source-over rectangles
-and arrows with unchanged frame/resources/order; it diffs the last completed scene,
+and arrows with unchanged frame/resources and survivor order, including insertion
+and removal; it diffs the last completed scene,
 rebuilds intersecting paint dependencies, and publishes atomically. Text, effects,
 multiply, decorations, broad edits and unsafe f32 coordinates use full rendering.
 Pixel/cancellation/fallback regressions and matched optimized measurements are in
 [RETAINED_DAMAGE_AND_CLEANUP.md](RETAINED_DAMAGE_AND_CLEANUP.md).
+Frame synchronization and current interaction measurements are in
+[INTERACTIVE_FRAME_SYNC.md](INTERACTIVE_FRAME_SYNC.md).

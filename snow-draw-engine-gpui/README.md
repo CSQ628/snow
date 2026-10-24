@@ -22,7 +22,9 @@ cd D:\snow-apps-workspace-2\snow-apps\snow-draw-engine-gpui
 Cargo output is isolated in `../build/snow-draw-gpui`, with two build jobs. The demo
 opens a showcase document. Choose New to draw, Image to replace its immutable source,
 Open/Save for a `.snowdraw` session, or PNG/SVG to export the current viewport.
-Image decoding/encoding and raster composition run on workers. A failed import preserves the
+Image decoding/encoding and Smart Erase reconstruction run on workers. Display
+composition runs once at frame preparation, from the same scene as selection controls.
+A failed import preserves the
 current document. Auto regions installs clearly labelled sample host regions; it is
 not an OCR service. Watermark toggles a sample watermark and participates in undo.
 
@@ -34,6 +36,11 @@ Ctrl+C/V transfers drawing templates, Ctrl+Shift+C copies an overlay-free PNG.
 Ctrl+0 fits the source; Ctrl+plus/minus changes zoom. Text editing supports grapheme
 navigation, selection, clipboard, local undo and UTF-16 IME composition.
 
+With the Text tool, clicking existing text opens its editor at the clicked character;
+the initial press can also drag a text selection. Clicking outside an active editor
+commits it without creating another text element with that press. Selected glyphs
+turn white over a blue highlight, and the text-colored caret blinks while focused.
+
 ## Architecture and integration
 
 - `CanvasDocument`: engine, immutable source pixels, resource revisions, validated
@@ -41,13 +48,20 @@ navigation, selection, clipboard, local undo and UTF-16 IME composition.
 - `CanvasSession`: viewport/camera, retained typed patches, interaction ownership and
   explicit close/cancellation output for multi-view hosts.
 - `CanvasView`: GPUI entity/custom element, native hitbox capture, focus/IME adapter,
-  native overlays, one render worker plus one coalesced latest request.
+  native overlays, display updates coalesced at frame preparation; independent
+  export/reconstruction workers never publish stale display pixels.
 - `CanvasRenderer`: retained vector/font caches, ordered immutable effect passes,
   bounded mask crops, source-grid Smart Erase cache, offscreen PNG/SVG export.
 - `smart_erase/`: affine and periodic fast paths plus perceptual guides and multiscale
   PatchMatch. Source observations and alpha remain immutable; masked colors never
   become donors. Interactive failures remain visible as unresolved masks; strict
   exports return an error.
+
+Canvas input stays in logical pixels. The display raster follows camera zoom and
+window DPI, with physical pixel extents and padding for ordered filter support.
+The reference scene retains effect dependencies independently of display resolution,
+including when a host selects a fixed composition grid. DPI, zoom and viewport changes
+refresh the raster; idle paints reuse the completed image.
 
 Use `CanvasRenderer::snapshot(&mut document, &mut session)` for headless exports:
 it supplies text measurements and retains all ordered-effect dependencies.
@@ -80,7 +94,8 @@ measurements and ownership details.
 See [implementation plan](docs/IMPLEMENTATION_PLAN.md),
 [capability matrix](docs/CAPABILITY_MATRIX.md), and
 [validation/performance record](docs/VALIDATION.md),
-[dense-render follow-up](docs/DENSE_RENDER_PERFORMANCE.md), and
+[dense-render follow-up](docs/DENSE_RENDER_PERFORMANCE.md),
+[interactive frame synchronization](docs/INTERACTIVE_FRAME_SYNC.md), and
 [Qt host API map](docs/HOST_API_MAP.md).
 
 ## Checks and captures
@@ -92,6 +107,8 @@ cargo test --locked --offline -p snow-draw-engine-gpui --lib --test canvas_engin
 .\scripts\run-performance.ps1
 # Opens one native window, dispatches interaction scenarios, captures, then exits:
 .\scripts\run-demo.ps1 -Capture -OutputDirectory ..\artifacts\snow-draw-gpui-native-final
+# Focused native text interaction, selection pixels and caret blink checks:
+cargo run --locked --offline -p snow-draw-engine-gpui --bin snow-draw-demo --features native-capture -- --capture-text ..\artifacts\snow-draw-gpui-text
 # No native window:
 cargo run --locked --offline -p snow-draw-engine-gpui --bin snow-draw-demo -- --export-sample ..\artifacts\snow-draw-gpui-sample.png
 ```
@@ -112,6 +129,8 @@ nodes (the shared engine has no implemented image-element primitive).
 
 Interactive/working rasters are limited to 16 Mi pixels and 16,384 per dimension;
 this is **not** a source-image or total export limit. Owned `SourceImage` buffers
+are independent of the renderer's one sampled-background cache (up to 64 MiB RGBA,
+invalidated by sampling changes and released by cache reset). Source buffers
 support up to 8 GiB RGBA. Decode defaults to 512 MiB RGBA, preflighted before
 conversion; `decode_with_limit` accepts an explicit budget up to 8 GiB. Sources are
 immutable contiguous buffers; this is not an out-of-core image provider.

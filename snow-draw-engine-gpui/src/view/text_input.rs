@@ -202,6 +202,8 @@ impl CanvasView {
         let Some(draft) = &mut self.draft else {
             return;
         };
+        draft.preferred_x = None;
+        draft.caret_affinity = None;
         draft.layout = self.metrics.as_mut().unwrap().layout(
             &draft.buffer.text,
             &draft.style,
@@ -286,6 +288,7 @@ impl CanvasView {
         }) {
             self.fail(error, cx);
         }
+        self.reset_text_caret(window, cx);
         self.changed(window, cx);
     }
 
@@ -295,9 +298,14 @@ impl CanvasView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.stop_text_caret(cx);
+        self.text_selection_overlay.clear(window);
         let Some(mut draft) = self.draft.take() else {
             return;
         };
+        if !commit {
+            self.invalidate_render();
+        }
         draft.buffer.unmark();
         let viewport = self.session.viewport();
         let result = self.document.command(|engine| {
@@ -332,6 +340,9 @@ impl CanvasView {
         });
         if let Err(error) = result {
             self.fail(error, cx);
+        }
+        if self.selecting_text {
+            window.release_pointer();
         }
         self.selecting_text = false;
         self.changed(window, cx);
@@ -572,7 +583,7 @@ impl CanvasView {
             }
             if matches!(key, "up" | "down") {
                 self.move_text_vertical(key == "down", modifiers.shift);
-                cx.notify();
+                self.reset_text_caret(window, cx);
                 cx.stop_propagation();
                 return;
             }
@@ -679,7 +690,7 @@ impl CanvasView {
                 self.draft.as_mut().unwrap().changed = true;
                 self.update_draft(window, cx);
             } else {
-                cx.notify();
+                self.reset_text_caret(window, cx);
             }
             cx.stop_propagation();
             return;
@@ -827,10 +838,10 @@ impl EntityInputHandler for CanvasView {
             .clone()
             .map(|range| draft.buffer.utf16(range))
     }
-    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(draft) = &mut self.draft {
             draft.buffer.unmark();
-            cx.notify();
+            self.reset_text_caret(window, cx);
         }
     }
     fn replace_text_in_range(
@@ -918,14 +929,16 @@ impl EntityInputHandler for CanvasView {
     fn set_selected_text_range(
         &mut self,
         range: Range<usize>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(draft) = &mut self.draft {
             let range = draft.buffer.byte_range_from_utf16(range);
             draft.buffer.anchor = range.start;
             draft.buffer.caret = range.end;
-            cx.notify();
+            draft.preferred_x = None;
+            draft.caret_affinity = None;
+            self.reset_text_caret(window, cx);
         }
     }
     fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {

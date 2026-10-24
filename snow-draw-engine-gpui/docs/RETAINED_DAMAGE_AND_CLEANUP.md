@@ -1,5 +1,10 @@
 # Retained damage, host controls and cleanup
 
+The 2026-10-24 [interactive frame update](INTERACTIVE_FRAME_SYNC.md) extends damage
+to insertion/removal and replaces asynchronous display publication with composition
+at frame preparation. The measurements and worker-scheduling description below
+document the earlier implementation.
+
 2026-10-23. This implements the acceptance plan in
 [HOST_AND_DAMAGE_PLAN.md](HOST_AND_DAMAGE_PLAN.md), preserving GPUI/platform0.3.9,
 existing raster quality and the shared engine/Qt sources.

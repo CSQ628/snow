@@ -1,5 +1,6 @@
 //! Conservative retained damage for ordinary Architect source-over geometry.
 use crate::{RetainedScene, engine::*};
+use std::collections::{HashMap, HashSet};
 pub(crate) enum Damage {
     Reuse,
     Region {
@@ -37,7 +38,6 @@ pub(crate) fn plan(
             && coordinate.abs() * zoom.abs() * f64::from(f32::EPSILON) * 32.0 <= 0.5
     };
     if old.frame() != next.frame()
-        || old.items().len() != next.items().len()
         || next.decoration().spotlight.active
         || old.decoration().spotlight.active
         || next.decoration().watermark.text_len > 0
@@ -49,41 +49,96 @@ pub(crate) fn plan(
     {
         return None;
     }
-    let mut changed = 0;
+    // Compare against the last painted scene, not the most recent input patch:
+    // several pointer moves (or creation followed by cancellation) may coalesce.
+    // Ordinary geometry edits need only a linear comparison, without identity maps.
+    let aligned = old.items().len() == next.items().len()
+        && old
+            .items()
+            .iter()
+            .zip(next.items())
+            .all(|(a, b)| crate::vector::item_id(a) == crate::vector::item_id(b));
+    let mut changed = Vec::new();
+    if aligned {
+        for (a, b) in old.items().iter().zip(next.items()) {
+            if a != b {
+                changed.extend([a, b]);
+                if changed.len() > 128 {
+                    return None;
+                }
+            }
+        }
+    } else {
+        // Insertions and removals do not change the relative order of survivors.
+        // Reordering or ambiguous identities still require full composition.
+        if old.items().len().abs_diff(next.items().len()) > 128 {
+            return None;
+        }
+        let mut previous = HashMap::with_capacity(old.items().len());
+        for (index, item) in old.items().iter().enumerate() {
+            if previous
+                .insert(crate::vector::item_id(item)?, (index, item))
+                .is_some()
+            {
+                return None;
+            }
+        }
+        let mut seen = HashSet::with_capacity(next.items().len());
+        let mut last_index = None;
+        for item in next.items() {
+            let id = crate::vector::item_id(item)?;
+            if !seen.insert(id) {
+                return None;
+            }
+            if let Some(&(index, before)) = previous.get(&id) {
+                if last_index.is_some_and(|last| index <= last) {
+                    return None;
+                }
+                last_index = Some(index);
+                if before != item {
+                    changed.extend([before, item]);
+                }
+            } else {
+                changed.push(item);
+            }
+            if changed.len() > 128 {
+                return None;
+            }
+        }
+        for (id, (_, item)) in previous {
+            if !seen.contains(&id) {
+                changed.push(item);
+                if changed.len() > 128 {
+                    return None;
+                }
+            }
+        }
+    }
     let mut bounds = (
         f64::INFINITY,
         f64::INFINITY,
         f64::NEG_INFINITY,
         f64::NEG_INFINITY,
     );
-    for (a, b) in old.items().iter().zip(next.items()) {
-        if !supported(a) || !supported(b) || crate::vector::item_id(a) != crate::vector::item_id(b)
-        {
+    for item in old.items().iter().chain(next.items()) {
+        if !supported(item) {
             return None;
         }
-        for item in [a, b] {
-            let (left, top, right, bottom) = crate::export::item_bounds(item);
-            if ![left, top, right, bottom].into_iter().all(precise) {
-                return None;
-            }
-        }
-        if a != b {
-            changed += 1;
-            if changed > 64 {
-                return None;
-            }
-            for item in [a, b] {
-                let v = crate::export::item_bounds(item);
-                bounds = (
-                    bounds.0.min(v.0),
-                    bounds.1.min(v.1),
-                    bounds.2.max(v.2),
-                    bounds.3.max(v.3),
-                );
-            }
+        let (left, top, right, bottom) = crate::export::item_bounds(item);
+        if ![left, top, right, bottom].into_iter().all(precise) {
+            return None;
         }
     }
-    if changed == 0 {
+    for item in &changed {
+        let v = crate::export::item_bounds(item);
+        bounds = (
+            bounds.0.min(v.0),
+            bounds.1.min(v.1),
+            bounds.2.max(v.2),
+            bounds.3.max(v.3),
+        );
+    }
+    if changed.is_empty() {
         return Some(Damage::Reuse);
     }
     let origin = view_to_canvas(Point::new(0.0, 0.0), &frame.camera, frame.surface);

@@ -67,6 +67,7 @@ impl Element for CanvasElement {
             {
                 window.capture_pointer(hitbox.id);
             }
+            this.prepare_display_frame(window, cx);
         });
         hitbox
     }
@@ -88,7 +89,7 @@ impl Element for CanvasElement {
                     this.focus.clone(),
                     this.draft.is_some(),
                     this.effective_cursor(),
-                    this.session.scene().clone(),
+                    this.display_scene().clone(),
                     this.options.clone(),
                     this.crosshair_cache.and_then(|(_, value)| value),
                     this.show_dirty_regions,
@@ -285,6 +286,7 @@ impl CanvasView {
             cx.notify();
             return;
         }
+        let finishing_text = self.draft.is_some();
         if let Some(draft) = self.draft.as_ref() {
             let world = self.world(event.position);
             let (sin, cos) = draft.rotation.sin_cos();
@@ -295,7 +297,8 @@ impl CanvasView {
             } else {
                 draft.width
             };
-            if (dx * cos + dy * sin).abs() <= width / 2.0 + 8.0
+            if event.button == MouseButton::Left
+                && (dx * cos + dy * sin).abs() <= width / 2.0 + 8.0
                 && (-dx * sin + dy * cos).abs() <= draft.layout.height / 2.0 + 8.0
                 && let Some(index) = self.text_index_at(event.position)
             {
@@ -303,7 +306,7 @@ impl CanvasView {
                 draft.buffer.select(index, event.modifiers.shift);
                 self.selecting_text = true;
                 window.capture_pointer(hitbox.id);
-                cx.notify();
+                self.reset_text_caret(window, cx);
                 return;
             }
             self.finish_text(true, window, cx);
@@ -313,7 +316,7 @@ impl CanvasView {
             .presentation
             .content_clip
             .is_some_and(|area| !area.contains(self.world(event.position)))
-            && !self.hits_existing_selection(event.position)
+            && (event.button != MouseButton::Left || !self.hits_existing_selection(event.position))
         {
             return;
         }
@@ -328,7 +331,13 @@ impl CanvasView {
             window,
             cx,
         );
-        self.check_text_request(event.position, window, cx);
+        // A press that finishes editing may open another existing label, but it
+        // must never spend the same press creating a new empty draft.
+        self.check_text_request(event.position, !finishing_text, window, cx);
+        if self.draft.is_some() && event.button == MouseButton::Left {
+            self.selecting_text = true;
+            window.capture_pointer(hitbox.id);
+        }
     }
     pub(super) fn hits_existing_selection(&self, position: Point<Pixels>) -> bool {
         let world = self.world(position);
@@ -357,32 +366,11 @@ impl CanvasView {
         {
             return true;
         }
-        self.session.scene().overlays().iter().any(|overlay| {
-            let draw::OverlayDisplayItem::Rectangle(item) = overlay else {
-                return false;
-            };
-            if !matches!(
-                item.kind,
-                draw::UiShapeKind::SelectionResizeHandle
-                    | draw::UiShapeKind::SelectionRotationHandle
-                    | draw::UiShapeKind::SelectionCornerRadiusHandle
-                    | draw::UiShapeKind::ArrowEndpointHandle
-                    | draw::UiShapeKind::ArrowFocusHandle
-                    | draw::UiShapeKind::ArrowSegmentHandle
-                    | draw::UiShapeKind::MagnifierMoveHandle
-                    | draw::UiShapeKind::SpeechBubbleAddTailHandle
-                    | draw::UiShapeKind::SpeechBubbleTailBaseHandle
-                    | draw::UiShapeKind::SpeechBubbleTailTipHandle
-                    | draw::UiShapeKind::ShapeTextHandle
-            ) {
-                return false;
-            }
-            let (sin, cos) = item.rotation.sin_cos();
-            let dx = world.x - item.center_x;
-            let dy = world.y - item.center_y;
-            (dx * cos + dy * sin).abs() <= item.width / 2.0 + 4.0 / frame.camera.zoom
-                && (-dx * sin + dy * cos).abs() <= item.height / 2.0 + 4.0 / frame.camera.zoom
-        })
+        selection_input::hits_selection_overlay(
+            self.session.scene().overlays(),
+            world,
+            frame.camera.zoom,
+        )
     }
     fn mouse_move(
         &mut self,
@@ -409,7 +397,7 @@ impl CanvasView {
         if self.selecting_text {
             if let Some(index) = self.text_index_at(event.position) {
                 self.draft.as_mut().unwrap().buffer.select(index, true);
-                cx.notify();
+                self.reset_text_caret(window, cx);
             }
             return;
         }
@@ -460,11 +448,12 @@ impl CanvasView {
             window,
             cx,
         );
-        self.check_text_request(event.position, window, cx);
+        self.check_text_request(event.position, true, window, cx);
     }
     fn check_text_request(
         &mut self,
         position: Point<Pixels>,
+        allow_new: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -483,8 +472,12 @@ impl CanvasView {
             .document
             .command(|engine| engine.take_new_text_draft_request(viewport))
             .unwrap_or(false);
-        if existing.is_some() || bubble.is_some() || new {
+        if existing.is_some() || bubble.is_some() || (new && allow_new) {
             self.begin_text(self.world(position), existing, window, cx);
+            if let Some(index) = self.text_index_at(position) {
+                self.draft.as_mut().unwrap().buffer.select(index, false);
+                self.reset_text_caret(window, cx);
+            }
         }
     }
 }
@@ -504,7 +497,7 @@ fn modifiers(modifiers: Modifiers) -> draw::Modifiers {
         meta: modifiers.platform,
     }
 }
-fn gpui_color(color: draw::ColorRgba8) -> Hsla {
+pub(super) fn gpui_color(color: draw::ColorRgba8) -> Hsla {
     rgba(
         (u32::from(color.r) << 24)
             | (u32::from(color.g) << 16)
@@ -528,79 +521,15 @@ fn paint_overlays(
     for overlay in overlays {
         match overlay {
             draw::OverlayDisplayItem::Rectangle(item) => {
-                let (sin, cos) = item.rotation.sin_cos();
-                let w = item.width / 2.0;
-                let h = item.height / 2.0;
-                let circular = matches!(
-                    item.kind,
-                    draw::UiShapeKind::ArrowEndpointHandle
-                        | draw::UiShapeKind::ArrowFocusHandle
-                        | draw::UiShapeKind::ArrowSegmentHandle
-                        | draw::UiShapeKind::EraserCursor
-                        | draw::UiShapeKind::SpeechBubbleTailBaseHandle
-                        | draw::UiShapeKind::SpeechBubbleTailTipHandle
-                );
-                let local: Vec<_> = if circular {
-                    (0..48)
-                        .map(|i| {
-                            let angle = i as f64 * std::f64::consts::TAU / 48.0;
-                            (w * angle.cos(), h * angle.sin())
-                        })
-                        .collect()
-                } else {
-                    vec![(-w, -h), (w, -h), (w, h), (-w, h)]
-                };
-                let points: Vec<_> = local
-                    .into_iter()
-                    .map(|(x, y)| {
-                        map(
-                            item.center_x + x * cos - y * sin,
-                            item.center_y + x * sin + y * cos,
-                        )
-                    })
-                    .collect();
-                if item.kind == draw::UiShapeKind::TextHoverUnderline {
-                    let mut path =
-                        PathBuilder::stroke(px((item.stroke_width * frame.camera.zoom) as f32));
-                    path.move_to(points[3]);
-                    path.line_to(points[2]);
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, gpui_color(item.stroke));
-                    }
-                    continue;
-                }
-                if item.fill.a != 0 {
-                    let mut path = PathBuilder::fill();
-                    path.add_polygon(&points, true);
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, gpui_color(item.fill));
-                    }
-                }
-                if item.stroke.a != 0 && item.stroke_width > 0.0 {
-                    let mut path =
-                        PathBuilder::stroke(px((item.stroke_width * frame.camera.zoom) as f32));
-                    path.add_polygon(&points, true);
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, gpui_color(item.stroke));
-                    }
-                }
+                selection_overlay::paint_rectangle(item, frame, bounds, window);
             }
             draw::OverlayDisplayItem::SnapGuide(item) => {
-                let mut path = PathBuilder::stroke(px(item.line_width as f32));
-                path.move_to(map(item.start.x, item.start.y));
-                path.line_to(map(item.end.x, item.end.y));
-                for marker in item.markers.iter().take(item.marker_count as usize) {
-                    let p = map(marker.x, marker.y);
-                    let r = px(item.marker_size as f32 / 2.0);
-                    path.move_to(p - point(r, r));
-                    path.line_to(p + point(r, r));
-                    path.move_to(p + point(-r, r));
-                    path.line_to(p + point(r, -r));
-                }
-                if let Ok(path) = path.build() {
+                for path in selection_guides::guide_paths(item, frame, bounds) {
                     window.paint_path(path, gpui_color(item.color));
                 }
-                if let Some(label) = item.label {
+                if item.kind == draw::SnapGuideKind::Gap
+                    && let Some(label) = item.label
+                {
                     let text: SharedString = format!("{label:.0}").into();
                     let line = window.text_system().shape_line(
                         text.clone(),
@@ -627,98 +556,46 @@ fn paint_overlays(
             }
             draw::OverlayDisplayItem::FocusConnection(item)
             | draw::OverlayDisplayItem::PenFilterContour(item) => {
-                let mut path = PathBuilder::stroke(px(
-                    (item.stroke_width * frame.camera.zoom).max(1.0) as f32
-                ));
-                for command in &item.path_commands {
-                    match *command {
-                        draw::PathCommand::MoveTo { point: [x, y] } => path.move_to(map(x, y)),
-                        draw::PathCommand::LineTo { point: [x, y] } => path.line_to(map(x, y)),
-                        draw::PathCommand::QuadTo {
-                            control: [x, y],
-                            end: [ex, ey],
-                        } => path.curve_to(map(ex, ey), map(x, y)),
-                        draw::PathCommand::CubicTo {
-                            control_1: [x, y],
-                            control_2: [x2, y2],
-                            end: [ex, ey],
-                        } => path.cubic_bezier_to(map(ex, ey), map(x, y), map(x2, y2)),
-                    }
-                }
-                if item.path_commands.is_empty() {
-                    for (index, [x, y]) in item.points.iter().enumerate() {
-                        if index == 0 {
-                            path.move_to(map(*x, *y));
-                        } else {
-                            path.line_to(map(*x, *y));
-                        }
-                    }
-                }
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, gpui_color(item.stroke));
-                }
-                for head in &item.arrowhead_primitives {
-                    let points: Vec<_> = if head.kind == draw::ArrowheadDisplayPrimitiveKind::Circle
-                    {
-                        (0..32)
-                            .map(|i| {
-                                let t = i as f64 * std::f64::consts::TAU / 32.0;
-                                map(
-                                    head.center[0] + head.diameter / 2.0 * t.cos(),
-                                    head.center[1] + head.diameter / 2.0 * t.sin(),
-                                )
-                            })
-                            .collect()
-                    } else {
-                        head.points.iter().map(|[x, y]| map(*x, *y)).collect()
-                    };
-                    let closed = head.kind != draw::ArrowheadDisplayPrimitiveKind::Line;
-                    if closed && head.fill_mode == draw::ArrowheadDisplayFillMode::Stroke {
-                        let mut path = PathBuilder::fill();
-                        path.add_polygon(&points, true);
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, gpui_color(item.stroke));
-                        }
-                    }
-                    let mut path =
-                        PathBuilder::stroke(px((item.stroke_width * frame.camera.zoom) as f32));
-                    path.add_polygon(&points, closed);
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, gpui_color(item.stroke));
-                    }
-                }
+                connection_overlay::paint(
+                    item,
+                    matches!(overlay, draw::OverlayDisplayItem::PenFilterContour(_)),
+                    frame,
+                    bounds,
+                    window,
+                );
             }
         }
     }
 }
 
-fn paint_text_selection(this: &mut CanvasView, window: &mut Window, _: &mut Context<CanvasView>) {
+fn paint_text_selection(this: &mut CanvasView, window: &mut Window, cx: &mut Context<CanvasView>) {
     let Some(draft) = this.draft.as_ref() else {
         return;
     };
     let selection = draft.buffer.selection();
-    let caret = draft.buffer.caret;
     let marked = draft.buffer.marked.clone();
-    let range = if selection.is_empty() {
-        caret..caret
+    let color = text_overlay::editing_color(draft.style.color);
+    let rectangles = if marked.is_none() && !selection.is_empty() {
+        this.text_segments(selection)
     } else {
-        selection
+        Vec::new()
     };
-    for (left, top, right, bottom) in this.text_segments(range.clone()) {
+    for &(left, top, right, bottom) in &rectangles {
         let points = [(left, top), (right, top), (right, bottom), (left, bottom)]
             .map(|(x, y)| this.text_world_position(x, y).unwrap());
         let mut path = PathBuilder::fill();
         path.add_polygon(&points, true);
         if let Ok(path) = path.build() {
-            window.paint_path(
-                path,
-                if range.is_empty() {
-                    rgba(0x1668dcff)
-                } else {
-                    rgba(0x1668dc44)
-                },
-            );
+            window.paint_path(path, rgba(0x3399ff78));
         }
+    }
+    if let Err(error) = text_overlay::paint_selected_text(this, &rectangles, window) {
+        this.fail(error, cx);
+    }
+    if this.text_caret_visible(window, cx)
+        && let Some((path, color)) = text_overlay::caret_path(this)
+    {
+        window.paint_path(path, gpui_color(color));
     }
     if let Some(marked) = marked {
         for (left, _, right, bottom) in this.text_segments(marked) {
@@ -726,7 +603,7 @@ fn paint_text_selection(this: &mut CanvasView, window: &mut Window, _: &mut Cont
             path.move_to(this.text_world_position(left, bottom).unwrap());
             path.line_to(this.text_world_position(right, bottom).unwrap());
             if let Ok(path) = path.build() {
-                window.paint_path(path, rgb(0x1668dc));
+                window.paint_path(path, gpui_color(color));
             }
         }
     }

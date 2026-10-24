@@ -126,8 +126,8 @@ impl CanvasView {
             self.fail("Invalid custom crosshair dimensions or color", cx);
         }
     }
-    /// Cancels pending composition and clears renderer caches on the existing CPU
-    /// worker. The last completed image stays visible until replacement is ready.
+    /// Invalidates display caches for the next frame without composing in the
+    /// host callback. The last completed image stays available until that paint.
     pub fn clear_render_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.invalidate_render();
         self.clear_renderer_pending = true;

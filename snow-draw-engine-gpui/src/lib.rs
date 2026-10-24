@@ -10,6 +10,8 @@ mod export;
 mod file_io;
 mod font_cache;
 mod host;
+#[cfg(test)]
+mod interaction_benchmark;
 mod persistence;
 mod profile;
 mod renderer;

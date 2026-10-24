@@ -1,13 +1,23 @@
+mod connection_overlay;
 mod element;
 mod host_controls;
+mod overlay_geometry;
+mod raster;
+mod selection_guides;
+mod selection_input;
+#[cfg(test)]
+mod selection_input_tests;
+mod selection_overlay;
 pub use host_controls::{
     CanvasCommandKeyResolver, CanvasCrosshair, CanvasCrosshairFactory, CanvasCursorLayer,
 };
 #[cfg(test)]
 mod tests;
+mod text_caret;
 mod text_input;
+mod text_overlay;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use gpui::{
     App, Bounds, ClipboardItem, ContentMask, Context, Corners, CursorStyle, Element, ElementId,
@@ -51,12 +61,23 @@ struct TextDraft {
 
 impl Drop for CanvasView {
     fn drop(&mut self) {
-        self.render_cancel.cancel();
+        self.smart_cancel.cancel();
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct ViewRenderKey {
+    scene: draw::SceneRevision,
+    decoration: draw::DecorationRevision,
+    reference: draw::FrameView,
+    viewport: draw::FrameView,
+    resources: u64,
+    scale: u32,
+}
+
 /// Retained native canvas. Domain state, transient viewport state and render caches have
-/// distinct owners. Rendering is demand-driven with at most one worker and one latest request.
+/// distinct owners. Display composition is coalesced at frame preparation so pixels and
+/// editor overlays always consume the same scene. Export workers own separate renderers.
 pub struct CanvasView {
     command_key_resolver: Option<CanvasCommandKeyResolver>,
     cursor_layers: [Option<CursorStyle>; 2],
@@ -75,22 +96,22 @@ pub struct CanvasView {
     scale: f32,
     image: Option<Arc<RenderImage>>,
     image_frame: Option<draw::FrameView>,
-    renderer: Option<Arc<Mutex<CanvasRenderer>>>,
+    image_key: Option<ViewRenderKey>,
+    image_scene: Option<crate::RetainedScene>,
+    renderer: Option<CanvasRenderer>,
     metrics: Option<VectorCache>,
-    render_task: Option<Task<()>>,
     clipboard_task: Option<Task<()>>,
-    render_pending: bool,
-    render_cancel: crate::smart_erase::Cancellation,
+    smart_task: Option<Task<()>>,
+    smart_cancel: crate::CanvasCancellation,
+    smart_requested_generation: Option<u64>,
+    smart_warning: Option<String>,
     generation: u64,
     rendered_generation: u64,
-    requested_key: Option<(
-        draw::SceneRevision,
-        draw::DecorationRevision,
-        draw::FrameView,
-        u64,
-        u32,
-    )>,
+    requested_key: Option<ViewRenderKey>,
     draft: Option<TextDraft>,
+    caret_visible: bool,
+    caret_blink_task: Option<Task<()>>,
+    text_selection_overlay: text_overlay::TextSelectionOverlay,
     selecting_text: bool,
     pan: Option<(Point<Pixels>, draw::Camera)>,
     space_down: bool,
@@ -118,11 +139,13 @@ impl CanvasView {
         let focus = cx.focus_handle().tab_stop(true);
         let subscriptions = vec![
             cx.on_release_in(window, |this, window, cx| {
-                this.render_cancel.cancel();
+                this.smart_cancel.cancel();
+                this.caret_blink_task = None;
+                this.text_selection_overlay.clear(window);
                 if let Some(image) = this.image.take() {
                     let _ = window.drop_image(image);
                 }
-                if this.document.engine().has_pointer_capture() {
+                if this.selecting_text || this.document.engine().has_pointer_capture() {
                     window.release_pointer();
                 }
                 crate::cleanup::retire_send_resources(
@@ -136,14 +159,21 @@ impl CanvasView {
                 crate::retire_canvas_document(std::mem::take(&mut this.document), cx);
             }),
             cx.on_blur(&focus, window, |this, window, cx| {
+                this.stop_text_caret(cx);
                 if this.text_style_popup_depth == 0 {
                     this.finish_text(true, window, cx);
                 }
                 this.cancel_gesture(window, cx);
             }),
+            cx.on_focus(&focus, window, |this, window, cx| {
+                this.reset_text_caret(window, cx);
+            }),
             cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
+                    this.stop_text_caret(cx);
                     this.cancel_gesture(window, cx);
+                } else {
+                    this.reset_text_caret(window, cx);
                 }
             }),
         ];
@@ -165,16 +195,22 @@ impl CanvasView {
             scale: window.scale_factor(),
             image: None,
             image_frame: None,
-            renderer: Some(Arc::new(Mutex::new(CanvasRenderer::default()))),
+            image_key: None,
+            image_scene: None,
+            renderer: Some(CanvasRenderer::default()),
             metrics: Some(VectorCache::default()),
-            render_task: None,
             clipboard_task: None,
-            render_pending: false,
-            render_cancel: Default::default(),
+            smart_task: None,
+            smart_cancel: Default::default(),
+            smart_requested_generation: None,
+            smart_warning: None,
             generation: 0,
             rendered_generation: 0,
             requested_key: None,
             draft: None,
+            caret_visible: true,
+            caret_blink_task: None,
+            text_selection_overlay: Default::default(),
             selecting_text: false,
             pan: None,
             space_down: false,
@@ -275,17 +311,16 @@ impl CanvasView {
         self.error.as_ref()
     }
     pub fn is_rendering(&self) -> bool {
-        self.render_task.is_some()
+        self.smart_task.is_some()
             || (self.reference_valid && self.rendered_generation != self.generation)
     }
     #[doc(hidden)]
     pub fn render_diagnostics(&self) -> String {
         format!(
-            "generation={} rendered={} worker={} pending={} bounds={:?} reference={:?} error={:?}",
+            "generation={} rendered={} pending={} bounds={:?} reference={:?} error={:?}",
             self.generation,
             self.rendered_generation,
-            self.render_task.is_some(),
-            self.render_pending,
+            self.is_rendering(),
             self.bounds,
             self.reference_session.scene().frame(),
             self.error
@@ -310,15 +345,14 @@ impl CanvasView {
             }
         };
         let scale = window.scale_factor();
-        let renderer = self.renderer.as_ref().unwrap().clone();
+        let smart_erase = self.renderer.as_ref().unwrap().smart_erase_snapshot();
         self.clipboard_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    renderer
-                        .lock()
-                        .map_err(|_| CanvasError::InvalidFile("Renderer worker failed".into()))?
-                        .export_snapshot_png(&snapshot, scale)
+                    let mut renderer = CanvasRenderer::default();
+                    renderer.seed_smart_erase_snapshot(&smart_erase);
+                    renderer.export_snapshot_png(&snapshot, scale)
                 })
                 .await;
             let _ = this.update_in(cx, |this, _, cx| {
@@ -390,12 +424,15 @@ impl CanvasView {
                 f32::from(self.bounds.size.height).round().max(1.0) as u32,
             )?;
         }
+        self.invalidate_render();
         let previous_document = std::mem::replace(&mut self.document, document);
         crate::retire_canvas_document(previous_document, cx);
         if let Some(previous) = self.image.take() {
             let _ = window.drop_image(previous);
         }
         self.image_frame = None;
+        self.image_key = None;
+        self.image_scene = None;
         self.session = session;
         self.reference_session = reference_session;
         self.draft = None;
@@ -417,6 +454,7 @@ impl CanvasView {
             self.fail(error, cx);
             return;
         }
+        self.invalidate_render();
         self.fit(window, cx);
     }
 
@@ -464,7 +502,7 @@ impl CanvasView {
         cx.notify();
     }
 
-    fn changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn changed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.reference_valid = false;
         if let Err(error) = self.sync_text_measurements() {
             self.invalidate_render();
@@ -483,111 +521,178 @@ impl CanvasView {
         }
         self.reference_valid = true;
         let cursor = self.reference_session.scene().cursor().unwrap_or_default();
-        let key = (
-            cursor.scene_revision,
-            cursor.decoration_revision,
-            self.reference_session.scene().frame(),
-            self.document.resource_revision(),
-            1.0_f32.to_bits(),
-        );
+        let key = ViewRenderKey {
+            scene: cursor.scene_revision,
+            decoration: cursor.decoration_revision,
+            reference: self.reference_session.scene().frame(),
+            viewport: self.session.scene().frame(),
+            resources: self.document.resource_revision(),
+            scale: self.scale.to_bits(),
+        };
         if self.requested_key != Some(key) {
-            self.render_cancel.cancel();
+            // Input only invalidates. The next GPUI frame consumes the latest
+            // state once, including all pointer events since the previous paint.
             self.requested_key = Some(key);
             self.generation = self.generation.wrapping_add(1);
-            self.schedule_render(window, cx);
         }
         cx.emit(CanvasEvent::Changed);
         cx.notify();
     }
 
     fn invalidate_render(&mut self) {
-        self.render_cancel.cancel();
+        self.smart_cancel.cancel();
+        self.smart_warning = None;
         self.generation = self.generation.wrapping_add(1);
-        self.render_pending = false;
         self.requested_key = None;
     }
 
-    fn schedule_render(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn prepare_display_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.reference_valid
+            || self.rendered_generation == self.generation
             || self.bounds.size.width <= px(0.0)
             || self.bounds.size.height <= px(0.0)
         {
             return;
         }
-        if self.render_task.is_some() {
-            self.render_pending = true;
+        let result = (|| {
+            let renderer = self.renderer.as_mut().unwrap();
+            if std::mem::take(&mut self.clear_renderer_pending) {
+                renderer.clear_render_state();
+            }
+            renderer.defer_smart_erase();
+            // Retain offscreen effect dependencies but rasterize at display DPI.
+            let image_frame = raster::frame(
+                self.reference_session.scene(),
+                self.session.scene().frame(),
+                self.scale,
+            )?;
+            let scene = self.reference_session.scene().with_frame(image_frame);
+            let image = renderer.render_presented_cancellable(
+                &scene,
+                self.document.background(),
+                self.document.resource_revision(),
+                1.0,
+                &Default::default(),
+                false,
+                &self.options.presentation,
+            )?;
+            Ok::<_, CanvasError>((image, image_frame, renderer.warnings().first().cloned()))
+        })();
+        // Do not retry a failed frame in an idle repaint loop.
+        self.rendered_generation = self.generation;
+        match result {
+            Ok((image, image_frame, warning)) => {
+                let mut bgra = (*image).clone();
+                for pixel in bgra.pixels_mut() {
+                    pixel.0.swap(0, 2);
+                }
+                let image = Arc::new(RenderImage::new(vec![image::Frame::new(bgra)]));
+                if let Some(previous) = self.image.replace(image) {
+                    let _ = window.drop_image(previous);
+                }
+                self.image_frame = Some(image_frame);
+                self.image_key = self.requested_key;
+                self.image_scene = Some(self.session.scene().clone());
+                self.error = None;
+                if let Some(warning) = warning {
+                    self.fail(warning, cx);
+                }
+                cx.emit(CanvasEvent::Rendered);
+                self.prepare_smart_erase(window, cx);
+            }
+            Err(error) => self.fail(error, cx),
+        }
+    }
+
+    fn display_scene(&self) -> &crate::RetainedScene {
+        if self.reference_valid && self.image_key == self.requested_key {
+            self.session.scene()
+        } else {
+            // A failed preparation/composition retains one coherent completed
+            // frame, including its controls, rather than mixing two revisions.
+            self.image_scene.as_ref().unwrap_or(self.session.scene())
+        }
+    }
+
+    fn prepare_smart_erase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.renderer.as_ref().unwrap().has_pending_smart_erase() {
             return;
         }
-        self.render_pending = false;
-        let clear_renderer = std::mem::take(&mut self.clear_renderer_pending);
-        let scene = self.reference_session.scene().clone();
-        let presentation = self.options.presentation.clone();
-        let image_frame = scene.frame();
-        let background = self.document.background().cloned();
-        let resources = self.document.resource_revision();
-        let scale = 1.0;
+        if self.smart_requested_generation == Some(self.generation) {
+            if let Some(warning) = self.smart_warning.clone() {
+                self.fail(warning, cx);
+            }
+            return;
+        }
+        if self.smart_task.is_some() {
+            return;
+        }
+        let snapshot = match self.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.fail(error, cx);
+                return;
+            }
+        };
         let generation = self.generation;
-        let cancel = crate::smart_erase::Cancellation::default();
-        self.render_cancel = cancel.clone();
-        let renderer = self.renderer.as_ref().unwrap().clone();
-        self.render_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.smart_requested_generation = Some(generation);
+        self.smart_warning = None;
+        let seed = self.renderer.as_ref().unwrap().smart_erase_snapshot();
+        let cancel = crate::CanvasCancellation::default();
+        self.smart_cancel = cancel.clone();
+        let worker_cancel = cancel.clone();
+        self.smart_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut renderer = renderer
-                        .lock()
-                        .map_err(|_| CanvasError::InvalidFile("Renderer worker failed".into()))?;
-                    if clear_renderer {
-                        renderer.clear_render_state();
-                    }
-                    let image = renderer.render_presented_cancellable(
-                        &scene,
-                        background.as_ref(),
-                        resources,
-                        scale,
-                        &cancel,
+                    let mut renderer = CanvasRenderer::default();
+                    renderer.seed_smart_erase_snapshot(&seed);
+                    renderer.render_presented_cancellable(
+                        &snapshot.scene,
+                        snapshot.background.as_ref(),
+                        snapshot.resources,
+                        1.0,
+                        &worker_cancel,
                         false,
-                        &presentation,
+                        &snapshot.presentation,
                     )?;
-                    Ok::<_, CanvasError>((image, renderer.warnings().to_vec()))
+                    Ok::<_, CanvasError>((
+                        renderer.smart_erase_snapshot(),
+                        renderer.warnings().first().cloned(),
+                    ))
                 })
                 .await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.render_task = None;
-                if this.reference_valid && generation == this.generation {
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.smart_task = None;
+                if cancel.check().is_ok() {
                     match result {
-                        Ok((image, warnings)) => {
-                            let mut bgra = (*image).clone();
-                            for pixel in bgra.pixels_mut() {
-                                pixel.0.swap(0, 2);
+                        Ok((results, warning)) => {
+                            // Results are keyed by source identity and geometry;
+                            // they never replace current display pixels/overlays.
+                            this.renderer
+                                .as_mut()
+                                .unwrap()
+                                .seed_smart_erase_snapshot(&results);
+                            if generation == this.generation {
+                                this.smart_warning = warning;
                             }
-                            let image = Arc::new(RenderImage::new(vec![image::Frame::new(bgra)]));
-                            if let Some(previous) = this.image.replace(image) {
-                                let _ = window.drop_image(previous);
-                            }
-                            this.image_frame = Some(image_frame);
-                            this.rendered_generation = generation;
-                            this.error = None;
-                            if let Some(warning) = warnings.first() {
-                                this.fail(warning, cx);
-                            }
-                            cx.emit(CanvasEvent::Rendered);
-                            cx.notify();
                         }
-                        Err(error) => {
-                            this.rendered_generation = generation;
-                            this.fail(error, cx);
+                        Err(error) if generation == this.generation => {
+                            this.smart_warning = Some(error.to_string());
                         }
+                        Err(_) => {}
                     }
                 }
-                if this.render_pending || generation != this.generation {
-                    this.schedule_render(window, cx);
-                }
+                // Recompose the current scene with the completed cache or start
+                // the latest coalesced solve. Never publish the worker's raster.
+                this.rendered_generation = this.generation.wrapping_sub(1);
+                cx.notify();
             });
         }));
     }
 
     fn cancel_gesture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.invalidate_render();
         self.pan = None;
         self.space_down = false;
         self.space_key = None;
