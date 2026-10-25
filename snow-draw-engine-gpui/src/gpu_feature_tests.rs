@@ -1,6 +1,77 @@
 use super::*;
 
 #[test]
+fn host_coverage_mask_restores_backdrop_and_tracks_presentation_changes() -> Result<()> {
+    let source = SourceImage::new(RgbaImage::from_pixel(64, 48, Rgba([20, 80, 180, 255])))?;
+    let mask = SourceImage::new(RgbaImage::from_fn(64, 48, |x, y| {
+        Rgba([
+            255,
+            255,
+            255,
+            if x < 16 || ((40..44).contains(&x) && (20..24).contains(&y)) {
+                0
+            } else if x < 32 {
+                128
+            } else {
+                255
+            },
+        ])
+    }))?;
+    let scene = scene(
+        view(64, 48),
+        vec![node(
+            0,
+            1,
+            rect(
+                [0., 0., 64., 48.],
+                ColorRgba8 {
+                    r: 220,
+                    g: 40,
+                    b: 60,
+                    a: 255,
+                },
+            ),
+            [0., 0., 64., 48.],
+        )],
+    );
+    let mut device = Device::new()?;
+    for scale in [1., 1.5, 2.] {
+        let presentation = CanvasPresentation {
+            content_mask: Some(mask.clone()),
+            ..Default::default()
+        };
+        let (_, image) = device.render(&scene, Some(&source), scale, &presentation)?;
+        let at = |x: f32, y: f32| image.get_pixel((x * scale) as u32, (y * scale) as u32).0;
+        close(at(8., 8.), [20, 80, 180, 255], 0);
+        close(at(24., 8.), [120, 60, 120, 255], 1);
+        close(at(48., 8.), [220, 40, 60, 255], 0);
+        close(at(42., 22.), [20, 80, 180, 255], 0);
+        let presentation = CanvasPresentation {
+            background_tint: Some(ColorRgba8 {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 128,
+            }),
+            ..presentation
+        };
+        let (_, image) = device.render(&scene, Some(&source), scale, &presentation)?;
+        close(
+            image.get_pixel((8. * scale) as u32, (8. * scale) as u32).0,
+            [10, 40, 90, 255],
+            1,
+        );
+        let (_, image) = device.render(&scene, Some(&source), scale, &Default::default())?;
+        close(
+            image.get_pixel((8. * scale) as u32, (8. * scale) as u32).0,
+            [220, 40, 60, 255],
+            0,
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn invisible_text_lines_do_not_submit_coverage_passes() -> Result<()> {
     for scale in [1.0, 1.5, 2.0] {
         for stroke_width in [0.0, 1.5] {
@@ -12,7 +83,7 @@ fn invisible_text_lines_do_not_submit_coverage_passes() -> Result<()> {
                 height: 5000.0,
                 // Both variants extend beyond the viewport, keeping the
                 // intermediate surface bounds and sampling grid identical.
-                text: vec!["Label"; 8].join("\n"),
+                text: ["Label"; 8].join("\n"),
                 font_size: 20.0,
                 color: ColorRgba8 {
                     r: 60,

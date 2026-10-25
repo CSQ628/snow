@@ -84,6 +84,11 @@ pub struct CanvasPresentation {
     pub before: Option<SourceImage>,
     pub after: Option<SourceImage>,
     pub background_override: Option<SourceImage>,
+    /// Host coverage for document content. Zero restores the pristine/pre-content
+    /// presentation; one retains content. Placement uses canvas coordinates.
+    pub content_mask: Option<SourceImage>,
+    /// Source-over tint after the pristine background and before host/content.
+    pub background_tint: Option<crate::engine::ColorRgba8>,
     pub content_visible: bool,
     pub clear_background: bool,
     pub content_clip: Option<CanvasRect>,
@@ -96,6 +101,8 @@ impl Default for CanvasPresentation {
             before: None,
             after: None,
             background_override: None,
+            content_mask: None,
+            background_tint: None,
             content_visible: true,
             clear_background: true,
             content_clip: None,
@@ -117,6 +124,9 @@ impl CanvasPresentation {
     pub(crate) fn cache_key(&self) -> u64 {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         (self.content_visible, self.clear_background).hash(&mut hash);
+        self.background_tint
+            .map(|c| (c.r, c.g, c.b, c.a))
+            .hash(&mut hash);
         for area in [self.content_clip, self.watermark_area, self.spotlight_area] {
             area.is_some().hash(&mut hash);
             if let Some(r) = area {
@@ -125,7 +135,12 @@ impl CanvasPresentation {
                 }
             }
         }
-        for image in [&self.before, &self.after, &self.background_override] {
+        for image in [
+            &self.before,
+            &self.after,
+            &self.background_override,
+            &self.content_mask,
+        ] {
             image.is_some().hash(&mut hash);
             if let Some(image) = image {
                 image.pixels_identity().hash(&mut hash);

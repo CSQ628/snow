@@ -134,6 +134,10 @@ impl Engine {
         self.editor.has_pointer_capture()
     }
 
+    pub fn has_active_interaction(&self) -> bool {
+        self.editor.has_active_interaction()
+    }
+
     pub fn new(config: EngineConfig) -> Self {
         Self::try_new(config).expect("runtime config should be valid")
     }
