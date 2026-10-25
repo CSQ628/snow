@@ -6,7 +6,8 @@ The Smart Erase implementation adapts the surface, periodic, perceptual guide an
 PatchMatch algorithm in that project's `src/rendering/snow_canvas_smart_erase_algorithm.cpp`.
 It is independently expressed in Rust and links neither Qt nor OpenCV.
 
-Direct dependencies include the local GPUI fork (`gpui` 0.2.2 and
+Direct dependencies include the [GPUI fork](https://github.com/mg-chao/gpui)
+at revision `2c0bf70b54c018f99419f386d1cf1105dca57661` (`gpui` 0.2.2 and
 `gpui_platform` / `gpui_windows` 0.1.0, Apache-2.0), Lyon (MIT OR Apache-2.0),
 the Windows Rust bindings (`windows`, `windows-core` and `windows-numerics`,
 MIT OR Apache-2.0),
@@ -21,11 +22,10 @@ original license texts, rather than this summary, control redistribution.
 
 The repository collector was run against the current Windows dependency graph on 2026-10-24 with `--locked --offline` graph resolution. Its scoped output is:
 
-`../artifacts/snow-draw-gpui-gpu-licenses/third-party/INDEX.md`
+`../artifacts/snow-draw-gpui-git-final-licenses/third-party/INDEX.md`
 
-It collected 505 notice files covering 264 external Rust packages, 38 vcpkg
-packages and repository attribution notices (287 reachable Rust packages including
-local crates). The collector is shared with Snow Shot and its
+It collected 506 notice files covering 280 external Rust packages, 21 vcpkg
+packages and repository attribution notices. The collector is shared with Snow Shot and its
 index retains its generic Snow Media title and superset vcpkg/project entries;
 this GPUI binary does not link Qt or that vcpkg package set.
 

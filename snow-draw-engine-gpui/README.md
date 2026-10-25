@@ -4,10 +4,13 @@ An Apache-2.0 GPU canvas backend and standalone GPUI demo. Shared Snow Draw Engi
 Rust crates own pure document/editing logic. Meshes, image pages, effects, retained
 tiles and presentation use GPUI's own device. Qt is not linked.
 
-The GPUI fork lives at `D:\gpui`; the manifest selects its `gpui`, `gpui_platform`
-and `gpui_windows` crates with the dedicated `gpu-extensions` feature. Generic
-device/job/texture/completion/readback interfaces stay outside application logic.
-The fork contract is in `D:\gpui\crates\gpui\GPU_EXTENSIONS.md`.
+The manifest pins `gpui`, `gpui_platform` and `gpui_windows` to revision
+`2c0bf70b54c018f99419f386d1cf1105dca57661` of the
+[Snow Shot GPUI fork](https://github.com/mg-chao/gpui), with the dedicated
+`gpu-extensions` feature. Generic device/job/texture/completion/readback interfaces
+stay outside application logic. See the
+[fork contract](https://github.com/mg-chao/gpui/blob/2c0bf70b54c018f99419f386d1cf1105dca57661/crates/gpui/GPU_EXTENSIONS.md).
+Cargo fetches the fork on the first build; subsequent cached builds can use `--offline`.
 
 The native implementation is Windows D3D11. Display, raster export and visual
 regression tests use the retained GPU renderer.

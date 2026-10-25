@@ -12,7 +12,7 @@ native-capture = ["gpui/test-support", "gpui_platform/test-support"]
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-gpui = { path = "../../../gpui/crates/gpui", default-features = false, features = ["gpu-extensions"] }
+gpui = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54c018f99419f386d1cf1105dca57661", default-features = false, features = ["gpu-extensions"] }
 lyon = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 png = "=0.18.1"
@@ -29,22 +29,22 @@ unicode-bidi = "0.3"
 rustybuzz = "=0.20.1"
 
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
-gpui_platform = { path = "../../../gpui/crates/gpui_platform", features = ["font-kit", "x11", "wayland", "runtime_shaders", "gpu-extensions"] }
+gpui_platform = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54c018f99419f386d1cf1105dca57661", features = ["font-kit", "x11", "wayland", "runtime_shaders", "gpu-extensions"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-gpui_windows = { path = "../../../gpui/crates/gpui_windows", default-features = false, features = ["gpu-extensions"] }
+gpui_windows = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54c018f99419f386d1cf1105dca57661", default-features = false, features = ["gpu-extensions"] }
 windows = { version = "0.62", features = ["Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite"] }
 windows-numerics = "0.3"
 windows-core = "0.62"
 
 [dev-dependencies]
-gpui = { path = "../../../gpui/crates/gpui", default-features = false, features = ["test-support", "gpu-extensions"] }
+gpui = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54c018f99419f386d1cf1105dca57661", default-features = false, features = ["test-support", "gpu-extensions"] }
 
 [target.'cfg(windows)'.build-dependencies]
 windows = { version = "0.62", features = ["Win32_Graphics_Direct3D_Fxc"] }
 
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dev-dependencies]
-gpui_platform = { path = "../../../gpui/crates/gpui_platform", features = ["test-support", "gpu-extensions"] }
+gpui_platform = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54c018f99419f386d1cf1105dca57661", features = ["test-support", "gpu-extensions"] }
 
 [[bin]]
 name = "snow-draw-demo"
