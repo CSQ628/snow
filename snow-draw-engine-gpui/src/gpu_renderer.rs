@@ -1808,19 +1808,20 @@ impl GpuCanvas {
         if bounds[2] <= bounds[0] || bounds[3] <= bounds[1] {
             return Ok(());
         }
+        let is_text = item.parts.iter().any(|part| part.is_text);
+        // Preserve the device-pixel origin and scale, adding transparent
+        // right/bottom padding only. Exact clipped glyph sizes otherwise churn
+        // scratch allocations that cannot retire until this frame completes.
+        let quantum = if is_text { 16 } else { 1 };
         let group = Region {
             x: bounds[0].floor() as i32,
             y: bounds[1].floor() as i32,
-            width: (bounds[2].ceil() - bounds[0].floor()) as u32,
-            height: (bounds[3].ceil() - bounds[1].floor()) as u32,
+            width: ((bounds[2].ceil() - bounds[0].floor()) as u32).div_ceil(quantum) * quantum,
+            height: ((bounds[3].ceil() - bounds[1].floor()) as u32).div_ceil(quantum) * quantum,
         };
         // Small glyphs receive sixteen spatial coverage samples (2x2 supersampling
         // with four hardware samples); the shared shaping positions stay unchanged.
-        let raster_factor = if item.parts.iter().any(|part| part.is_text) {
-            2
-        } else {
-            1
-        };
+        let raster_factor = if is_text { 2 } else { 1 };
         let raster_region = Region {
             x: group.x * raster_factor,
             y: group.y * raster_factor,
@@ -2897,7 +2898,7 @@ impl GpuCanvas {
         if text.is_empty() || watermark.opacity <= 0.0 {
             return Ok(());
         }
-        let first = view_to_canvas(
+        let mut first = view_to_canvas(
             Point::new(
                 region.x as f64 / f64::from(scale),
                 region.y as f64 / f64::from(scale),
@@ -2905,7 +2906,7 @@ impl GpuCanvas {
             &frame.camera,
             frame.surface,
         );
-        let last = view_to_canvas(
+        let mut last = view_to_canvas(
             Point::new(
                 (region.x as f64 + region.width as f64) / f64::from(scale),
                 (region.y as f64 + region.height as f64) / f64::from(scale),
@@ -2913,6 +2914,20 @@ impl GpuCanvas {
             &frame.camera,
             frame.surface,
         );
+        // Generate only stamps that can touch the requested watermark area.
+        // The lattice below stays anchored in canvas coordinates and retains
+        // the text-width margin for rotated stamps crossing a clipped edge.
+        // Painting the entire desktop then clipping wastes text geometry and
+        // scratch allocations, which can exhaust retirement budget in one frame.
+        if let Some(area) = presentation.watermark_area {
+            first.x = first.x.max(area.x);
+            first.y = first.y.max(area.y);
+            last.x = last.x.min(area.x + area.width);
+            last.y = last.y.min(area.y + area.height);
+            if last.x <= first.x || last.y <= first.y {
+                return Ok(());
+            }
+        }
         let gap = (watermark.gap + watermark.font_size * 4.0).max(32.0);
         let family =
             String::from_utf8_lossy(&watermark.font_family[..watermark.font_family_len as usize])
