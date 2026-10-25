@@ -5655,7 +5655,7 @@ ScreenshotController::Impl::canvasColorPreviewAtPhysicalPoint(ScreenshotOverlayW
     SnowCanvasWidget* canvas = overlay != nullptr ? overlay->canvas() : nullptr;
     if (display == nullptr || canvas == nullptr ||
         !display->physicalRect.contains(physicalPosition) ||
-        !m_canvasColorSampler.ensureSnapshot(*canvas, display->physicalRect)) {
+        !m_canvasColorSampler.ensureContentSnapshot(*canvas, display->physicalRect)) {
         return {};
     }
     return m_canvasColorSampler.previewAtPhysicalPoint(physicalPosition);

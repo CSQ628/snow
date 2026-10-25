@@ -2942,9 +2942,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_include_directories(snow-shot-canvas-color-sampler-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
-    target_link_libraries(snow-shot-canvas-color-sampler-tests PRIVATE Qt6::Widgets snow_canvas_image)
+    target_link_libraries(snow-shot-canvas-color-sampler-tests PRIVATE
+        Qt6::Widgets snow_canvas_image snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-shot-canvas-color-sampler-tests)
     add_test(NAME snow-shot-canvas-color-sampler-tests
-             COMMAND snow-shot-canvas-color-sampler-tests)
+             COMMAND snow-shot-canvas-color-sampler-tests -platform offscreen)
 
     add_executable(snow-shot-language-manager-tests
         tests/language_manager_tests.cpp
@@ -7319,6 +7321,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_executable(snow-shot-color-picker-lifecycle-tests
         tests/screenshot_color_picker_lifecycle_tests.cpp
+        src/presentation/services/screenshotcanvascolorsampler.cpp
         src/presentation/services/screenshotcanvascolorsamplerwindow.cpp
         src/presentation/services/screenshotcolorpickercontroller.cpp
         src/platform/physicalcursor.cpp
