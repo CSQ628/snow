@@ -1,8 +1,12 @@
 mod patch;
+pub(crate) mod profile;
+pub(crate) mod region;
 #[cfg(test)]
 mod tests;
 use crate::CanvasError;
 use image::RgbaImage;
+use profile::{Profiler, SmartEraseSolver, Stage};
+use region::{DonorContext, Reconstruction};
 use std::{
     collections::VecDeque,
     sync::{
@@ -46,6 +50,39 @@ impl Cancellation {
     }
 }
 type Color = [f32; 3];
+
+#[cfg(target_os = "windows")]
+pub(crate) fn gpu_domain(
+    source: &RgbaImage,
+    mask: &[u8],
+    cancel: &Cancellation,
+) -> Result<Vec<u32>, CanvasError> {
+    if mask.len() != source.width() as usize * source.height() as usize {
+        return Err(snow_draw_engine::ErrorCode::InvalidArgument.into());
+    }
+    let mut level = Level::new(source.width() as usize, source.height() as usize);
+    for y in 0..level.height {
+        cancel.check()?;
+        for x in 0..level.width {
+            let i = y * level.width + x;
+            level.covered[i] = source.as_raw()[i * 4 + 3] != 0;
+            level.hole[i] = level.covered[i] && mask[i] != 0;
+        }
+    }
+    if !level.hole.iter().any(|hole| *hole) || !(0..mask.len()).any(|i| level.known(i)) {
+        return Err(CanvasError::Unsupported(
+            "GPU reconstruction without masked pixels and source donors",
+        ));
+    }
+    level.make_domain(cancel)?;
+    Ok((0..mask.len())
+        .map(|i| {
+            u32::from(level.covered[i])
+                | (u32::from(level.hole[i]) << 1)
+                | (u32::from(level.domain[i]) << 2)
+        })
+        .collect())
+}
 fn distance(a: Color, b: Color) -> f32 {
     a.into_iter().zip(b).map(|(a, b)| (a - b) * (a - b)).sum()
 }
@@ -63,12 +100,73 @@ pub(crate) fn reconstruct(
 ) -> Result<RgbaImage, CanvasError> {
     reconstruct_with_donors(source, mask, None, cancel)
 }
+#[cfg(test)]
 pub(crate) fn reconstruct_with_donors(
     source: &RgbaImage,
     mask: &[u8],
     donors: Option<&[u8]>,
     cancel: &Cancellation,
 ) -> Result<RgbaImage, CanvasError> {
+    reconstruct_profiled(source, mask, donors, cancel, &mut Profiler::default())
+}
+
+#[cfg(test)]
+pub(crate) fn reconstruct_profiled(
+    source: &RgbaImage,
+    mask: &[u8],
+    donors: Option<&[u8]>,
+    cancel: &Cancellation,
+    profiler: &mut Profiler<'_>,
+) -> Result<RgbaImage, CanvasError> {
+    match reconstruct_in_region(source, mask, donors, cancel, None, profiler)? {
+        Reconstruction::Complete(image) => Ok(image),
+        Reconstruction::ExpandDonors => unreachable!("uncropped input has all donor context"),
+        #[cfg(target_os = "windows")]
+        Reconstruction::Gpu(_) => unreachable!("CPU reconstruction cannot defer to the GPU"),
+    }
+}
+
+pub(crate) fn reconstruct_in_region(
+    source: &RgbaImage,
+    mask: &[u8],
+    donors: Option<&[u8]>,
+    cancel: &Cancellation,
+    context: Option<&DonorContext>,
+    profiler: &mut Profiler<'_>,
+) -> Result<Reconstruction, CanvasError> {
+    reconstruct_impl(
+        source,
+        mask,
+        donors,
+        cancel,
+        context,
+        profiler,
+        crate::SmartEraseExecution::Cpu,
+    )
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn prepare_in_region(
+    source: &RgbaImage,
+    mask: &[u8],
+    cancel: &Cancellation,
+    context: Option<&DonorContext>,
+    profiler: &mut Profiler<'_>,
+    execution: crate::SmartEraseExecution,
+) -> Result<Reconstruction, CanvasError> {
+    reconstruct_impl(source, mask, None, cancel, context, profiler, execution)
+}
+
+fn reconstruct_impl(
+    source: &RgbaImage,
+    mask: &[u8],
+    donors: Option<&[u8]>,
+    cancel: &Cancellation,
+    context: Option<&DonorContext>,
+    profiler: &mut Profiler<'_>,
+    _execution: crate::SmartEraseExecution,
+) -> Result<Reconstruction, CanvasError> {
+    let start = profiler.start();
     let width = source.width() as usize;
     let height = source.height() as usize;
     if mask.len() != width * height || donors.is_some_and(|d| d.len() != mask.len()) {
@@ -86,7 +184,11 @@ pub(crate) fn reconstruct_with_donors(
         .filter_map(|(i, h)| h.then_some(i))
         .collect();
     if indices.is_empty() {
-        return Ok(source.clone());
+        if let Some(data) = &mut profiler.data {
+            data.solver = Some(SmartEraseSolver::Unchanged);
+        }
+        profiler.finish(Stage::Prepare, start);
+        return Ok(Reconstruction::Complete(source.clone()));
     }
     let known: Vec<_> = hole
         .iter()
@@ -95,6 +197,10 @@ pub(crate) fn reconstruct_with_donors(
         .map(|(i, (h, p))| !*h && p[3] != 0 && donors.is_none_or(|d| d[i] != 0))
         .collect();
     if !known.iter().any(|k| *k) {
+        if context.is_some_and(|context| context.can_expand) {
+            profiler.finish(Stage::Prepare, start);
+            return Ok(Reconstruction::ExpandDonors);
+        }
         return Err(CanvasError::Unsupported(
             "Smart Erase without unmasked source donors",
         ));
@@ -115,11 +221,27 @@ pub(crate) fn reconstruct_with_donors(
         .checked_mul(bottom - top)
         .and_then(|n| n.checked_mul(256))
         .ok_or(CanvasError::ResourceLimit)?;
+    if let Some(data) = &mut profiler.data {
+        data.working_pixels = (right - left) * (bottom - top);
+        data.masked_pixels = indices.len();
+        data.donor_pixels = (top..bottom)
+            .map(|y| {
+                known[y * width + left..y * width + right]
+                    .iter()
+                    .filter(|known| **known)
+                    .count()
+            })
+            .sum();
+        data.estimated_scratch_bytes = estimated;
+    }
     if estimated > MAX_SCRATCH_BYTES {
         return Err(CanvasError::ResourceLimit);
     }
     let cropped_width = right - left;
     let mut level = Level::new(right - left, bottom - top);
+    if let Some(context) = context {
+        level.search_span = context.search_span;
+    }
     for y in top..bottom {
         cancel.check()?;
         for x in left..right {
@@ -132,16 +254,65 @@ pub(crate) fn reconstruct_with_donors(
             }
         }
     }
-    let filled = if let Some(image) = surface(&level, cancel)? {
-        image
+    profiler.finish(Stage::Prepare, start);
+    let start = profiler.start();
+    let affine = surface(&level, cancel)?;
+    profiler.finish(Stage::Affine, start);
+    let (filled, solver) = if let Some(image) = affine {
+        (image, SmartEraseSolver::Affine)
     } else {
-        level.make_domain(cancel)?;
-        if let Some(image) = periodic(&level, cancel)? {
-            image
+        let start = profiler.start();
+        let reach = level.make_domain(cancel)?;
+        if let Some(data) = &mut profiler.data {
+            data.domain_reach = reach;
+        }
+        profiler.finish(Stage::Domain, start);
+        // Guides sample up to sixteen pixels beyond donor centers. Escalate
+        // before accepting a domain truncated by an artificial ROI boundary.
+        if context
+            .is_some_and(|context| context.needs_margin([x0, y0, x1, y1], (reach + 16).min(512)))
+        {
+            return Ok(Reconstruction::ExpandDonors);
+        }
+        let start = profiler.start();
+        let repeated = periodic(&level, cancel)?;
+        profiler.finish(Stage::Periodic, start);
+        if let Some(image) = repeated {
+            (image, SmartEraseSolver::Periodic)
         } else {
-            patch::multiscale(level, cancel)?
+            #[cfg(target_os = "windows")]
+            if _execution != crate::SmartEraseExecution::Cpu
+                && !(_execution == crate::SmartEraseExecution::Automatic
+                    && prefer_small_cpu(&level, [x0 - left, y0 - top, x1 - left, y1 - top]))
+            {
+                let flags = (0..level.hole.len())
+                    .map(|i| {
+                        u32::from(level.covered[i])
+                            | (u32::from(level.hole[i]) << 1)
+                            | (u32::from(level.domain[i]) << 2)
+                    })
+                    .collect();
+                return Ok(Reconstruction::Gpu(region::PreparedGpuGrid {
+                    region: [
+                        left as u32,
+                        top as u32,
+                        level.width as u32,
+                        level.height as u32,
+                    ],
+                    flags,
+                    search_span: level.search_span as u32,
+                }));
+            }
+            (
+                patch::multiscale(level, cancel, profiler)?,
+                SmartEraseSolver::Multiscale,
+            )
         }
     };
+    if let Some(data) = &mut profiler.data {
+        data.solver = Some(solver);
+    }
+    let start = profiler.start();
     let mut output = source.clone();
     for i in indices {
         let j = (i / width - top) * cropped_width + i % width - left;
@@ -149,16 +320,31 @@ pub(crate) fn reconstruct_with_donors(
             output.as_mut()[i * 4 + c] = value.round().clamp(0.0, 255.0) as u8;
         }
     }
-    Ok(output)
+    profiler.finish(Stage::Output, start);
+    Ok(Reconstruction::Complete(output))
 }
 #[derive(Clone)]
 struct Level {
     width: usize,
     height: usize,
+    search_span: usize,
     source: Vec<Color>,
     hole: Vec<bool>,
     covered: Vec<bool>,
     domain: Vec<bool>,
+}
+/// Native x64 comparisons favour CPU for these bounded, dense raster inputs.
+/// Bound both dimensions and donor work: thin strokes, sparse alpha and expanded
+/// regions must not inherit a mask-area-only threshold. Other architectures
+/// retain GPU preference until their native crossover is qualified.
+#[cfg(target_os = "windows")]
+fn prefer_small_cpu(level: &Level, bounds: [usize; 4]) -> bool {
+    cfg!(target_arch = "x86_64")
+        && bounds[2] - bounds[0] <= 16
+        && bounds[3] - bounds[1] <= 16
+        && level.width <= 192
+        && level.height <= 192
+        && level.covered.iter().all(|covered| *covered)
 }
 impl Level {
     fn new(width: usize, height: usize) -> Self {
@@ -166,6 +352,7 @@ impl Level {
         Self {
             width,
             height,
+            search_span: width.max(height),
             source: vec![[0.0; 3]; n],
             hole: vec![false; n],
             covered: vec![false; n],
@@ -186,7 +373,7 @@ impl Level {
     fn known(&self, i: usize) -> bool {
         self.covered[i] && !self.hole[i]
     }
-    fn make_domain(&mut self, cancel: &Cancellation) -> Result<(), CanvasError> {
+    fn make_domain(&mut self, cancel: &Cancellation) -> Result<usize, CanvasError> {
         let holes = self.holes();
         let nearest = nearest(self.width, self.height, &self.hole, cancel)?;
         let x0 = holes.iter().map(|i| i % self.width).min().unwrap();
@@ -212,11 +399,11 @@ impl Level {
             }
             reach = (reach * 2).min(512);
         }
-        Ok(())
+        Ok(reach)
     }
 }
 // Linear multi-source propagation avoids a donor-count by target-count search.
-fn nearest(
+pub(crate) fn nearest(
     width: usize,
     height: usize,
     seeds: &[bool],
@@ -403,6 +590,101 @@ fn solve(mut a: [[f64; 3]; 3], mut b: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
     }
     Some(b)
 }
+#[cfg(target_os = "windows")]
+pub(crate) enum FastModel {
+    Complete(RgbaImage),
+    PeriodicHint,
+    Texture,
+}
+/// Inspect only the mask plus its affine observation ring. A periodic hint
+/// requests the ordinary CPU path; the GPU detector remains authoritative when
+/// the small ring cannot identify a period.
+#[cfg(target_os = "windows")]
+pub(crate) fn fast_model(
+    source: &RgbaImage,
+    mask: &[u8],
+    cancel: &Cancellation,
+) -> Result<FastModel, CanvasError> {
+    if mask.len() != source.width() as usize * source.height() as usize {
+        return Err(snow_draw_engine::ErrorCode::InvalidArgument.into());
+    }
+    let mut level = Level::new(source.width() as usize, source.height() as usize);
+    let mut holes = 0;
+    for y in 0..level.height {
+        cancel.check()?;
+        for x in 0..level.width {
+            let i = y * level.width + x;
+            let p = source.as_raw();
+            level.covered[i] = p[i * 4 + 3] != 0;
+            level.hole[i] = level.covered[i] && mask[i] != 0;
+            holes += usize::from(level.hole[i]);
+            level.domain[i] = level.known(i);
+            if level.known(i) {
+                level.source[i] = std::array::from_fn(|c| p[i * 4 + c] as f32);
+            }
+        }
+    }
+    if holes == 0 {
+        return Ok(FastModel::Complete(source.clone()));
+    }
+    if let Some(colors) = surface(&level, cancel)? {
+        let mut output = source.clone();
+        for (i, hole) in level.hole.iter().enumerate() {
+            if i % 4096 == 0 {
+                cancel.check()?;
+            }
+            if *hole {
+                for (c, value) in colors[i].iter().enumerate() {
+                    output.as_mut()[i * 4 + c] = value.round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        return Ok(FastModel::Complete(output));
+    }
+    let points: Vec<_> = level
+        .domain
+        .iter()
+        .enumerate()
+        .filter_map(|(i, d)| d.then_some(i))
+        .collect();
+    for (dx, dy) in [(1, 0), (0, 1)] {
+        for period in 2..=64 {
+            if period_matches(&level, &points, dx, dy, period, cancel)? {
+                return Ok(FastModel::PeriodicHint);
+            }
+        }
+    }
+    Ok(FastModel::Texture)
+}
+fn period_matches(
+    level: &Level,
+    points: &[usize],
+    dx: isize,
+    dy: isize,
+    period: isize,
+    cancel: &Cancellation,
+) -> Result<bool, CanvasError> {
+    cancel.check()?;
+    let mut count = 0;
+    let mut error = 0.0;
+    for (n, i) in points.iter().enumerate() {
+        if n % 4096 == 0 {
+            cancel.check()?;
+        }
+        if let Some(j) = level.at(
+            (i % level.width) as isize + dx * period,
+            (i / level.width) as isize + dy * period,
+        ) && level.domain[j]
+        {
+            count += 1;
+            error += distance(level.source[*i], level.source[j]);
+            if error > points.len() as f32 * 0.5 {
+                break;
+            }
+        }
+    }
+    Ok(count >= 64 && error <= count as f32 * 0.5)
+}
 fn periodic(level: &Level, cancel: &Cancellation) -> Result<Option<Vec<Color>>, CanvasError> {
     let points: Vec<_> = level
         .domain
@@ -412,26 +694,7 @@ fn periodic(level: &Level, cancel: &Cancellation) -> Result<Option<Vec<Color>>, 
         .collect();
     for (dx, dy) in [(1_isize, 0_isize), (0, 1)] {
         for period in 2..=64 {
-            cancel.check()?;
-            let mut count = 0;
-            let mut error = 0.0;
-            for (n, i) in points.iter().enumerate() {
-                if n % 4096 == 0 {
-                    cancel.check()?;
-                }
-                if let Some(j) = level.at(
-                    (i % level.width) as isize + dx * period,
-                    (i / level.width) as isize + dy * period,
-                ) && level.domain[j]
-                {
-                    count += 1;
-                    error += distance(level.source[*i], level.source[j]);
-                    if error > points.len() as f32 * 0.5 {
-                        break;
-                    }
-                }
-            }
-            if count < 64 || error > count as f32 * 0.5 {
+            if !period_matches(level, &points, dx, dy, period, cancel)? {
                 continue;
             }
             let mut output = level.source.clone();

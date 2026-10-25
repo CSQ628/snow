@@ -29,8 +29,11 @@ cargo run --locked --offline -p snow-draw-engine-gpui --bin snow-draw-demo -- --
 
 Cargo output is isolated in `../build/snow-draw-gpui`. New starts a drawing; Image
 replaces its pristine source; Open/Save use `.snowdraw` schema 1; PNG/SVG export
-the viewport. Decode, encode and Smart Erase run on CPU workers. GPU preparation
-and completion polling stay on the service owner thread.
+the viewport. Decode, encode and Smart Erase input preparation run on CPU workers.
+Textured Smart Erase reconstruction uses GPU compute; submission and completion
+polling stay on the service owner thread.
+Native fence events wake completion tasks where supported; other devices retain
+timer polling. Callbacks do not submit GPU work.
 
 Shortcuts: V select, R shape, A arrow, L line, P pen, T text, E object eraser;
 Space+drag or middle drag pans; wheel zooms/adjusts the tool. Shift constrains or
@@ -56,8 +59,13 @@ selection, local undo and UTF-16 IME composition.
 - `GpuCanvas` obtains `cx.gpu_service()` / `window.gpu_service()`. Cached geometry
   and original-image pages feed retained 256-pixel tiles; per-view visibility and
   ordered effect support determine damage. Idle content reuses textures.
-- `SmartEraseService` reconstructs eligible source ROIs on CPU workers. Immutable
-  cropped patches are uploaded/composited on GPU independently of camera/DPI.
+- `SmartEraseService` prepares bounded source-grid masks and retains cheap CPU
+  affine/periodic fills. Automatic execution also keeps qualified tiny, dense x64
+  raster fills on CPU; hosts can select CPU or GPU preference through
+  `CanvasViewOptions::smart_erase_execution`. Layered texture inputs use GPU donor assembly and domain/model/
+  pyramid preparation; `GpuSmartErase` keeps reconstruction and completed patches
+  on the GPU, independently of camera/DPI, with CPU fallback.
+  See [migration evidence and remaining work](docs/SMART_ERASE_GPU_MIGRATION.md).
 - `GpuExportJob` uses that same renderer/service, with at most two readbacks and
   two queued CPU encoder bands. Normal display requires no readback.
 

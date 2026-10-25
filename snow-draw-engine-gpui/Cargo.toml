@@ -33,7 +33,7 @@ gpui_platform = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_windows = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54c018f99419f386d1cf1105dca57661", default-features = false, features = ["gpu-extensions"] }
-windows = { version = "0.62", features = ["Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_System_Threading", "Win32_Security"] }
 windows-numerics = "0.3"
 windows-core = "0.62"
 
@@ -68,6 +68,10 @@ harness = false
 
 [[bench]]
 name = "bound_text_drag"
+harness = false
+
+[[bench]]
+name = "smart_erase"
 harness = false
 
 [profile.canvas-perf]

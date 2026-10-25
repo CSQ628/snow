@@ -298,6 +298,9 @@ fn fixture(
     cx: &mut TestAppContext,
     document: CanvasDocument,
 ) -> (Entity<CanvasView>, VisualTestContext) {
+    // These integration views use a real D3D device. Permit its Windows
+    // completion callbacks while driving logical work through the test scheduler.
+    cx.executor().allow_parking();
     struct TestGpuHost {
         _host: gpui_windows::gpu_extensions::OffscreenGpuHost,
     }
@@ -318,8 +321,27 @@ fn fixture(
 }
 fn paint(cx: &mut VisualTestContext) {
     cx.run_until_parked();
+    retire_gpu(cx);
     cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.run_until_parked();
+    // Draining logical tasks does not retire native event-driven GPU work. Give
+    // the requested publication a ready queue without relying on timer polling.
+    retire_gpu(cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+fn retire_gpu(cx: &mut VisualTestContext) {
+    let service = cx.update(|window, _| window.gpu_service().unwrap());
+    let mut completion = service.completion().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !completion.poll().unwrap() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native GPU retirement timed out"
+        );
+        std::thread::yield_now();
+    }
+    // No GPUI background/foreground tasks run here. Tests can isolate immediate
+    // logical publication from the separately tested native queue backpressure.
 }
 
 #[gpui::test]

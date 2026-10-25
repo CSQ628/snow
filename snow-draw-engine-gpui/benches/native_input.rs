@@ -1,9 +1,15 @@
 //! Native message queue -> GPUI CanvasView -> Present1 submission benchmark.
 #[cfg(target_os = "windows")]
 mod native {
+    mod view_erase {
+        include!("native_input/view_erase.rs");
+    }
     use anyhow::{Context as _, Result, ensure};
     use gpui::{prelude::*, *};
-    use snow_draw_engine_gpui::{CanvasDocument, CanvasSession, CanvasView, engine as draw};
+    use snow_draw_engine_gpui::{
+        CanvasDocument, CanvasSession, CanvasView, GpuSmartErase, GpuSmartEraseInput,
+        GpuSmartEraseJob, GpuSmartEraseProfile, SourceImage, engine as draw,
+    };
     use std::{
         cell::RefCell,
         rc::Rc,
@@ -11,6 +17,7 @@ mod native {
             Arc,
             atomic::{AtomicBool, Ordering},
         },
+        task::Poll,
         time::{Duration, Instant as WallInstant},
     };
     use windows::{
@@ -30,6 +37,7 @@ mod native {
     struct BenchView {
         canvas: Entity<CanvasView>,
         input: Rc<RefCell<InputState>>,
+        erasure: Option<view_erase::Fixture>,
     }
     impl Render for BenchView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -50,6 +58,14 @@ mod native {
                             0.5
                         }
                     };
+                    if let Some(fixture) = &this.erasure {
+                        let index = this.input.borrow().handled;
+                        this.canvas.update(cx, |canvas, cx| {
+                            fixture.apply(canvas, index, window, cx);
+                        });
+                        cx.stop_propagation();
+                        return;
+                    }
                     this.canvas.update(cx, |canvas, cx| {
                         canvas.command(
                             |engine, viewport| {
@@ -112,12 +128,53 @@ mod native {
             }
             ensure!(
                 WallInstant::now() < deadline,
-                "native presentation timed out"
+                "native presentation timed out: {diagnostics:?}"
             );
             cx.background_executor()
                 .timer(Duration::from_millis(1))
                 .await;
         }
+    }
+
+    fn poll_compute(
+        job: &mut Option<GpuSmartEraseJob>,
+        profile: &mut Option<GpuSmartEraseProfile>,
+        max_poll_ms: &mut f64,
+    ) -> Result<()> {
+        let Some(active) = job else { return Ok(()) };
+        let start = WallInstant::now();
+        let result = active.poll();
+        *max_poll_ms = max_poll_ms.max(start.elapsed().as_secs_f64() * 1000.0);
+        if let Poll::Ready(result) = result {
+            *profile = Some(result?.profile);
+            *job = None;
+        }
+        Ok(())
+    }
+
+    async fn wait_for_work(
+        cx: &AsyncApp,
+        job: &Option<GpuSmartEraseJob>,
+        runtime: &Option<GpuSmartErase>,
+        use_events: bool,
+    ) -> Result<bool> {
+        if job
+            .as_ref()
+            .is_some_and(GpuSmartEraseJob::has_pending_submissions)
+        {
+            cx.foreground_executor().spawn(async {}).await;
+        } else if use_events
+            && job.is_some()
+            && let Some(wake) = runtime.as_ref().unwrap().completion_wake()?
+        {
+            wake.await;
+            return Ok(true);
+        } else {
+            cx.background_executor()
+                .timer(Duration::from_millis(1))
+                .await;
+        }
+        Ok(false)
     }
 
     fn native_handle(title: &str) -> Result<HWND> {
@@ -134,12 +191,13 @@ mod native {
         selected: draw::ElementId,
         title: String,
         output: std::path::PathBuf,
+        mode: String,
         cx: &mut AsyncApp,
     ) -> Result<()> {
+        let initial = WallInstant::now();
         cx.background_executor()
             .timer(Duration::from_millis(300))
             .await;
-        let initial = WallInstant::now();
         let (service, input, refresh, scale, logical_size) =
             window.update(cx, |root, window, cx| {
                 let canvas = root.canvas.clone();
@@ -164,13 +222,51 @@ mod native {
                 )
             })?;
         let service = service?;
-        presented(&service, 0, initial, cx).await?;
+        if let Err(error) = presented(&service, 0, initial, cx).await {
+            let state =
+                window.read_with(cx, |root, cx| root.canvas.read(cx).render_diagnostics())?;
+            return Err(error.context(state));
+        }
+        if mode.starts_with("view-") {
+            return view_erase::measure(window, &service, input, &title, output, cx).await;
+        }
+        let compute_load = mode == "smart-erase" || mode == "smart-erase-polling";
+        let use_events = mode != "smart-erase-polling";
         let display_start = service.diagnostics();
         let handle = native_handle(&title)?;
+        let runtime = if compute_load {
+            let mut runtime = GpuSmartErase::new(service.clone())?;
+            runtime.set_profiling(true);
+            Some(runtime)
+        } else {
+            None
+        };
+        let source = SourceImage::new(image::RgbaImage::from_fn(512, 384, |x, y| {
+            let n = (((x * 17 + y * 31) ^ (x * y)) % 49) as u8;
+            image::Rgba([90 + n, 120 + n, 60 + n, 255])
+        }))?;
+        let mask: Vec<u8> = (0..512 * 384)
+            .map(|i| u8::from((192..320).contains(&(i % 512)) && (144..240).contains(&(i / 512))))
+            .collect();
         let mut samples = Vec::new();
         let mut queue_latencies = Vec::new();
         let mut callback_latencies = Vec::new();
         for index in 0..72 {
+            let mut event_wakes = 0;
+            let mut compute_profile = None;
+            let mut max_poll_ms = 0.0_f64;
+            let compute_input = runtime
+                .as_ref()
+                .map(|_| GpuSmartEraseInput::new(&source, &mask, &Default::default()))
+                .transpose()?;
+            let compute_start = WallInstant::now();
+            let mut compute = match (&runtime, compute_input) {
+                (Some(runtime), Some(input)) => Some(runtime.start(input, Default::default())?),
+                _ => None,
+            };
+            let owner_start_ms = compute_start.elapsed().as_secs_f64() * 1000.0;
+            poll_compute(&mut compute, &mut compute_profile, &mut max_poll_ms)?;
+            let active_at_post = compute.is_some();
             let before = service.diagnostics();
             let expected = input.borrow().handled + 1;
             let posted = WallInstant::now();
@@ -180,6 +276,7 @@ mod native {
             }
             let deadline = posted + Duration::from_secs(30);
             let callback = loop {
+                poll_compute(&mut compute, &mut compute_profile, &mut max_poll_ms)?;
                 {
                     let input = input.borrow();
                     if input.handled >= expected {
@@ -190,11 +287,28 @@ mod native {
                     WallInstant::now() < deadline,
                     "F24 native input was not dispatched"
                 );
-                cx.background_executor()
-                    .timer(Duration::from_millis(1))
-                    .await;
+                event_wakes +=
+                    usize::from(wait_for_work(cx, &compute, &runtime, use_events).await?);
             };
-            let after = presented(&service, before.presentations, callback, cx).await?;
+            let active_at_callback = compute.is_some();
+            let after = loop {
+                poll_compute(&mut compute, &mut compute_profile, &mut max_poll_ms)?;
+                let diagnostics = service.diagnostics();
+                if diagnostics.presentations > before.presentations
+                    && diagnostics
+                        .last_presentation_end
+                        .is_some_and(|end| end >= callback)
+                {
+                    break diagnostics;
+                }
+                ensure!(
+                    WallInstant::now() < deadline,
+                    "presentation under compute load timed out"
+                );
+                event_wakes +=
+                    usize::from(wait_for_work(cx, &compute, &runtime, use_events).await?);
+            };
+            let active_at_presentation_observation = compute.is_some();
             let end = after
                 .last_presentation_end
                 .context("presentation timestamp")?;
@@ -204,6 +318,27 @@ mod native {
                 queue_latencies.push(queued_ms);
                 callback_latencies.push(callback_ms);
             }
+            while compute.is_some() {
+                poll_compute(&mut compute, &mut compute_profile, &mut max_poll_ms)?;
+                ensure!(
+                    WallInstant::now() < deadline,
+                    "background reconstruction timed out"
+                );
+                if compute.is_some() {
+                    event_wakes +=
+                        usize::from(wait_for_work(cx, &compute, &runtime, use_events).await?);
+                }
+            }
+            if compute_load {
+                ensure!(
+                    active_at_post && active_at_callback,
+                    "input did not overlap reconstruction"
+                );
+                ensure!(
+                    compute_profile.as_ref().is_some_and(|p| p.levels >= 2),
+                    "multiscale load missing"
+                );
+            }
             samples.push(serde_json::json!({
                 "native_queue_to_present_submission_ms": queued_ms,
                 "native_callback_to_present_submission_ms": callback_ms,
@@ -211,6 +346,14 @@ mod native {
                 "present_call_cpu_ms": (after.present_cpu_ns - before.present_cpu_ns) as f64 / 1e6,
                 "presented_pixels": after.presented_pixels - before.presented_pixels,
                 "full_presentations": after.full_presentations - before.full_presentations,
+                "reconstruction_active_at_post":active_at_post,
+                "reconstruction_active_at_callback":active_at_callback,
+                "reconstruction_active_at_presentation_observation":active_at_presentation_observation,
+                "reconstruction_owner_start_ms":owner_start_ms,
+                "reconstruction_max_owner_poll_ms":max_poll_ms,
+                "reconstruction_event_wakes":event_wakes,
+                "reconstruction_total_ms": if compute_load {Some(compute_start.elapsed().as_secs_f64()*1000.0)} else {None},
+                "reconstruction":compute_profile,
             }));
         }
         let error = window.read_with(cx, |root, cx| {
@@ -255,6 +398,8 @@ mod native {
         let capabilities = service.capabilities();
         let report = serde_json::json!({
             "profile":"canvas-perf", "elements":10_000, "warmup_samples":8,
+            "load":if compute_load {"smart_erase"} else {"none"},
+            "completion":if use_events {"events_when_supported"} else {"timer"},
             "adapter":{"name":capabilities.adapter_name.as_ref(), "vendor_id":capabilities.vendor_id, "device_id":capabilities.device_id},
             "logical_size":[f32::from(logical_size.width), f32::from(logical_size.height)], "dpi_scale":scale,
             "physical_size":[f32::from(logical_size.width)*scale, f32::from(logical_size.height)*scale],
@@ -267,6 +412,7 @@ mod native {
             "startup_readback_bytes":display_start.readback_bytes,
             "display_readback_bytes":service.diagnostics().readback_bytes - display_start.readback_bytes,
             "measurement":"Posted WM_KEYDOWN -> GPUI native dispatch -> CanvasView edit -> Present1 return. Excludes physical scanout; GPU retirement is measured by gpu_profile.",
+            "reconstruction_measurement":"Optional 512x384 source-grid GPU reconstruction shares the window device. Ready batches yield to the event loop; completion events wake the owner where native fences are supported, with timer polling otherwise. Source/mask preparation precedes posting; initial allocation is reported separately. This isolates compute coexistence, not the complete CanvasView Smart Erase preparation pipeline.",
             "samples":samples,
         });
         std::fs::write(output, serde_json::to_vec_pretty(&report)?)?;
@@ -278,7 +424,27 @@ mod native {
             .nth(1)
             .context("output JSON path")?
             .into();
-        let (document, selected) = fixture()?;
+        let mode = std::env::args().nth(2).unwrap_or_else(|| "idle".into());
+        ensure!(
+            matches!(
+                mode.as_str(),
+                "idle"
+                    | "smart-erase"
+                    | "smart-erase-polling"
+                    | "view-texture"
+                    | "view-layered"
+                    | "view-affine"
+                    | "view-periodic"
+                    | "view-texture-compare"
+                    | "view-layered-compare"
+            ),
+            "Unknown native benchmark mode"
+        );
+        let (mut document, selected) = fixture()?;
+        let erasure = view_erase::Fixture::new(&mode)?;
+        if let Some(fixture) = &erasure {
+            document.set_background(Some(fixture.source.clone()));
+        }
         let failed = Arc::new(AtomicBool::new(false));
         let exit_failed = failed.clone();
         let title = format!("Snow native GPU input benchmark {}", std::process::id());
@@ -304,13 +470,14 @@ mod native {
                                     .expect("canvas initialization")
                             }),
                             input: Rc::default(),
+                            erasure,
                         })
                     },
                 )
                 .expect("native benchmark window");
             cx.activate(true);
             cx.spawn(async move |cx| {
-                if let Err(error) = measure(window, selected, title, output, cx).await {
+                if let Err(error) = measure(window, selected, title, output, mode, cx).await {
                     failed.store(true, Ordering::Relaxed);
                     eprintln!("Native input benchmark failed: {error:#}");
                 }

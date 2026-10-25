@@ -3,6 +3,8 @@
 mod features;
 #[path = "gpu_semantics_tests.rs"]
 mod semantics;
+#[path = "gpu_source_tests.rs"]
+mod source;
 #[path = "gpu_watermark_area_tests.rs"]
 mod watermark_area;
 use crate::engine::*;
@@ -95,7 +97,7 @@ pub(crate) fn read_frame(
     }
     Ok(output)
 }
-fn view(width: u32, height: u32) -> FrameView {
+pub(crate) fn view(width: u32, height: u32) -> FrameView {
     FrameView {
         surface: SurfaceSize { width, height },
         camera: Camera {
@@ -110,7 +112,7 @@ fn view(width: u32, height: u32) -> FrameView {
         },
     }
 }
-fn node(
+pub(crate) fn node(
     index: u32,
     revision: u64,
     item: SceneDisplayItem,
@@ -154,7 +156,7 @@ fn reset(frame: FrameView, nodes: Vec<Arc<RetainedSceneNode>>) -> RetainedSceneD
         spotlights: Some(Arc::default()),
     }
 }
-fn scene(frame: FrameView, nodes: Vec<Arc<RetainedSceneNode>>) -> RetainedScene {
+pub(crate) fn scene(frame: FrameView, nodes: Vec<Arc<RetainedSceneNode>>) -> RetainedScene {
     let mut scene = RetainedScene::default();
     scene.apply_delta(&reset(frame, nodes)).unwrap();
     scene

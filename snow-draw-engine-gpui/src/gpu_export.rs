@@ -84,6 +84,7 @@ impl<T: Send + 'static> GpuExportJob<T> {
             }
             None => (source_size, None),
         };
+        let smart = smart.for_device(&service);
         validate_smart_erase(&snapshot, &smart)?;
         let gpu = GpuCanvas::new(service).map_err(gpu_error)?;
         let (bands, input) = mpsc::sync_channel(2);
@@ -686,8 +687,39 @@ pub struct GpuSavePreparation {
     snapshot: Option<crate::DrawingSnapshot>,
     service: Arc<dyn GpuService>,
     cancel: CanvasCancellation,
-    image: Option<GpuExportJob<RgbaImage>>,
+    image: Option<SaveReadback>,
     visual: Option<crate::SourceImage>,
+}
+
+enum SaveReadback {
+    Rendered(Box<GpuExportJob<RgbaImage>>),
+    Straight(crate::gpu_smart_erase::StraightReadback),
+}
+impl SaveReadback {
+    fn new(
+        service: Arc<dyn GpuService>,
+        source: crate::SourceImage,
+        cancel: CanvasCancellation,
+    ) -> Result<Self, CanvasError> {
+        if source.gpu_straight.is_some() {
+            return crate::gpu_smart_erase::StraightReadback::new(service, source, cancel)
+                .map(Self::Straight);
+        }
+        GpuExportJob::rgba(
+            service,
+            CanvasSnapshot::source_only(source),
+            Default::default(),
+            cancel,
+        )
+        .map(|job| Self::Rendered(Box::new(job)))
+    }
+
+    fn poll(&mut self) -> Poll<Result<RgbaImage, CanvasError>> {
+        match self {
+            Self::Rendered(job) => job.poll(),
+            Self::Straight(job) => job.poll(),
+        }
+    }
 }
 
 impl GpuSavePreparation {
@@ -698,10 +730,9 @@ impl GpuSavePreparation {
     ) -> Result<Self, CanvasError> {
         cancel.check()?;
         let image = if snapshot.requires_materialization() {
-            Some(GpuExportJob::rgba(
+            Some(SaveReadback::new(
                 service.clone(),
-                CanvasSnapshot::source_only(snapshot.source().expect("layered source").clone()),
-                Default::default(),
+                snapshot.source().expect("GPU source").clone(),
                 cancel.clone(),
             )?)
         } else {
@@ -741,12 +772,8 @@ impl GpuSavePreparation {
                 .source()
                 .expect("layered source")
                 .eligible_for_rendering();
-            self.image = match GpuExportJob::rgba(
-                self.service.clone(),
-                CanvasSnapshot::source_only(source),
-                Default::default(),
-                self.cancel.clone(),
-            ) {
+            self.image = match SaveReadback::new(self.service.clone(), source, self.cancel.clone())
+            {
                 Ok(job) => Some(job),
                 Err(error) => return Poll::Ready(Err(error)),
             };

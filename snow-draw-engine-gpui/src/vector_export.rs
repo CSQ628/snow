@@ -11,6 +11,7 @@ use crate::{
 
 pub(crate) fn supports(snapshot: &CanvasSnapshot, vectors: &mut VectorContext) -> bool {
     snapshot.presentation.is_default()
+        && snapshot.background.as_ref().is_none_or(portable_source)
         && !snapshot.scene.decoration().spotlight.active
         && snapshot.scene.decoration().watermark.text_len == 0
         && snapshot.scene.nodes().all(|(_, node)| {
@@ -33,6 +34,13 @@ pub(crate) fn supports(snapshot: &CanvasSnapshot, vectors: &mut VectorContext) -
             };
             portable_geometry && !vectors.item_uses_color_fonts(item)
         })
+}
+
+fn portable_source(source: &crate::SourceImage) -> bool {
+    source.layers().map_or_else(
+        || source.raster_pixels().is_some(),
+        |layers| layers.iter().all(|layer| portable_source(&layer.image)),
+    )
 }
 
 pub(crate) fn svg(

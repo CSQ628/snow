@@ -44,7 +44,8 @@ fn assert_drag_paints_current_frames(
         cx.update(|_, cx| view.update(cx, |v, _| v.prepare_logical_frame().unwrap()));
         let latest = view.read_with(cx, |v, _| v.generation);
         assert!(latest > generation);
-        // Paint without executing any background tasks or waiting for idle.
+        // Establish native queue headroom, then paint without executing CPU workers.
+        retire_gpu(cx);
         cx.update(|window, cx| window.draw(cx).clear(cx));
         let frames = published.borrow();
         let (painted, image) = frames.last().unwrap();

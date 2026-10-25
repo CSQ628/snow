@@ -63,6 +63,7 @@ fn creation_pixels_and_selection_are_current_in_the_same_frame(cx: &mut TestAppC
         pointer(&mut visual, point(px(x), px(260.0)), false);
         // Paint without draining workers: a displayed frame must already match
         // the scene that supplies its selection controls.
+        retire_gpu(&mut visual);
         visual.update(|window, cx| window.draw(cx).clear(cx));
         view.read_with(&visual, |v, _| {
             assert!(!v.session.scene().order_ids().is_empty());
@@ -325,6 +326,18 @@ fn smart_erase_paints_current_mask_and_only_imports_valid_worker_results(cx: &mu
             );
             window.draw(cx).clear(cx);
         });
+        // A previous frame can still occupy the GPU submission slots. Draw the
+        // current preview once a slot retires, without running reconstruction
+        // workers or advancing their timers.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while view.read_with(&visual, |v, _| v.rendered_generation != v.generation) {
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(
+                std::time::Instant::now() < deadline,
+                "preview GPU frame did not retire"
+            );
+            std::thread::yield_now();
+        }
         let preview = view.read_with(&visual, |v, _| {
             assert_eq!(v.rendered_generation, v.generation);
             assert!(v.smart_task.is_some());
@@ -380,5 +393,236 @@ fn smart_erase_paints_current_mask_and_only_imports_valid_worker_results(cx: &mu
                 "{mode}: idle retry"
             );
         });
+    }
+}
+
+#[gpui::test]
+fn smart_erase_multiscale_runs_on_gpu_and_cancellation_rejects_submitted_results(
+    cx: &mut TestAppContext,
+) {
+    for (mode, cancel_gpu) in [
+        ("fallback", false),
+        ("cpu", false),
+        ("cpu_layered", false),
+        ("raster", false),
+        ("raster", true),
+        ("layered", false),
+        ("layered", true),
+        ("resident", false),
+        ("resident", true),
+    ] {
+        let mut document = CanvasDocument::default();
+        let mut source = SourceImage::new(image::RgbaImage::from_fn(192, 160, |x, y| {
+            let n = (((x * 17 + y * 31) ^ (x * y)) % 49) as u8;
+            image::Rgba([90 + n, 120 + n, 60 + n, 255])
+        }))
+        .unwrap()
+        .with_placement(draw::Point::new(-96.0, -80.0), 1.0)
+        .unwrap();
+        if mode == "layered" || mode == "fallback" || mode == "cpu_layered" {
+            source = SourceImage::from_layers(&[
+                crate::ImageSourceLayer::new(source),
+                crate::ImageSourceLayer {
+                    image: SourceImage::new(image::RgbaImage::from_pixel(
+                        16,
+                        16,
+                        image::Rgba([0, 255, 0, 255]),
+                    ))
+                    .unwrap(),
+                    canvas_rect: Some(CanvasRect::new(-96.0, -80.0, 192.0, 160.0).unwrap()),
+                    coverage: None,
+                    smart_erase_source: false,
+                },
+            ])
+            .unwrap()
+            .unwrap();
+        }
+        document.set_background(Some(source));
+        let (view, mut visual) = fixture(cx, document);
+        visual.update(|window, cx| {
+            view.update(cx, |v, cx| {
+                if mode == "cpu" || mode == "cpu_layered" {
+                    let mut options = v.options().clone();
+                    options.smart_erase_execution = crate::SmartEraseExecution::Cpu;
+                    v.set_options(options, window, cx).unwrap();
+                }
+                if mode == "resident" {
+                    let service = window.gpu_service().unwrap();
+                    let assembler = crate::GpuDonorAssembler::new(service).unwrap();
+                    let source = v.document.background().unwrap();
+                    let input =
+                        crate::GpuDonorInput::new(source, [0, 0, 192, 160], &Default::default())
+                            .unwrap();
+                    let mut job = assembler.start(input, Default::default()).unwrap();
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    let source = loop {
+                        if let std::task::Poll::Ready(result) = job.poll() {
+                            break result.unwrap().source;
+                        }
+                        assert!(std::time::Instant::now() < deadline);
+                        std::thread::yield_now();
+                    };
+                    v.set_background(source, window, cx);
+                }
+                let viewport = v.session.viewport();
+                let mut style = v
+                    .document
+                    .engine()
+                    .viewport_style_toolbar_state(viewport)
+                    .unwrap()
+                    .filter_style;
+                style.filter_type = draw::CanvasFilterType::SmartErase;
+                v.document
+                    .command(|engine| {
+                        engine.set_viewport_filter_style(
+                            viewport,
+                            style,
+                            draw::FILTER_STYLE_PROPERTY_ALL,
+                        )
+                    })
+                    .unwrap();
+                v.set_tool(draw::ActiveTool::RectangleFilter, window, cx);
+            })
+        });
+        paint(&mut visual);
+        let start = point(px(280.0), px(220.0));
+        let end = point(px(340.0), px(280.0));
+        pointer(&mut visual, start, true);
+        pointer(&mut visual, end, false);
+        visual.update(|window, cx| {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: end,
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.draw(cx).clear(cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        if mode == "fallback" {
+            // Finish worker classification, then exhaust the real shared budget
+            // before its owner task can allocate a compute pipeline.
+            let scheduler = visual.dispatcher.scheduler().clone();
+            while scheduler.pending_task_counts().1 == 0 {
+                assert!(scheduler.tick());
+            }
+            while scheduler.tick_background_only() {}
+            let service = visual.update(|window, _| window.gpu_service().unwrap());
+            let mut done = service.completion().unwrap();
+            while !done.poll().unwrap() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            visual.update(|_, cx| {
+                view.update(cx, |v, _| {
+                    v.gpu_canvas.as_mut().unwrap().is_ready().unwrap();
+                })
+            });
+            while service.poll_deferred().unwrap() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            let memory = crate::gpu_memory::GpuMemory::shared(
+                &service,
+                None,
+                crate::DEFAULT_GPU_MEMORY_BUDGET,
+            )
+            .unwrap();
+            let pressure = memory.reserve(memory.limit() - memory.used()).unwrap();
+            while scheduler.pending_task_counts().1 == 0 {
+                assert!(scheduler.tick());
+                assert!(std::time::Instant::now() < deadline);
+            }
+            view.read_with(&visual, |v, _| {
+                assert!(
+                    v.gpu_smart_erase.is_none(),
+                    "budget failure did not reach CPU fallback"
+                )
+            });
+            drop(pressure);
+        }
+        let mut cancelled = false;
+        loop {
+            paint(&mut visual);
+            if cancel_gpu
+                && !cancelled
+                && view.read_with(&visual, |v, _| v.gpu_smart_erase.is_some())
+            {
+                visual.update(|window, cx| {
+                    view.update(cx, |v, cx| {
+                        v.replace_document(CanvasDocument::default(), window, cx)
+                            .unwrap();
+                    })
+                });
+                cancelled = true;
+            }
+            if !view.read_with(&visual, |v, _| v.is_rendering()) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "GPU erasure view did not finish"
+            );
+            visual
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(2));
+            std::thread::yield_now();
+        }
+        view.read_with(&visual, |v, _| {
+            assert!(v.error.is_none(), "{:?}", v.error);
+            let snapshot = v.smart_service.snapshot();
+            if cancel_gpu {
+                assert!(cancelled);
+                assert_eq!(snapshot.result_count(), 0);
+            } else {
+                assert_eq!(snapshot.result_count(), 1);
+                let expect_gpu = mode != "fallback"
+                    && mode != "cpu"
+                    && mode != "cpu_layered"
+                    && (mode != "layered"
+                        || v.gpu_donors.as_ref().unwrap().supports_filtered_layers());
+                assert_eq!(
+                    snapshot.entries[0].filled.gpu_texture().is_some(),
+                    expect_gpu,
+                    "{mode}: unexpected reconstruction backend"
+                );
+                if mode == "layered" || mode == "resident" {
+                    assert!(v.gpu_donors.is_some());
+                }
+                if mode == "cpu" || mode == "cpu_layered" {
+                    assert!(v.gpu_smart_erase.is_none());
+                    assert!(v.gpu_donors.is_none());
+                }
+            }
+        });
+        if mode == "raster" && !cancel_gpu {
+            let previous = view.read_with(&visual, |v, _| {
+                v.smart_service.snapshot().entries[0].clone()
+            });
+            visual.update(|window, cx| {
+                view.update(cx, |v, cx| {
+                    let mut options = v.options().clone();
+                    options.smart_erase_execution = crate::SmartEraseExecution::Cpu;
+                    v.set_options(options, window, cx).unwrap();
+                })
+            });
+            while view.read_with(&visual, |v, _| v.is_rendering()) {
+                paint(&mut visual);
+                visual
+                    .executor()
+                    .advance_clock(std::time::Duration::from_millis(2));
+                assert!(std::time::Instant::now() < deadline);
+            }
+            view.read_with(&visual, |v, _| {
+                assert!(v.error.is_none());
+                let snapshot = v.smart_service.snapshot();
+                assert!(
+                    Arc::ptr_eq(&previous, &snapshot.entries[0]),
+                    "execution preference invalidated a valid completed patch"
+                );
+            });
+        }
     }
 }

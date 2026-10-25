@@ -2,6 +2,228 @@ use super::*;
 use image::Rgba;
 use snow_draw_engine::FilterRenderSpec;
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[test]
+fn automatic_tiny_raster_routing_bounds_donor_work_and_preserves_cpu_bytes() {
+    for (w, h, gap, expect_cpu) in [
+        (8, 8, 0, true),
+        (16, 16, 0, true),
+        (32, 32, 0, false),
+        (4, 64, 0, false),
+        (128, 2, 0, false),
+        (16, 16, 1, false),
+        (16, 16, 2, true),
+    ] {
+        let source = SourceImage::new(RgbaImage::from_fn(512, 384, |x, y| {
+            if (192..192 + w).contains(&x) && (144..144 + h).contains(&y) {
+                return Rgba([240, 5, 9, 255]);
+            }
+            let n = (((x * 17 + y * 31) ^ (x * y)) % 49) as u8;
+            let alpha = if (gap == 1 && x == 185 && y == 140) || (gap == 2 && x == 0 && y == 0) {
+                0
+            } else {
+                255
+            };
+            Rgba([90 + n, 120 + n, 60 + n, alpha])
+        }))
+        .unwrap();
+        let filter = FilterDisplayItem {
+            center_x: 192.0 + w as f64 / 2.0,
+            center_y: 144.0 + h as f64 / 2.0,
+            width: w as f64,
+            height: h as f64,
+            opacity: 1.0,
+            filter: FilterRenderSpec::resolve(DisplayFilterType::SmartErase, 0.5),
+            ..Default::default()
+        };
+        let job = || {
+            SmartEraseJob::new(
+                7,
+                Some(source.clone()),
+                vec![filter.clone()],
+                Default::default(),
+            )
+        };
+        let automatic = job().prepare_automatic(&Default::default()).unwrap();
+        assert!(automatic.warnings.is_empty(), "{w}x{h}, gap={gap}");
+        assert_eq!(automatic.snapshot.result_count(), usize::from(expect_cpu));
+        assert_eq!(automatic.requests.len(), usize::from(!expect_cpu));
+        let gpu = job().prepare_gpu(&Default::default()).unwrap();
+        assert_eq!(
+            gpu.requests.len(),
+            1,
+            "GPU preference lost texture reconstruction"
+        );
+        if expect_cpu {
+            let actual = automatic.snapshot.patch(&filter, &source).unwrap();
+            let reference = SmartEraseService::default()
+                .solve(&filter, &source, &Default::default())
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.original.pixels, reference.original.pixels);
+            assert_eq!(actual.filled.pixels, reference.filled.pixels);
+        }
+    }
+    // A small native mask with a larger donor region must retain GPU preference.
+    let source = SourceImage::new(RgbaImage::from_fn(512, 384, |x, y| {
+        let n = (((x * 17 + y * 31) ^ (x * y)) % 49) as u8;
+        Rgba([90 + n, 120 + n, 60 + n, 255])
+    }))
+    .unwrap()
+    .with_placement(Point::new(0.0, 0.0), 0.03125)
+    .unwrap();
+    let filter = FilterDisplayItem {
+        center_x: 200.0 * 0.03125,
+        center_y: 152.0 * 0.03125,
+        width: 0.5,
+        height: 0.5,
+        opacity: 1.0,
+        filter: FilterRenderSpec::resolve(DisplayFilterType::SmartErase, 0.5),
+        ..Default::default()
+    };
+    let automatic = SmartEraseJob::new(1, Some(source), vec![filter], Default::default())
+        .prepare_automatic(&Default::default())
+        .unwrap();
+    assert_eq!(automatic.requests.len(), 1);
+    // A small mask in a virtual layered source retains resident GPU assembly.
+    let image = SourceImage::new(RgbaImage::from_fn(96, 80, |x, y| {
+        let n = (((x * 17 + y * 31) ^ (x * y)) % 49) as u8;
+        Rgba([90 + n, 120 + n, 60 + n, 255])
+    }))
+    .unwrap();
+    let source = SourceImage::from_layers(&[crate::ImageSourceLayer::new(image)])
+        .unwrap()
+        .unwrap();
+    let mut filter = super::tests::filter();
+    filter.width = 8.0;
+    filter.height = 8.0;
+    let automatic = SmartEraseJob::new(1, Some(source), vec![filter], Default::default())
+        .prepare_automatic(&Default::default())
+        .unwrap();
+    assert_eq!(automatic.requests.len(), 1);
+    assert!(matches!(
+        automatic.requests[0].input,
+        GpuPatchInput::Source(_)
+    ));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn gpu_worker_keeps_layered_fast_models_and_routes_texture_to_resident_assembly() {
+    for kind in ["affine", "periodic", "texture"] {
+        let pixels = RgbaImage::from_fn(96, 80, |x, y| {
+            let mut p = match kind {
+                "affine" => Rgba([70, 120, 180, if y % 7 == 0 { 128 } else { 255 }]),
+                "periodic" => {
+                    let n = ((x / 8 + y / 8) % 2 * 24) as u8;
+                    Rgba([140 + n, 160 + n, 180 + n, 255])
+                }
+                _ => {
+                    let n = (((x * 17 + y * 31) ^ (x * y)) % 49) as u8;
+                    Rgba([90 + n, 120 + n, 60 + n, 255])
+                }
+            };
+            if (36..60).contains(&x) && (30..50).contains(&y) {
+                p.0[..3].copy_from_slice(&[240, 5, 9]);
+            }
+            p
+        });
+        let source = SourceImage::from_layers(&[
+            crate::ImageSourceLayer::new(SourceImage::new(pixels).unwrap()),
+            crate::ImageSourceLayer {
+                image: SourceImage::new(RgbaImage::from_pixel(16, 16, Rgba([0, 255, 0, 255])))
+                    .unwrap(),
+                canvas_rect: Some(crate::CanvasRect::new(0.0, 0.0, 96.0, 80.0).unwrap()),
+                coverage: None,
+                smart_erase_source: false,
+            },
+        ])
+        .unwrap()
+        .unwrap();
+        let filter = filter();
+        let prepared = SmartEraseJob::new(
+            7,
+            Some(source.clone()),
+            vec![filter.clone()],
+            Default::default(),
+        )
+        .prepare_gpu(&Default::default())
+        .unwrap();
+        assert!(prepared.warnings.is_empty());
+        if kind == "texture" {
+            assert_eq!(prepared.snapshot.result_count(), 0);
+            assert_eq!(prepared.requests.len(), 1);
+            assert!(matches!(
+                prepared.requests[0].input,
+                GpuPatchInput::Source(_)
+            ));
+        } else {
+            assert!(
+                prepared.requests.is_empty(),
+                "{kind}: cheap model left the worker"
+            );
+            let actual = prepared.snapshot.patch(&filter, &source).unwrap();
+            let expected = SmartEraseService::default()
+                .solve(&filter, &source, &Default::default())
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.original.origin(), expected.original.origin());
+            assert_eq!(
+                actual.original.pixels, expected.original.pixels,
+                "{kind}: underpaint changed"
+            );
+            assert_eq!(
+                actual.filled.pixels, expected.filled.pixels,
+                "{kind}: reconstruction changed"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn gpu_worker_falls_back_when_a_valid_cpu_patch_exceeds_native_texture_width() {
+    let pixels = RgbaImage::from_fn(20_000, 16, |x, y| {
+        if (1000..19_000).contains(&x) && (4..12).contains(&y) {
+            Rgba([240, 5, 9, 255])
+        } else {
+            Rgba([70, 120, 180, 255])
+        }
+    });
+    let source = SourceImage::from_layers(&[crate::ImageSourceLayer::new(
+        SourceImage::new(pixels).unwrap(),
+    )])
+    .unwrap()
+    .unwrap();
+    let filter = FilterDisplayItem {
+        center_x: 10_000.0,
+        center_y: 8.0,
+        width: 18_000.0,
+        height: 8.0,
+        opacity: 1.0,
+        filter: FilterRenderSpec::resolve(DisplayFilterType::SmartErase, 0.5),
+        ..Default::default()
+    };
+    let result = SmartEraseJob::new(
+        9,
+        Some(source.clone()),
+        vec![filter.clone()],
+        Default::default(),
+    )
+    .prepare_gpu(&Default::default())
+    .unwrap();
+    assert!(result.warnings.is_empty());
+    assert!(result.requests.is_empty());
+    let patch = result.snapshot.patch(&filter, &source).unwrap();
+    assert!(patch.filled.width() > 16_384);
+    assert!(patch.filled.raster_pixels().is_some());
+    assert_eq!(
+        patch.filled.pixels.get_pixel(9000, 4).0,
+        [70, 120, 180, 255]
+    );
+    assert_eq!(patch.original.pixels.get_pixel(9000, 4).0, [240, 5, 9, 255]);
+}
+
 fn source() -> SourceImage {
     SourceImage::new(RgbaImage::from_fn(96, 80, |x, y| {
         if (36..60).contains(&x) && (30..50).contains(&y) {
@@ -219,8 +441,8 @@ fn service_rejects_oversized_roi_and_invalid_masks_before_reconstruction() {
     let mut mask = filter();
     mask.center_x = 750.0;
     mask.center_y = 750.0;
-    mask.width = 1000.0;
-    mask.height = 1000.0;
+    mask.width = 1400.0;
+    mask.height = 1400.0;
     let mut service = SmartEraseService::default();
     assert!(matches!(
         service.solve(&mask, &source, &Default::default()),
@@ -240,4 +462,212 @@ fn service_rejects_oversized_roi_and_invalid_masks_before_reconstruction() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn profiling_preserves_pixels_identity_and_reports_cache_hits_without_solving() {
+    let source = source();
+    let filter = filter();
+    let expected = SmartEraseService::default()
+        .solve(&filter, &source, &Default::default())
+        .unwrap()
+        .unwrap();
+    let mut service = SmartEraseService::default();
+    let mut profile = SmartEraseProfile::default();
+    let actual = service
+        .solve_profiled(&filter, &source, &Default::default(), &mut profile)
+        .unwrap()
+        .unwrap();
+    assert_eq!(actual.filled.pixels, expected.filled.pixels);
+    assert_eq!(actual.original.pixels, expected.original.pixels);
+    assert_eq!(profile.solver, Some(crate::SmartEraseSolver::Affine));
+    assert!(!profile.cache_hit);
+    assert_eq!(profile.source_region, [0, 0, 96, 80]);
+    assert_eq!(profile.masked_pixels, 24 * 20);
+    assert_eq!(profile.donor_pixels, 96 * 80 - 24 * 20);
+    assert_eq!(profile.estimated_scratch_bytes, 96 * 80 * 256);
+    assert!(profile.levels.is_empty());
+
+    let cached = service
+        .solve_profiled(&filter, &source, &Default::default(), &mut profile)
+        .unwrap()
+        .unwrap();
+    assert!(Arc::ptr_eq(&actual, &cached));
+    assert!(profile.cache_hit);
+    assert_eq!(profile.solver, None);
+    assert_eq!(profile.masked_pixels, 0);
+    assert_eq!(profile.estimated_scratch_bytes, 0);
+    assert_eq!(profile.stages.affine_ms, 0.0);
+    assert!(profile.levels.is_empty());
+
+    let cancel = CanvasCancellation::default();
+    cancel.cancel();
+    assert!(matches!(
+        service.solve_profiled(&filter, &source, &cancel, &mut profile),
+        Err(CanvasError::Cancelled)
+    ));
+    assert!(!profile.cache_hit);
+    assert_eq!(profile.solver, None);
+    assert_eq!(service.snapshot().result_count(), 1);
+}
+
+#[test]
+fn adaptive_regions_bound_small_solves_and_allow_large_flat_masks() {
+    let source =
+        SourceImage::new(RgbaImage::from_pixel(2048, 2048, Rgba([70, 120, 180, 255]))).unwrap();
+    for side in [32.0, 512.0] {
+        let mut filter = filter();
+        filter.center_x = 1024.0;
+        filter.center_y = 1024.0;
+        filter.width = side;
+        filter.height = side;
+        let mut profile = SmartEraseProfile::default();
+        let patch = SmartEraseService::default()
+            .solve_profiled(&filter, &source, &Default::default(), &mut profile)
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile.solver, Some(crate::SmartEraseSolver::Affine));
+        assert_eq!(profile.attempts, 1);
+        assert!(profile.working_pixels < 800_000);
+        if side == 32.0 {
+            assert!(profile.working_pixels < 40_000);
+        }
+        assert_eq!(patch.original.pixels, patch.filled.pixels);
+        assert_eq!(patch.filled.width(), side as u32 + 4);
+    }
+}
+
+#[test]
+fn adaptive_regions_expand_for_remote_donors_and_cancel_without_publishing() {
+    let source = SourceImage::new(RgbaImage::from_fn(512, 384, |x, y| {
+        if (244..268).contains(&x) && (182..202).contains(&y) {
+            Rgba([240, 5, 9, 255])
+        } else if x >= 380 {
+            Rgba([70, 120, 180, 255])
+        } else {
+            Rgba([255, 0, 255, 0])
+        }
+    }))
+    .unwrap();
+    let mut filter = filter();
+    filter.center_x = 256.0;
+    filter.center_y = 192.0;
+    let mut profile = SmartEraseProfile::default();
+    let patch = SmartEraseService::default()
+        .solve_profiled(&filter, &source, &Default::default(), &mut profile)
+        .unwrap()
+        .unwrap();
+    assert!(profile.attempts > 1);
+    assert!(profile.donor_halo >= 128);
+    assert_eq!(patch.filled.pixels.get_pixel(14, 12).0, [70, 120, 180, 255]);
+    assert_eq!(patch.filled.pixels.get_pixel(0, 0).0, [255, 0, 255, 0]);
+
+    let mut service = SmartEraseService::default();
+    assert!(matches!(
+        service.solve_profiled(
+            &filter,
+            &source,
+            &CanvasCancellation::after_checks(350),
+            &mut profile,
+        ),
+        Err(CanvasError::Cancelled)
+    ));
+    assert!(profile.attempts > 1);
+    assert_eq!(service.snapshot().result_count(), 0);
+}
+
+#[test]
+fn adaptive_texture_regions_preserve_bands_alpha_and_masked_color_independence() {
+    let clean = RgbaImage::from_fn(512, 384, |x, y| {
+        let n = (((x.wrapping_mul(73856093) ^ y.wrapping_mul(19349663)) >> 3) % 25) as i32 - 12;
+        let base = if x < 256 {
+            [55, 80, 110]
+        } else {
+            [205, 65, 90]
+        };
+        Rgba([
+            (base[0] + n) as u8,
+            (base[1] + n) as u8,
+            (base[2] + n) as u8,
+            if y == 185 { 0 } else { 255 },
+        ])
+    });
+    let mut filter = filter();
+    filter.center_x = 256.0;
+    filter.center_y = 192.0;
+    filter.width = 64.0;
+    filter.height = 80.0;
+    let mut previous = None;
+    for hidden in [[255, 0, 255], [0, 255, 0]] {
+        let mut pixels = clean.clone();
+        for y in 152..232 {
+            for x in 224..288 {
+                if pixels.get_pixel(x, y)[3] != 0 {
+                    pixels.get_pixel_mut(x, y).0[..3].copy_from_slice(&hidden);
+                }
+            }
+        }
+        let source = SourceImage::new(pixels).unwrap();
+        let mut profile = SmartEraseProfile::default();
+        let patch = SmartEraseService::default()
+            .solve_profiled(&filter, &source, &Default::default(), &mut profile)
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile.solver, Some(crate::SmartEraseSolver::Multiscale));
+        assert!(profile.working_pixels < 512 * 384);
+        let mut wrong = 0;
+        let mut count = 0;
+        for y in 0..patch.filled.height() {
+            for x in 0..patch.filled.width() {
+                let original = patch.original.pixels.get_pixel(x, y);
+                let filled = patch.filled.pixels.get_pixel(x, y);
+                assert_eq!(original[3], filled[3]);
+                if !(2..66).contains(&x) || !(2..82).contains(&y) || original[3] == 0 {
+                    assert_eq!(original, filled);
+                } else if x.abs_diff(34) >= 4 {
+                    let expected = clean.get_pixel(x + 222, y + 150);
+                    wrong += usize::from(expected[0].abs_diff(filled[0]) > 40);
+                    count += 1;
+                }
+            }
+        }
+        assert!(wrong * 100 < count * 2, "wrong band {wrong}/{count}");
+        if let Some(previous) = previous {
+            assert_eq!(patch.filled.pixels, previous);
+        }
+        previous = Some(patch.filled.pixels.clone());
+    }
+}
+
+#[test]
+fn adaptive_brush_crop_preserves_full_context_search() {
+    let pixels = RgbaImage::from_fn(512, 384, |x, y| {
+        let n = ((x.wrapping_mul(73856093) ^ y.wrapping_mul(19349663)) % 49) as u8;
+        Rgba([90 + n, 120 + n, 60 + n, 255])
+    });
+    let mut filter = filter();
+    filter.is_pen_filter = true;
+    filter.stroke_width = 18.0;
+    filter.points = (0..32)
+        .map(|i| [192.0 + f64::from(i) * 4.0, 176.0 + f64::from(i % 5) * 4.0])
+        .collect::<Vec<_>>()
+        .into();
+    let mask = reconstruction_mask(&filter, Point::new(0.0, 0.0), 1.0, 512, 384).unwrap();
+    let expected = crate::smart_erase::reconstruct(&pixels, &mask, &Default::default()).unwrap();
+    let source = SourceImage::new(pixels).unwrap();
+    let mut profile = SmartEraseProfile::default();
+    let patch = SmartEraseService::default()
+        .solve_profiled(&filter, &source, &Default::default(), &mut profile)
+        .unwrap()
+        .unwrap();
+    assert!(profile.working_pixels < 512 * 384);
+    let expected = image::imageops::crop_imm(
+        &expected,
+        patch.filled.origin().x as u32,
+        patch.filled.origin().y as u32,
+        patch.filled.width(),
+        patch.filled.height(),
+    )
+    .to_image();
+    assert_eq!(*patch.filled.pixels, expected);
 }
