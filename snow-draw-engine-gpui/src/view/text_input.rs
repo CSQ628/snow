@@ -2,6 +2,32 @@ use super::*;
 use std::ops::Range;
 
 impl CanvasView {
+    /// Bound labels have priority over the host's unhandled double-click action.
+    pub(super) fn begin_bound_label_at(
+        &mut self,
+        point: draw::Point<f64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let viewport = self.session.viewport();
+        let engine = self.document.engine();
+        let target = engine
+            .speech_bubble_text_target(viewport, Some(point))
+            .ok()
+            .flatten()
+            .or_else(|| {
+                engine
+                    .arrow_text_target(viewport, Some(point))
+                    .ok()
+                    .flatten()
+            });
+        if let Some(target) = target {
+            self.begin_text_with_target(point, None, Some(target), window, cx);
+            true
+        } else {
+            false
+        }
+    }
     pub(super) fn begin_text(
         &mut self,
         point: draw::Point<f64>,

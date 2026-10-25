@@ -1139,6 +1139,19 @@ impl GpuCanvas {
             1.0,
             None,
         )?;
+        if let Some(color) = presentation.background_tint {
+            let mut parameters = Parameters::for_target(region.size());
+            parameters.color = rgba(color);
+            parameters.effect[0] = 11.;
+            self.pipeline.as_ref().context("Pipeline missing")?.effect(
+                context,
+                &target,
+                [None, None, None],
+                &parameters,
+                true,
+                None,
+            );
+        }
         self.paint_source(
             device,
             context,
@@ -1150,13 +1163,14 @@ impl GpuCanvas {
             1.0,
             None,
         )?;
-        let before_content = if presentation.content_clip.is_some() {
-            let copy = self.scratch.take(device, region.size(), 1, &self.memory)?;
-            Pipeline::copy(context, &target, &copy);
-            Some(copy)
-        } else {
-            None
-        };
+        let before_content =
+            if presentation.content_clip.is_some() || presentation.content_mask.is_some() {
+                let copy = self.scratch.take(device, region.size(), 1, &self.memory)?;
+                Pipeline::copy(context, &target, &copy);
+                Some(copy)
+            } else {
+                None
+            };
         if presentation.content_visible {
             self.paint_spotlight(
                 device,
@@ -1363,7 +1377,38 @@ impl GpuCanvas {
                 presentation,
             )?;
         }
-        if let (Some(before), Some(clip)) = (before_content, presentation.content_clip) {
+        if let (Some(before), Some(mask)) =
+            (before_content.as_ref(), presentation.content_mask.as_ref())
+        {
+            let coverage = self.scratch.take(device, region.size(), 1, &self.memory)?;
+            Pipeline::clear(context, &coverage, [0.; 4]);
+            self.paint_source(
+                device,
+                context,
+                &coverage,
+                Some(mask),
+                frame,
+                scale,
+                region,
+                1.,
+                None,
+            )?;
+            let composed = self.scratch.take(device, region.size(), 1, &self.memory)?;
+            let mut parameters = Parameters::for_target(region.size());
+            parameters.effect[0] = 18.;
+            self.pipeline.as_ref().context("Pipeline missing")?.effect(
+                context,
+                &composed,
+                [Some(&target), Some(&coverage), Some(before)],
+                &parameters,
+                false,
+                None,
+            );
+            self.scratch.put(coverage);
+            self.scratch.put(target);
+            target = composed;
+        }
+        if let (Some(before), Some(clip)) = (before_content.as_ref(), presentation.content_clip) {
             let inside = pixel_rect(
                 [clip.x, clip.y, clip.x + clip.width, clip.y + clip.height],
                 frame,
@@ -1371,7 +1416,7 @@ impl GpuCanvas {
             );
             let clipped = clip_scissor(inside, region);
             let composed = self.scratch.take(device, region.size(), 1, &self.memory)?;
-            Pipeline::copy(context, &before, &composed);
+            Pipeline::copy(context, before, &composed);
             self.pipeline.as_ref().context("Pipeline missing")?.effect(
                 context,
                 &composed,
@@ -1380,9 +1425,11 @@ impl GpuCanvas {
                 false,
                 Some(clipped),
             );
-            self.scratch.put(before);
             self.scratch.put(target);
             target = composed;
+        }
+        if let Some(before) = before_content {
+            self.scratch.put(before);
         }
         self.paint_source(
             device,

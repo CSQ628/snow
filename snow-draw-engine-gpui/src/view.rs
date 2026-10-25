@@ -37,6 +37,10 @@ use crate::{
 
 /// Semantic notifications for a containing toolbar or future Snow Shot shell.
 pub enum CanvasEvent {
+    /// A primary double-click which neither the editor nor text input consumed.
+    UnhandledDoubleClick {
+        position: Point<Pixels>,
+    },
     Changed,
     Error(SharedString),
     Rendered,
@@ -431,6 +435,33 @@ impl CanvasView {
         }
     }
 
+    /// Apply a nonstructural tool-style command during pointer input. Unlike
+    /// `command`, this preserves the active gesture and never commits text.
+    /// Hosts must use `command` for document, history or selection operations.
+    pub fn update_tool_style(
+        &mut self,
+        command: impl FnOnce(
+            &mut draw::Engine,
+            draw::ViewportId,
+        ) -> Result<draw::MutationResult, draw::ErrorCode>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.options.interaction_enabled || self.draft.is_some() {
+            return false;
+        }
+        match self.session.mutate(&mut self.document, command) {
+            Ok(_) => {
+                self.changed(window, cx);
+                true
+            }
+            Err(error) => {
+                self.fail(error, cx);
+                false
+            }
+        }
+    }
+
     pub fn replace_document(
         &mut self,
         mut document: CanvasDocument,
@@ -799,8 +830,19 @@ impl CanvasView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.input_with_consumption(event, hitbox, window, cx);
+    }
+
+    fn input_with_consumption(
+        &mut self,
+        event: draw::InputEvent,
+        hitbox: &Hitbox,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match self.session.input(&mut self.document, event) {
             Ok(update) => {
+                let consumed = update.interaction.consumed;
                 match update.interaction.capture {
                     draw::PointerCaptureCommand::Capture(_) => window.capture_pointer(hitbox.id),
                     draw::PointerCaptureCommand::Release => window.release_pointer(),
@@ -810,10 +852,12 @@ impl CanvasView {
                     self.cursor = native_cursor(cursor);
                 }
                 self.changed(window, cx);
+                consumed
             }
             Err(error) => {
                 window.release_pointer();
                 self.fail(error, cx);
+                false
             }
         }
     }

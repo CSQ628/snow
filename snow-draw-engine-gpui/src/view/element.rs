@@ -326,6 +326,11 @@ impl CanvasView {
                 self.reset_text_caret(window, cx);
                 return;
             }
+            // An active text editor owns double-clicks even outside its ink.
+            // Committing here would let the same press complete its host.
+            if event.button == MouseButton::Left && event.click_count >= 2 {
+                return;
+            }
             self.finish_text(true, window, cx);
         }
         if self
@@ -342,7 +347,14 @@ impl CanvasView {
         } else {
             draw::PointerEventType::Down
         };
-        self.input(
+        if kind == draw::PointerEventType::DoubleClick
+            && event.button == MouseButton::Left
+            && event.modifiers == Modifiers::default()
+            && self.begin_bound_label_at(self.world(event.position), window, cx)
+        {
+            return;
+        }
+        let consumed = self.input_with_consumption(
             self.pointer(
                 kind,
                 event.position,
@@ -360,6 +372,16 @@ impl CanvasView {
         if self.draft.is_some() && event.button == MouseButton::Left {
             self.selecting_text = true;
             window.capture_pointer(hitbox.id);
+        }
+        if event.click_count == 2
+            && event.button == MouseButton::Left
+            && !consumed
+            && self.draft.is_none()
+            && self.error.is_none()
+        {
+            cx.emit(CanvasEvent::UnhandledDoubleClick {
+                position: event.position,
+            });
         }
     }
     pub(super) fn hits_existing_selection(&self, position: Point<Pixels>) -> bool {

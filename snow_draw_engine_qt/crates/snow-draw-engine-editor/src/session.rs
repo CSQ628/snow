@@ -528,6 +528,14 @@ impl EditorSession {
         self.editor.captured_pointer.is_some()
     }
 
+    /// Multi-click construction can remain active between native pointer grabs.
+    /// Hosts must preserve that transaction before confirming or replacing input.
+    pub fn has_active_interaction(&self) -> bool {
+        !matches!(self.editor.state.interaction, crate::InteractionState::Idle)
+            || self.editor.state.shape_text_drag.is_some()
+            || self.editor.speech_bubble_tail_drag.is_some()
+    }
+
     /// A cloned document session does not inherit native pointer ownership or queued releases.
     pub fn reset_pointer_capture_state(&mut self) {
         self.editor.captured_pointer = None;

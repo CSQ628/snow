@@ -145,5 +145,8 @@ float4 effect_pixel(VertexOutput input) : SV_Target {
         float2 coverage = saturate(min(pixel+0.5-gap.xy,gap.zw-(pixel-0.5)));
         return sampled*coverage.x*coverage.y*effect.w;
     }
+    if (operation == 18) {
+        return lerp(backdrop_image.Load(int3(pixel,0)), sampled, mask_image.Load(int3(pixel,0)).a);
+    }
     return sampled;
 }

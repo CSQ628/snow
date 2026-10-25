@@ -14,6 +14,9 @@ mod text_caret_tests;
 #[path = "frame_tests.rs"]
 mod frame_tests;
 
+#[path = "completion_tests.rs"]
+mod completion_tests;
+
 #[gpui::test]
 fn send_cache_payload_drop_is_deferred_from_the_host_callback(cx: &mut TestAppContext) {
     use std::sync::atomic::{AtomicBool, Ordering};
