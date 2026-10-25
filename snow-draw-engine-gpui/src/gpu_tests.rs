@@ -3,6 +3,8 @@
 mod features;
 #[path = "gpu_semantics_tests.rs"]
 mod semantics;
+#[path = "gpu_watermark_area_tests.rs"]
+mod watermark_area;
 use crate::engine::*;
 use crate::*;
 use anyhow::{Context, Result, ensure};
