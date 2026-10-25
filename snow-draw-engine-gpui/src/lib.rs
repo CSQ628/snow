@@ -16,8 +16,12 @@ mod gpu_memory;
 mod gpu_pipeline;
 #[cfg(target_os = "windows")]
 mod gpu_renderer;
+#[cfg(target_os = "windows")]
+mod gpu_smart_erase;
 #[cfg(all(test, target_os = "windows"))]
 mod gpu_tests;
+#[cfg(target_os = "windows")]
+mod gpu_wake;
 mod host;
 mod persistence;
 mod retained_scene;
@@ -43,11 +47,32 @@ pub use gpu_renderer::{
     DEFAULT_GPU_MEMORY_BUDGET, GPU_TILE_SIZE, GpuCanvas, GpuCanvasFrame, GpuCanvasTile,
     GpuRenderProfile,
 };
-pub use host::{CanvasPresentation, CanvasRect, CanvasViewOptions, ExportTile, ImageSourceLayer};
+#[cfg(target_os = "windows")]
+pub use gpu_smart_erase::donors::{
+    GpuDonorAssembler, GpuDonorInput, GpuDonorJob, GpuDonorOutput, GpuDonorProfile,
+};
+#[cfg(target_os = "windows")]
+pub use gpu_smart_erase::source_prepare::{
+    GpuSourceMask, GpuSourcePrepareJob, GpuSourcePrepareProfile, GpuSourcePrepared,
+    GpuSourceSolveJob,
+};
+#[cfg(target_os = "windows")]
+pub use gpu_smart_erase::{
+    GpuSmartErase, GpuSmartEraseInput, GpuSmartEraseJob, GpuSmartEraseOutput, GpuSmartEraseProfile,
+};
+#[cfg(target_os = "windows")]
+pub use gpu_wake::GpuCompletionWake;
+pub use host::{
+    CanvasPresentation, CanvasRect, CanvasViewOptions, ExportTile, ImageSourceLayer,
+    SmartEraseExecution,
+};
 pub use persistence::DrawingSnapshot;
 pub use retained_scene::RetainedScene;
 pub use sample::showcase_document;
 pub use smart_erase::Cancellation as CanvasCancellation;
+pub use smart_erase::profile::{
+    SmartEraseLevelProfile, SmartEraseProfile, SmartEraseSolver, SmartEraseStageTimings,
+};
 pub use smart_erase_service::{
     SmartEraseJob, SmartEraseJobOutput, SmartErasePatch, SmartEraseService, SmartEraseSnapshot,
 };

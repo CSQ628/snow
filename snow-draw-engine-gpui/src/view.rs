@@ -10,6 +10,8 @@ mod selection_overlay;
 pub use host_controls::{
     CanvasCommandKeyResolver, CanvasCrosshair, CanvasCrosshairFactory, CanvasCursorLayer,
 };
+#[cfg(target_os = "windows")]
+mod smart_erase;
 #[cfg(test)]
 mod tests;
 mod text_caret;
@@ -99,6 +101,10 @@ pub struct CanvasView {
     scale: f32,
     #[cfg(target_os = "windows")]
     gpu_canvas: Option<crate::GpuCanvas>,
+    #[cfg(target_os = "windows")]
+    gpu_smart_erase: Option<crate::GpuSmartErase>,
+    #[cfg(target_os = "windows")]
+    gpu_donors: Option<crate::GpuDonorAssembler>,
     #[cfg(target_os = "windows")]
     gpu_frame: Option<crate::GpuCanvasFrame>,
     image_frame: Option<draw::FrameView>,
@@ -204,6 +210,10 @@ impl CanvasView {
             scale: window.scale_factor(),
             #[cfg(target_os = "windows")]
             gpu_canvas: None,
+            #[cfg(target_os = "windows")]
+            gpu_smart_erase: None,
+            #[cfg(target_os = "windows")]
+            gpu_donors: None,
             #[cfg(target_os = "windows")]
             gpu_frame: None,
             image_frame: None,
@@ -485,6 +495,9 @@ impl CanvasView {
         {
             self.gpu_frame = None;
             self.gpu_canvas = None;
+            if let Some(donors) = &mut self.gpu_donors {
+                donors.clear_cache();
+            }
         }
         self.image_frame = None;
         self.image_key = None;
@@ -624,7 +637,24 @@ impl CanvasView {
             || matches!(self.text_selection_overlay.is_ready(), Ok(false))
         {
             if self.gpu_wait_task.is_none() {
+                // Completion events only schedule another readiness check. An
+                // unavailable wake retains timer polling; the renderer itself
+                // still reports device/retirement failures on the next check.
+                #[cfg(target_os = "windows")]
+                let wake = self
+                    .gpu_canvas
+                    .as_mut()
+                    .and_then(|canvas| canvas.completion_wake().ok().flatten());
                 self.gpu_wait_task = Some(cx.spawn_in(window, async move |this, cx| {
+                    #[cfg(target_os = "windows")]
+                    if let Some(wake) = wake {
+                        wake.await;
+                    } else {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(1))
+                            .await;
+                    }
+                    #[cfg(not(target_os = "windows"))]
                     cx.background_executor()
                         .timer(std::time::Duration::from_millis(1))
                         .await;
@@ -729,6 +759,11 @@ impl CanvasView {
     fn prepare_smart_erase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let seed = self.smart_service.snapshot();
         #[cfg(target_os = "windows")]
+        let seed = window
+            .gpu_service()
+            .map(|service| seed.for_device(&service))
+            .unwrap_or(seed);
+        #[cfg(target_os = "windows")]
         let filters = self
             .gpu_canvas
             .as_ref()
@@ -762,7 +797,6 @@ impl CanvasView {
         let generation = self.generation;
         self.smart_requested_generation = Some(generation);
         self.smart_warning = None;
-        let seed = self.smart_service.snapshot();
         let job = crate::smart_erase_service::SmartEraseJob::new(
             generation,
             snapshot.background,
@@ -771,6 +805,14 @@ impl CanvasView {
         );
         let cancel = crate::CanvasCancellation::default();
         self.smart_cancel = cancel.clone();
+        #[cfg(target_os = "windows")]
+        if let Ok(service) = window.gpu_service()
+            && service.capabilities().compute_shaders
+            && self.options.smart_erase_execution != crate::SmartEraseExecution::Cpu
+        {
+            self.start_gpu_smart_task(window, cx, job, service, generation, cancel);
+            return;
+        }
         let worker_cancel = cancel.clone();
         self.smart_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx

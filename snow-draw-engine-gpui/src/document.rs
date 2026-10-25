@@ -63,6 +63,9 @@ impl From<ErrorCode> for CanvasError {
 #[derive(Clone)]
 pub struct SourceImage {
     pub(crate) pixels: Arc<RgbaImage>,
+    gpu_texture: Option<Arc<dyn gpui::GpuTexture>>,
+    #[cfg(target_os = "windows")]
+    pub(crate) gpu_straight: Option<Arc<crate::gpu_smart_erase::Buffer>>,
     origin: Point<f64>,
     units_per_pixel: f64,
     pub(crate) smart_erase_pixels: Option<Arc<RgbaImage>>,
@@ -98,6 +101,30 @@ impl SourceImage {
         let dimensions = [pixels.width(), pixels.height()];
         Ok(Self {
             pixels: Arc::new(pixels),
+            gpu_texture: None,
+            #[cfg(target_os = "windows")]
+            gpu_straight: None,
+            origin: Point::new(0.0, 0.0),
+            units_per_pixel: 1.0,
+            smart_erase_pixels: None,
+            pixels_identity: NEXT_PIXELS.fetch_add(1, Ordering::Relaxed),
+            layers: None,
+            dimensions,
+        })
+    }
+
+    /// Retain an immutable premultiplied GPUI texture without reading its pixels
+    /// back. It can be drawn/exported on the same device and epoch. Callers must
+    /// retire GPU use before mutating the underlying texture. CPU codecs/donor
+    /// sampling require explicit asynchronous materialization first.
+    pub fn from_gpu_texture(texture: Arc<dyn gpui::GpuTexture>) -> Result<Self, CanvasError> {
+        let dimensions = texture.size();
+        validate_raster(dimensions[0], dimensions[1])?;
+        Ok(Self {
+            pixels: Arc::new(RgbaImage::new(0, 0)),
+            gpu_texture: Some(texture),
+            #[cfg(target_os = "windows")]
+            gpu_straight: None,
             origin: Point::new(0.0, 0.0),
             units_per_pixel: 1.0,
             smart_erase_pixels: None,
@@ -204,9 +231,12 @@ impl SourceImage {
     pub fn height(&self) -> u32 {
         self.dimensions[1]
     }
-    /// Returns immutable pixels for leaf uploads; layered sources have no raster.
+    /// Returns immutable CPU pixels; layered and GPU-backed images have no CPU raster.
     pub fn raster_pixels(&self) -> Option<&Arc<RgbaImage>> {
-        self.layers.is_none().then_some(&self.pixels)
+        (self.layers.is_none() && self.gpu_texture.is_none()).then_some(&self.pixels)
+    }
+    pub fn gpu_texture(&self) -> Option<&Arc<dyn gpui::GpuTexture>> {
+        self.gpu_texture.as_ref()
     }
     pub fn origin(&self) -> Point<f64> {
         self.origin
@@ -225,6 +255,12 @@ impl SourceImage {
         self.smart_erase_pixels.as_ref().unwrap_or(&self.pixels)
     }
     fn retained_bytes(&self) -> usize {
+        if self.gpu_texture.is_some() {
+            let bytes = self.width() as usize * self.height() as usize * 4;
+            #[cfg(target_os = "windows")]
+            let bytes = bytes * (1 + usize::from(self.gpu_straight.is_some()));
+            return bytes;
+        }
         if let Some(layers) = &self.layers {
             let mut ids = std::collections::HashSet::new();
             return layers
@@ -320,6 +356,9 @@ impl SourceImage {
         cancel.check()?;
         Ok(Some(Self {
             pixels: Arc::new(RgbaImage::new(0, 0)),
+            gpu_texture: None,
+            #[cfg(target_os = "windows")]
+            gpu_straight: None,
             origin: Point::new(left, top),
             units_per_pixel: units,
             smart_erase_pixels: None,
@@ -345,6 +384,11 @@ impl SourceImage {
             return Err(ErrorCode::InvalidArgument.into());
         }
         cancel.check()?;
+        if self.gpu_texture.is_some() {
+            return Err(CanvasError::Unsupported(
+                "CPU donor sampling before GPU source materialization",
+            ));
+        }
         if let Some(layers) = &self.layers {
             sample_donor_layers(
                 layers,
@@ -448,6 +492,11 @@ fn sample_donor_layers(
     for layer in layers {
         if !layer.smart_erase_source {
             continue;
+        }
+        if layer.image.gpu_texture.is_some() {
+            return Err(CanvasError::Unsupported(
+                "CPU donor sampling before GPU source materialization",
+            ));
         }
         let mut source = layer.image.clone();
         source.pixels = source.smart_erase_pixels().clone();

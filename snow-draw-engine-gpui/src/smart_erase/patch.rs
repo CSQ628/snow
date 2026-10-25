@@ -189,7 +189,12 @@ fn guides(level: &Level, colors: &[Color], cancel: &Cancellation) -> Result<Guid
     Ok(guide)
 }
 
-pub(super) fn multiscale(level: Level, cancel: &Cancellation) -> Result<Vec<Color>, CanvasError> {
+pub(super) fn multiscale(
+    level: Level,
+    cancel: &Cancellation,
+    profiler: &mut Profiler<'_>,
+) -> Result<Vec<Color>, CanvasError> {
+    let start = profiler.start();
     let mut levels = vec![level];
     // Conservative reduction: no coarse donor is allowed to include a hole or a
     // coverage gap. This is more expensive than resizing the corrupted source.
@@ -210,6 +215,7 @@ pub(super) fn multiscale(level: Level, cancel: &Cancellation) -> Result<Vec<Colo
         }
         levels.push(coarse);
     }
+    profiler.finish(Stage::Pyramid, start);
     let count = levels.len();
     let mut previous = None;
     for (n, level) in levels.iter().rev().enumerate() {
@@ -221,7 +227,7 @@ pub(super) fn multiscale(level: Level, cancel: &Cancellation) -> Result<Vec<Colo
         } else {
             3
         };
-        previous = Some(fill(level, previous.as_ref(), passes, cancel)?);
+        previous = Some(fill(level, previous.as_ref(), passes, cancel, profiler)?);
     }
     Ok(previous.unwrap().image)
 }
@@ -245,9 +251,15 @@ fn fill(
     previous: Option<&ResultLevel>,
     passes: usize,
     cancel: &Cancellation,
+    profiler: &mut Profiler<'_>,
 ) -> Result<ResultLevel, CanvasError> {
+    let start = profiler.start();
     let colors: Vec<_> = level.source.iter().copied().map(lab).collect();
+    profiler.finish(Stage::Lab, start);
+    let start = profiler.start();
     let guide = guides(level, &colors, cancel)?;
+    profiler.finish(Stage::Guides, start);
+    let start = profiler.start();
     let holes = level.holes();
     let mut radius = 3;
     let mut donors = erode(&level.domain, level.width, level.height, radius);
@@ -266,6 +278,17 @@ fn fill(
         ));
     }
     let nearest = nearest(level.width, level.height, &donors, cancel)?;
+    if let Some(data) = &mut profiler.data {
+        data.levels.push(profile::SmartEraseLevelProfile {
+            size: [level.width, level.height],
+            masked_pixels: holes.len(),
+            donor_patches: candidates.len(),
+            patch_radius: radius,
+            passes,
+        });
+    }
+    profiler.finish(Stage::Donors, start);
+    let start = profiler.start();
     let mut random = Random(0x534e4f57);
     let mut output = colors.clone();
     let mut matches = vec![usize::MAX; colors.len()];
@@ -310,10 +333,14 @@ fn fill(
     let mut costs = vec![f32::MAX; colors.len()];
     let mut reuse = vec![0.0; colors.len()];
     let expected = (holes.len() as f32 / candidates.len() as f32).max(1.0);
-    let scale = level.width.max(level.height) as f32;
+    // Cropping unused donors must not change spatial penalties or the random
+    // search schedule. Both use the original donor-neighborhood extent.
+    let scale = level.search_span as f32;
     let mut next = output.clone();
     let mut rgb = level.source.clone();
+    profiler.finish(Stage::Initialize, start);
     for pass in 0..passes {
+        let start = profiler.start();
         cancel.check()?;
         let synthesized = 0.15 + 0.20 * pass as f32 / (passes - 1).max(1) as f32;
         reuse.fill(0.0);
@@ -387,7 +414,7 @@ fn fill(
             // Random windows are centered on the current best at each scale.
             // Borrow candidate selection in a separate scope to retain the best value.
             let center = matches[i];
-            let mut window = level.width.max(level.height) as isize;
+            let mut window = level.search_span as isize;
             while window > 0 {
                 let sx = (center % level.width) as isize
                     + random.pick((window * 2 + 1) as usize) as isize
@@ -403,6 +430,8 @@ fn fill(
             matches[i] = best;
             costs[i] = best_cost;
         }
+        profiler.finish(Stage::Matching, start);
+        let start = profiler.start();
         for (n, i) in holes.iter().enumerate() {
             if n % 64 == 0 {
                 cancel.check()?;
@@ -451,6 +480,7 @@ fn fill(
             }
         }
         std::mem::swap(&mut output, &mut next);
+        profiler.finish(Stage::Voting, start);
     }
     Ok(ResultLevel {
         image: rgb,
@@ -465,6 +495,7 @@ fn downsample(fine: &Level, cancel: &Cancellation) -> Result<Level, CanvasError>
     let safe = erode(&known, fine.width, fine.height, 2);
     let domain = erode(&fine.domain, fine.width, fine.height, 2);
     let mut coarse = Level::new(fine.width.div_ceil(2), fine.height.div_ceil(2));
+    coarse.search_span = fine.search_span.div_ceil(2);
     for y in 0..coarse.height {
         cancel.check()?;
         for x in 0..coarse.width {

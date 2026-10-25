@@ -163,6 +163,21 @@ pub struct ExportTile {
     pub destination: [u32; 2],
 }
 
+/// Reconstruction policy for new Smart Erase work. Completed patches remain
+/// reusable. CPU execution requires CPU-readable eligible donors; rendering
+/// continues to use the window's GPU device in either mode.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SmartEraseExecution {
+    /// Preserve cheap CPU models and use the qualified bounded CPU path for tiny
+    /// raster masks; unresolved larger/layered inputs prefer GPU reconstruction.
+    #[default]
+    Automatic,
+    Cpu,
+    /// Bypass automatic texture crossover routing. Cheap affine/periodic CPU
+    /// models remain enabled; unavailable GPU capabilities retain CPU fallback.
+    GpuPreferred,
+}
+
 #[derive(Clone)]
 pub struct CanvasViewOptions {
     pub presentation: CanvasPresentation,
@@ -170,6 +185,7 @@ pub struct CanvasViewOptions {
     pub wheel_zoom_enabled: bool,
     pub delete_text_after_cursor: bool,
     pub text_editing_bounds: Option<CanvasRect>,
+    pub smart_erase_execution: SmartEraseExecution,
 }
 impl Default for CanvasViewOptions {
     fn default() -> Self {
@@ -179,6 +195,7 @@ impl Default for CanvasViewOptions {
             wheel_zoom_enabled: true,
             delete_text_after_cursor: true,
             text_editing_bounds: None,
+            smart_erase_execution: SmartEraseExecution::Automatic,
         }
     }
 }

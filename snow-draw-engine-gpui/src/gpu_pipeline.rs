@@ -531,10 +531,29 @@ impl Pipeline {
         blend: bool,
         scissor: Option<[i32; 4]>,
     ) {
-        target.allocation.mark_gpu_use();
         for texture in inputs.iter().flatten() {
             texture.allocation.mark_gpu_use();
         }
+        self.effect_views(
+            context,
+            target,
+            inputs.map(|texture| texture.map(|texture| texture.view.clone())),
+            parameters,
+            blend,
+            scissor,
+        );
+    }
+
+    pub fn effect_views(
+        &self,
+        context: &ID3D11DeviceContext,
+        target: &Texture,
+        inputs: [Option<ID3D11ShaderResourceView>; 3],
+        parameters: &Parameters,
+        blend: bool,
+        scissor: Option<[i32; 4]>,
+    ) {
+        target.allocation.mark_gpu_use();
         self.bind(
             context,
             target.size,
@@ -547,10 +566,7 @@ impl Pipeline {
             context.IASetInputLayout(None);
             context.VSSetShader(&self.quad_vertex, None);
             context.PSSetShader(&self.effect_pixel, None);
-            context.PSSetShaderResources(
-                0,
-                Some(&inputs.map(|texture| texture.map(|texture| texture.view.clone()))),
-            );
+            context.PSSetShaderResources(0, Some(&inputs));
             context.Draw(3, 0);
         }
         Self::unbind(context);

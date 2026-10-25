@@ -16,6 +16,9 @@ use crate::{
     gpu_pipeline::{Parameters, Pipeline, Texture},
 };
 
+#[path = "gpu_source.rs"]
+mod gpu_source;
+
 pub const GPU_TILE_SIZE: u32 = 256;
 pub const DEFAULT_GPU_MEMORY_BUDGET: usize = 512 * 1024 * 1024;
 
@@ -116,6 +119,12 @@ struct SourcePage {
     rect: [u32; 4],
     last_use: u64,
 }
+
+struct PendingSubmission {
+    completion: Box<dyn GpuCompletion>,
+    _textures: Vec<Texture>,
+    _sources: Vec<Arc<dyn GpuTexture>>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ColorGlyphKey {
     font: usvg::fontdb::ID,
@@ -181,45 +190,10 @@ impl ScratchPool {
     }
 }
 
-#[cfg(test)]
-mod scratch_pool_tests {
-    use super::*;
-    use gpui_windows::gpu_extensions::OffscreenGpuHost;
-
-    #[test]
-    fn full_pool_reuses_recent_surface_sizes() -> Result<()> {
-        let host = OffscreenGpuHost::new()?;
-        let service = host.service();
-        let memory = GpuMemory::shared(&service, None, DEFAULT_GPU_MEMORY_BUDGET)?;
-        let native = service
-            .as_any()
-            .downcast_ref::<DirectXGpuService>()
-            .context("D3D11 service")?;
-        native.with_context(|gpu| {
-            let mut pool = ScratchPool {
-                free: Vec::new(),
-                bytes: 0,
-            };
-            // Fill the cache with an obsolete size, then return a surface used
-            // by the new clipping bounds. Its next use must reuse that lease.
-            pool.put(Texture::with_samples(gpu.device, [2048, 2048], 4, &memory)?);
-            pool.put(Texture::with_samples(gpu.device, [256, 256], 1, &memory)?);
-            assert!(pool.bytes <= 64 * 1024 * 1024);
-            let allocations = memory.allocations();
-            let _reused = pool.take(gpu.device, [256, 256], 1, &memory)?;
-            assert_eq!(
-                memory.allocations(),
-                allocations,
-                "full cache discarded the recently used surface"
-            );
-            Ok(())
-        })
-    }
-}
-
 /// All native work executes through the service belonging to the GPUI window.
 pub struct GpuCanvas {
     service: Arc<dyn GpuService>,
+    wake: Option<crate::gpu_wake::Notifier>,
     epoch: u64,
     memory: Arc<GpuMemory>,
     pipeline: Option<Pipeline>,
@@ -244,15 +218,16 @@ pub struct GpuCanvas {
     bounds: HashMap<RetainedNodeId, [f64; 4]>,
     prepared: HashMap<RetainedNodeId, Arc<ItemGeometry>>,
     sequence: u64,
-    in_flight: Vec<(Box<dyn GpuCompletion>, Vec<Texture>)>,
+    in_flight: Vec<PendingSubmission>,
     current_resources: Vec<Texture>,
+    current_sources: Vec<Arc<dyn GpuTexture>>,
     profile: GpuRenderProfile,
     profiling: bool,
     timings: Vec<(GpuTiming, GpuRenderProfile)>,
     completed_profiles: Vec<GpuRenderProfile>,
 }
 
-struct GpuTiming {
+pub(crate) struct GpuTiming {
     disjoint: ID3D11Query,
     start: ID3D11Query,
     end: ID3D11Query,
@@ -265,7 +240,7 @@ impl Drop for GpuTiming {
     }
 }
 impl GpuTiming {
-    fn start(device: &ID3D11Device, context: &ID3D11DeviceContext) -> Result<Self> {
+    pub(crate) fn start(device: &ID3D11Device, context: &ID3D11DeviceContext) -> Result<Self> {
         let query = |kind| -> Result<ID3D11Query> {
             let mut output = None;
             unsafe {
@@ -292,7 +267,7 @@ impl GpuTiming {
         }
         Ok(result)
     }
-    fn end(&self, context: &ID3D11DeviceContext) {
+    pub(crate) fn end(&self, context: &ID3D11DeviceContext) {
         if !self.ended.replace(true) {
             unsafe {
                 context.End(&self.end);
@@ -300,7 +275,7 @@ impl GpuTiming {
             }
         }
     }
-    fn poll(&self, context: &ID3D11DeviceContext) -> Result<Option<Option<f64>>> {
+    pub(crate) fn poll(&self, context: &ID3D11DeviceContext) -> Result<Option<Option<f64>>> {
         let mut status = D3D11_QUERY_DATA_TIMESTAMP_DISJOINT::default();
         let mut start = 0_u64;
         let mut end = 0_u64;
@@ -372,6 +347,7 @@ impl GpuCanvas {
         Ok(Self {
             epoch: service.epoch(),
             service,
+            wake: None,
             memory,
             pipeline: None,
             geometry: GpuGeometryCache::default(),
@@ -400,6 +376,7 @@ impl GpuCanvas {
             sequence: 0,
             in_flight: Vec::new(),
             current_resources: Vec::new(),
+            current_sources: Vec::new(),
             profile: GpuRenderProfile::default(),
             profiling: false,
             timings: Vec::new(),
@@ -415,13 +392,14 @@ impl GpuCanvas {
                 DEFAULT_GPU_MEMORY_BUDGET,
             )?;
             self.epoch = self.service.epoch();
+            self.wake = None;
         }
         self.service.poll_deferred()?;
         let mut index = 0;
         while index < self.in_flight.len() {
             // Preserve every pending completion/resource on a poll error. A
             // draining iterator would destroy the unvisited leases on `?`.
-            if self.in_flight[index].0.poll()? {
+            if self.in_flight[index].completion.poll()? {
                 drop(self.in_flight.swap_remove(index));
             } else {
                 index += 1;
@@ -434,6 +412,18 @@ impl GpuCanvas {
             return Ok(false);
         }
         Ok(self.in_flight.len() < 2)
+    }
+    /// Scheduling hint for submitted frame work. Poll `is_ready` again after
+    /// waking; retirement, device errors and publication remain owner operations.
+    pub fn completion_wake(&mut self) -> Result<Option<crate::GpuCompletionWake>> {
+        ensure!(
+            self.epoch == self.service.epoch(),
+            "Canvas completion device epoch changed"
+        );
+        if self.wake.is_none() {
+            self.wake = Some(crate::gpu_wake::Notifier::new(self.service.clone())?);
+        }
+        self.wake.as_ref().unwrap().wake()
     }
     pub(crate) fn smart_filters(&self) -> Vec<FilterDisplayItem> {
         self.filters
@@ -494,6 +484,7 @@ impl GpuCanvas {
             std::mem::take(&mut self.timings),
             self.color_glyph_renderer.take(),
             std::mem::take(&mut self.color_glyphs),
+            std::mem::take(&mut self.current_sources),
         );
         if resources.0.is_some()
             || resources.1.is_some()
@@ -504,6 +495,7 @@ impl GpuCanvas {
             || !resources.6.is_empty()
             || resources.7.is_some()
             || !resources.8.is_empty()
+            || !resources.9.is_empty()
         {
             self.service.defer_release(Box::new(resources));
         }
@@ -636,10 +628,7 @@ impl GpuCanvas {
                 revision: self.sequence,
             });
         }
-        self.in_flight.push((
-            native.completion()?,
-            std::mem::take(&mut self.current_resources),
-        ));
+        self.retain_submission(native.completion()?);
         self.profile.allocations = self.memory.allocations() - allocations_before;
         if let Some(pipeline) = &self.pipeline {
             self.profile.mesh_upload_bytes = pipeline.uploaded_bytes - mesh_before;
@@ -835,8 +824,7 @@ impl GpuCanvas {
             Ok(candidate) => candidate,
             Err(error) => {
                 if let Ok(completion) = native.completion() {
-                    self.in_flight
-                        .push((completion, std::mem::take(&mut self.current_resources)));
+                    self.retain_submission(completion);
                 }
                 return Err(error);
             }
@@ -895,16 +883,21 @@ impl GpuCanvas {
             revision: self.sequence,
             profile: self.profile.clone(),
         };
-        self.in_flight.push((
-            native.completion()?,
-            std::mem::take(&mut self.current_resources),
-        ));
+        self.retain_submission(native.completion()?);
         self.view = Some(key);
         self.frame = Some(result.clone());
         self.scene_identity = Some(identity);
         self.decoration_revision = Some(decoration_revision);
         self.smart_signature = smart_signature;
         Ok(result)
+    }
+
+    fn retain_submission(&mut self, completion: Box<dyn GpuCompletion>) {
+        self.in_flight.push(PendingSubmission {
+            completion,
+            _textures: std::mem::take(&mut self.current_resources),
+            _sources: std::mem::take(&mut self.current_sources),
+        });
     }
 
     fn sync_scene(
@@ -2110,6 +2103,19 @@ impl GpuCanvas {
             }
             return Ok(());
         }
+        if source.gpu_texture().is_some() {
+            return self.paint_gpu_source(
+                device,
+                context,
+                target,
+                source,
+                frame,
+                scale,
+                region,
+                opacity,
+                (destination_center, source_center, factor),
+            );
+        }
         let pixels = source
             .raster_pixels()
             .context("Expected immutable raster source")?;
@@ -2195,27 +2201,7 @@ impl GpuCanvas {
                         ((page_y + 1) * span[1] + u64::from(step[1])).min(u64::from(height)) as u32,
                     ];
                     let rect = [origin[0], origin[1], end[0] - origin[0], end[1] - origin[1]];
-                    let cache_budget = (self.memory.limit() / 3).min(128 * 1024 * 1024);
-                    while self
-                        .sources
-                        .values()
-                        .map(|page| page.texture.bytes())
-                        .sum::<usize>()
-                        > cache_budget
-                    {
-                        let oldest = self
-                            .sources
-                            .iter()
-                            .filter(|(_, page)| page.last_use != self.sequence)
-                            .min_by_key(|(_, page)| page.last_use)
-                            .map(|(key, _)| *key);
-                        let Some(oldest) = oldest else {
-                            break;
-                        };
-                        if let Some(old) = self.sources.remove(&oldest) {
-                            self.current_resources.push(old.texture);
-                        }
-                    }
+                    self.evict_source_pages();
                     let texture = self.build_source_page(
                         device,
                         context,
@@ -2637,7 +2623,10 @@ impl GpuCanvas {
                 Pipeline::resolve(context, &mask_msaa, &mask);
                 let mut parameters = Parameters::for_target(region.size());
                 parameters.effect = [13.0, 0.0, 0.0, 1.0];
-                if let Some(patch) = background.and_then(|source| smart.patch(filter, source)) {
+                if let Some(patch) = background
+                    .and_then(|source| smart.patch(filter, source))
+                    .filter(|patch| patch.supports_device(&self.service))
+                {
                     Pipeline::clear(context, &patch_texture, [0.0; 4]);
                     self.paint_source(
                         device,
@@ -3509,4 +3498,40 @@ fn changed_stroke_bounds(old: &RetainedSceneNode, new: &RetainedSceneNode) -> Op
             )
             + 1.0,
     ))
+}
+
+#[cfg(test)]
+mod scratch_pool_tests {
+    use super::*;
+    use gpui_windows::gpu_extensions::OffscreenGpuHost;
+
+    #[test]
+    fn full_pool_reuses_recent_surface_sizes() -> Result<()> {
+        let host = OffscreenGpuHost::new()?;
+        let service = host.service();
+        let memory = GpuMemory::shared(&service, None, DEFAULT_GPU_MEMORY_BUDGET)?;
+        let native = service
+            .as_any()
+            .downcast_ref::<DirectXGpuService>()
+            .context("D3D11 service")?;
+        native.with_context(|gpu| {
+            let mut pool = ScratchPool {
+                free: Vec::new(),
+                bytes: 0,
+            };
+            // Fill the cache with an obsolete size, then return a surface used
+            // by the new clipping bounds. Its next use must reuse that lease.
+            pool.put(Texture::with_samples(gpu.device, [2048, 2048], 4, &memory)?);
+            pool.put(Texture::with_samples(gpu.device, [256, 256], 1, &memory)?);
+            assert!(pool.bytes <= 64 * 1024 * 1024);
+            let allocations = memory.allocations();
+            let _reused = pool.take(gpu.device, [256, 256], 1, &memory)?;
+            assert_eq!(
+                memory.allocations(),
+                allocations,
+                "full cache discarded the recently used surface"
+            );
+            Ok(())
+        })
+    }
 }

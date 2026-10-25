@@ -246,3 +246,73 @@ fn reconstruction_budget_and_mid_operation_cancellation_are_enforced() {
         Err(CanvasError::ResourceLimit)
     ));
 }
+
+#[test]
+fn profiling_identifies_periodic_and_multiscale_work_without_changing_results() {
+    for periodic in [true, false] {
+        let source = RgbaImage::from_fn(96, 80, |x, y| {
+            let n = if periodic {
+                ((x / 4 + y / 4) % 2 * 24) as i32
+            } else {
+                noise(x, y) * 2
+            };
+            Rgba([(120 + n) as u8, (150 + n) as u8, (90 + n) as u8, 255])
+        });
+        let mask = mask(96, 80, 36, 28, 24, 24);
+        let expected = reconstruct(&source, &mask, &Default::default()).unwrap();
+        let mut profile = profile::SmartEraseProfile::default();
+        let actual = reconstruct_profiled(
+            &source,
+            &mask,
+            None,
+            &Default::default(),
+            &mut Profiler {
+                data: Some(&mut profile),
+            },
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        exact_known(&source, &actual, &mask);
+        assert_eq!(profile.masked_pixels, 24 * 24);
+        assert_eq!(
+            profile.solver,
+            Some(if periodic {
+                SmartEraseSolver::Periodic
+            } else {
+                SmartEraseSolver::Multiscale
+            })
+        );
+        if periodic {
+            assert!(profile.levels.is_empty());
+        } else {
+            assert!(!profile.levels.is_empty());
+            let fine = profile.levels.last().unwrap();
+            assert_eq!(fine.size, [96, 80]);
+            assert_eq!(fine.masked_pixels, 24 * 24);
+            assert!(fine.donor_patches > 0);
+            assert!(fine.passes >= 2);
+        }
+    }
+}
+
+#[test]
+fn profiling_counts_only_donors_inside_the_working_grid() {
+    let source = RgbaImage::from_pixel(2048, 32, Rgba([70, 120, 180, 255]));
+    let mask = mask(2048, 32, 8, 8, 16, 16);
+    let mut profile = profile::SmartEraseProfile::default();
+    reconstruct_profiled(
+        &source,
+        &mask,
+        None,
+        &Default::default(),
+        &mut Profiler {
+            data: Some(&mut profile),
+        },
+    )
+    .unwrap();
+    assert!(profile.working_pixels < 2048 * 32);
+    assert_eq!(
+        profile.donor_pixels + profile.masked_pixels,
+        profile.working_pixels
+    );
+}

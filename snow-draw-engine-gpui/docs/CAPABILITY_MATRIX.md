@@ -1,6 +1,6 @@
 # GPU backend capability and verification matrix
 
-Updated 2026-10-24. This describes the Windows GPU architecture and its supported contracts.
+Updated 2026-10-25. This describes the Windows GPU architecture and its supported contracts.
 
 ## Ownership and retained updates
 
@@ -18,6 +18,7 @@ Updated 2026-10-24. This describes the Windows GPU architecture and its supporte
 | Rasterization and visibility | `GpuCanvas`, cached meshes, per-view spatial bins, retained 256-pixel tiles | CPU prepares reusable geometry; document rasterization, blending, image sampling and effects execute on GPUI's D3D11 device. Old/new bounds and downstream filter support determine damage. |
 | Presentation | GPUI texture primitives and damaged-window composition | Published textures remain immutable while referenced by a scene. Completion tracking bounds in-flight work; device generation changes invalidate resources explicitly. |
 | GPU retirement and budget | One configured budget per device generation, inherited by display/overlay/export canvases | Live, submitted, staged-readback and retiring allocations remain charged. Final reference drops coalesce into device-owned completion batches; native owner polling continues after canvas destruction. Epoch replacement preserves policy and creates a fresh accounting domain. |
+| Completion scheduling | Native D3D11 fence events wake Smart Erase and frame-readiness tasks where supported; timer polling remains available | Windows callbacks only wake tasks; owner readiness checks validate retirement/cancellation/device state before publication. Early-drop event handles remain in deferred retirement. Native timing control and device-backed lifecycle tests are recorded in the Smart Erase migration report. |
 
 ## Drawing, effects and interaction
 
@@ -33,8 +34,8 @@ Updated 2026-10-24. This describes the Windows GPU architecture and its supporte
 | Selection/marquee, move/resize/rotate/duplicate, constraints, handles and snaps | Shared engine interaction plus GPU overlays | Capture/cancellation/undo behavior remains in the engine; controls are excluded from exports. No new grouping/lasso workflow is implied. |
 | Mosaic, blur, grayscale, inversion, emboss and brightness | Ordered GPU input passes, masks and shaders | Device-backed fixtures and tile/export paths; no byte-identical OpenCV claim. |
 | Restore Background | GPU pristine-source replacement, including alpha | Separate from object erasing; transparent original pixels can remove annotation coverage. |
-| Smart Erase solve | CPU background service using immutable eligible source ROI | Service tests cover cancellation, source/geometry identity, cropped patches and resource rejection. Layered worker fixture excludes visual-only donors without materializing a full composite. |
-| Smart Erase display/export | Completed patches uploaded/composited by GPU | Reuse across camera/opacity changes; strict export rejects missing frozen results. The worker never renders a display frame. |
+| Smart Erase solve | CPU source-grid mask, cheap affine/periodic paths and bounded tiny-raster x64 routing; GPU layered donor assembly, domain/model/pyramid preparation and multiscale compute with CPU fallback | One 352-byte resident preparation readback; no reconstruction image transfer. Exact-geometry native pairs qualify execution policy; hosts can override CPU/GPU preference. Device-backed tests cover exact sampling, adaptive expansion, conservative pyramids, deterministic matching, quality, alpha/unmasked bytes, cancellation, worker/owner fallback and memory pressure. |
+| Smart Erase display/export | Completed GPU patches stay resident; CPU patches upload once | Camera/opacity cache reuse; strict frozen exports validate device/epoch. Exact straight buffers support lossless patch persistence. The worker never renders a display frame. |
 | Magnifier, spotlight and watermark | GPU pristine-source sampling, masks and glyph geometry | Shared source/interaction data and ordered decoration stages; per-view render areas remain separate from history. |
 | Auto Filter | Existing engine region/category logic | Host-supplied regions are supported; demo sample regions are not an OCR service. |
 
@@ -42,7 +43,7 @@ Updated 2026-10-24. This describes the Windows GPU architecture and its supporte
 
 | Capability | Contract | Focused verification |
 | --- | --- | --- |
-| Original images and layered sources | Original leaf buffers are shared. GPU source pages retain LODs and reuse resident base pixels during downsampling. `from_layers` retains order, anisotropic placement, coverage, donor eligibility and virtual dimensions | No editing-time visual/donor flattening. Nested placement/coverage and source identity tests. CPU workers assemble only eligible Smart Erase donor regions. |
+| Original images and layered sources | Original leaf buffers are shared. GPU source pages retain LODs and reuse resident base pixels during downsampling. `from_layers` retains order, anisotropic placement, coverage, donor eligibility and virtual dimensions | No full editing-time visual/donor flattening. Smart Erase assembles bounded eligible GPU regions with a 64 MiB immutable page cache; CPU fast models/fallback remain. Nested placement/coverage and source identity tests. |
 | Host presentation | Before/after layers, backdrop override, visibility and clips | Per-view state is separate from engine history/persistence and is consumed by the same GPU renderer during export. |
 | Immutable export camera | `prepare_text_metrics`, `CanvasSnapshot::capture`, `with_region`, `with_presentation` | Does not allocate an output-sized engine viewport or GPU texture. |
 | PNG, packed PNG and clipboard | `GpuExportJob` on supplied GPUI service; at most two reusable staging handles and two queued CPU bands | Staging leases remain charged while handles are cached. Native checks cover alpha, tile seams, packed gaps, reuse, cancellation and staging bounds. Clipboard uses the current app service. |

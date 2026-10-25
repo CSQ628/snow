@@ -1,6 +1,6 @@
-//! CPU-only, source-grid Smart Erase reconstruction. No display renderer or GPU
-//! resource is needed to solve a job; completed cropped patches can be uploaded
-//! once and composited at any camera, output scale, or item opacity.
+//! Source-grid reconstruction, worker preparation and immutable result caching.
+//! CPU workers solve cheap models or prepare GPU patch synthesis; completed
+//! cropped results are reused at any camera, output scale, or item opacity.
 
 use std::{collections::VecDeque, sync::Arc};
 
@@ -8,6 +8,8 @@ use image::RgbaImage;
 use snow_draw_engine::{DisplayFilterType, FilterDisplayItem, Point};
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
+use crate::smart_erase::profile::{Profiler, SmartEraseProfile, Stage};
+use crate::smart_erase::region::{DonorContext, DonorRegions, Reconstruction};
 use crate::{CanvasCancellation, CanvasError, SourceImage};
 
 const CACHE_BYTES: usize = 128 * 1024 * 1024;
@@ -57,6 +59,15 @@ impl SmartErasePatch {
     fn matches(&self, filter: &FilterDisplayItem, source: &SourceImage) -> bool {
         self.source == SmartSourceKey::from(source) && self.geometry == normalized(filter)
     }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn supports_device(&self, service: &Arc<dyn gpui::GpuService>) -> bool {
+        [&self.original, &self.filled].into_iter().all(|image| {
+            image.gpu_texture().is_none_or(|texture| {
+                texture.service_id() == service.service_id() && texture.epoch() == service.epoch()
+            })
+        })
+    }
 }
 
 /// Shared completed results keyed by immutable source identity/placement and
@@ -67,6 +78,17 @@ pub struct SmartEraseSnapshot {
 }
 
 impl SmartEraseSnapshot {
+    #[cfg(target_os = "windows")]
+    pub(crate) fn for_device(&self, service: &Arc<dyn gpui::GpuService>) -> Self {
+        Self {
+            entries: self
+                .entries
+                .iter()
+                .filter(|patch| patch.supports_device(service))
+                .cloned()
+                .collect(),
+        }
+    }
     pub fn result_count(&self) -> usize {
         self.entries.len()
     }
@@ -134,6 +156,39 @@ impl SmartEraseService {
         source: &SourceImage,
         cancel: &CanvasCancellation,
     ) -> Result<Option<Arc<SmartErasePatch>>, CanvasError> {
+        self.solve_inner(filter, source, cancel, &mut Profiler::default())
+    }
+
+    /// Profile one lookup/solve without changing its pixels, cache key or cancellation.
+    /// The supplied profile is reset even when the lookup fails or hits the cache.
+    pub fn solve_profiled(
+        &mut self,
+        filter: &FilterDisplayItem,
+        source: &SourceImage,
+        cancel: &CanvasCancellation,
+        profile: &mut SmartEraseProfile,
+    ) -> Result<Option<Arc<SmartErasePatch>>, CanvasError> {
+        *profile = SmartEraseProfile::default();
+        let start = std::time::Instant::now();
+        let result = self.solve_inner(
+            filter,
+            source,
+            cancel,
+            &mut Profiler {
+                data: Some(profile),
+            },
+        );
+        profile.total_ms = start.elapsed().as_secs_f64() * 1000.0;
+        result
+    }
+
+    fn solve_inner(
+        &mut self,
+        filter: &FilterDisplayItem,
+        source: &SourceImage,
+        cancel: &CanvasCancellation,
+        profiler: &mut Profiler<'_>,
+    ) -> Result<Option<Arc<SmartErasePatch>>, CanvasError> {
         cancel.check()?;
         if filter.filter.filter_type != DisplayFilterType::SmartErase
             || filter.filter.render_phase != 0
@@ -150,6 +205,9 @@ impl SmartEraseService {
         {
             let patch = self.snapshot.entries.remove(index).expect("cached patch");
             self.snapshot.entries.push_back(patch.clone());
+            if let Some(data) = &mut profiler.data {
+                data.cache_hit = true;
+            }
             return Ok(Some(patch));
         }
         if self.frozen {
@@ -157,7 +215,7 @@ impl SmartEraseService {
                 "Smart Erase geometry missing from the frozen result snapshot",
             ));
         }
-        let patch = reconstruct_patch(filter, source, cancel)?;
+        let patch = reconstruct_patch(filter, source, cancel, profiler)?;
         if let Some(patch) = &patch {
             cancel.check()?;
             insert_patch(&mut self.snapshot.entries, patch.clone());
@@ -181,7 +239,239 @@ pub struct SmartEraseJobOutput {
     pub warnings: Vec<String>,
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) struct GpuPatchKey {
+    pub filter: FilterDisplayItem,
+    pub fallback_source: SourceImage,
+    source: SmartSourceKey,
+}
+#[cfg(target_os = "windows")]
+impl GpuPatchKey {
+    pub fn complete(self, result: crate::GpuSmartEraseOutput) -> Arc<SmartErasePatch> {
+        Arc::new(SmartErasePatch {
+            geometry: self.filter,
+            source: self.source,
+            original: result.original,
+            filled: result.reconstructed,
+            bytes: result.profile.retained_bytes,
+        })
+    }
+}
+#[cfg(target_os = "windows")]
+pub(crate) struct GpuPatchRequest {
+    pub input: GpuPatchInput,
+    pub key: GpuPatchKey,
+}
+#[cfg(target_os = "windows")]
+pub(crate) enum GpuPatchInput {
+    Prepared(crate::GpuSmartEraseInput),
+    Source(Box<GpuLayeredInput>),
+}
+#[cfg(target_os = "windows")]
+pub(crate) struct GpuLayeredInput {
+    pub donors: crate::GpuDonorInput,
+    pub mask: crate::GpuSourceMask,
+    pub context: DonorContext,
+    pub halo: u32,
+}
+#[cfg(target_os = "windows")]
+impl GpuLayeredInput {
+    pub fn new(
+        filter: &FilterDisplayItem,
+        source: &SourceImage,
+        halo: Option<u32>,
+        cancel: &CanvasCancellation,
+    ) -> Result<Option<Self>, CanvasError> {
+        cancel.check()?;
+        let Some(regions) = donor_regions(filter, source)? else {
+            return Ok(None);
+        };
+        let halo = halo.unwrap_or_else(|| regions.initial_halo());
+        if halo == 0 || halo > 512 {
+            return Err(snow_draw_engine::ErrorCode::InvalidArgument.into());
+        }
+        let context = regions.context(halo);
+        let [x, y, w, h] = context.region;
+        if u64::from(w) * u64::from(h) > MAX_WORKING_PIXELS {
+            return Err(CanvasError::ResourceLimit);
+        }
+        let units = source.units_per_pixel();
+        let origin = Point::new(
+            source.origin().x + x as f64 * units,
+            source.origin().y + y as f64 * units,
+        );
+        let mask = reconstruction_mask(filter, origin, units, w, h)?;
+        if !mask.iter().any(|v| *v != 0) {
+            return Ok(None);
+        }
+        let mask = crate::GpuSourceMask::new(&mask, [w, h], cancel)?;
+        let donors = crate::GpuDonorInput::new(source, context.region, cancel)?;
+        Ok(Some(Self {
+            donors,
+            mask,
+            context,
+            halo,
+        }))
+    }
+}
+#[cfg(target_os = "windows")]
+enum LayeredHint {
+    Complete(Arc<SmartErasePatch>),
+    CpuPeriodic,
+    Gpu,
+}
+#[cfg(target_os = "windows")]
+fn layered_fast_patch(
+    filter: &FilterDisplayItem,
+    source: &SourceImage,
+    plan: &GpuLayeredInput,
+    cancel: &CanvasCancellation,
+) -> Result<LayeredHint, CanvasError> {
+    let can_sample = source.gpu_texture().is_none()
+        && source.layers().is_none_or(|layers| {
+            layers
+                .iter()
+                .filter(|l| l.smart_erase_source)
+                .all(|l| l.image.gpu_texture().is_none())
+        });
+    if !can_sample {
+        return Ok(LayeredHint::Gpu);
+    }
+    let [x, y, w, h] = plan.context.region;
+    let bounds = plan.mask.bounds();
+    let left = bounds[0].saturating_sub(4);
+    let top = bounds[1].saturating_sub(4);
+    let right = bounds[2].saturating_add(4).min(w);
+    let bottom = bounds[3].saturating_add(4).min(h);
+    let small = [left, top, right - left, bottom - top];
+    let original = source.eligible_region([x + left, y + top, small[2], small[3]], cancel)?;
+    let mask = plan.mask.sub_mask(small);
+    match crate::smart_erase::fast_model(&original, &mask, cancel)? {
+        crate::smart_erase::FastModel::Complete(output) => {
+            cancel.check()?;
+            let crop_left = bounds[0].saturating_sub(2);
+            let crop_top = bounds[1].saturating_sub(2);
+            let crop_right = bounds[2].saturating_add(2).min(w);
+            let crop_bottom = bounds[3].saturating_add(2).min(h);
+            let units = source.units_per_pixel();
+            let origin = Point::new(
+                source.origin().x + (x + crop_left) as f64 * units,
+                source.origin().y + (y + crop_top) as f64 * units,
+            );
+            let crop = |image: &RgbaImage| -> Result<SourceImage, CanvasError> {
+                SourceImage::new(
+                    image::imageops::crop_imm(
+                        image,
+                        crop_left - left,
+                        crop_top - top,
+                        crop_right - crop_left,
+                        crop_bottom - crop_top,
+                    )
+                    .to_image(),
+                )?
+                .with_placement(origin, units)
+            };
+            let original = crop(&original)?;
+            let filled = crop(&output)?;
+            let bytes = original.pixels.as_raw().len() + filled.pixels.as_raw().len();
+            Ok(LayeredHint::Complete(Arc::new(SmartErasePatch {
+                geometry: filter.clone(),
+                source: SmartSourceKey::from(source),
+                original,
+                filled,
+                bytes,
+            })))
+        }
+        crate::smart_erase::FastModel::PeriodicHint => Ok(LayeredHint::CpuPeriodic),
+        crate::smart_erase::FastModel::Texture => Ok(LayeredHint::Gpu),
+    }
+}
+pub(crate) enum PreparedPatch {
+    Cpu(Arc<SmartErasePatch>),
+    #[cfg(target_os = "windows")]
+    Gpu(Box<GpuPatchRequest>),
+}
+#[cfg(target_os = "windows")]
+pub(crate) struct SmartErasePreparation {
+    pub revision: u64,
+    pub snapshot: SmartEraseSnapshot,
+    pub requests: Vec<GpuPatchRequest>,
+    pub warnings: Vec<String>,
+}
+
 impl SmartEraseJob {
+    #[cfg(target_os = "windows")]
+    pub(crate) fn prepare_gpu(
+        self,
+        cancel: &CanvasCancellation,
+    ) -> Result<SmartErasePreparation, CanvasError> {
+        self.prepare_accelerated(cancel, crate::SmartEraseExecution::GpuPreferred)
+    }
+    #[cfg(target_os = "windows")]
+    pub(crate) fn prepare_automatic(
+        self,
+        cancel: &CanvasCancellation,
+    ) -> Result<SmartErasePreparation, CanvasError> {
+        self.prepare_accelerated(cancel, crate::SmartEraseExecution::Automatic)
+    }
+    #[cfg(target_os = "windows")]
+    fn prepare_accelerated(
+        self,
+        cancel: &CanvasCancellation,
+        execution: crate::SmartEraseExecution,
+    ) -> Result<SmartErasePreparation, CanvasError> {
+        cancel.check()?;
+        let mut snapshot = self.seed;
+        let mut requests = Vec::new();
+        let mut warnings = Vec::new();
+        if let Some(source) = &self.source {
+            for filter in &self.filters {
+                cancel.check()?;
+                if filter.filter.filter_type != DisplayFilterType::SmartErase
+                    || filter.filter.render_phase != 0
+                    || snapshot.patch(filter, source).is_some()
+                {
+                    continue;
+                }
+                let prepared = match prepare_patch_inner(
+                    filter,
+                    source,
+                    cancel,
+                    &mut Profiler::default(),
+                    execution,
+                ) {
+                    Err(
+                        CanvasError::ResourceLimit
+                        | CanvasError::Unsupported(_)
+                        | CanvasError::Gpu(_),
+                    ) => prepare_patch_inner(
+                        filter,
+                        source,
+                        cancel,
+                        &mut Profiler::default(),
+                        crate::SmartEraseExecution::Cpu,
+                    ),
+                    result => result,
+                };
+                match prepared {
+                    Ok(Some(PreparedPatch::Cpu(patch))) => {
+                        insert_patch(&mut snapshot.entries, patch)
+                    }
+                    Ok(Some(PreparedPatch::Gpu(request))) => requests.push(*request),
+                    Ok(None) => {}
+                    Err(CanvasError::Cancelled) => return Err(CanvasError::Cancelled),
+                    Err(error) => warnings.push(error.to_string()),
+                }
+            }
+        }
+        cancel.check()?;
+        Ok(SmartErasePreparation {
+            revision: self.revision,
+            snapshot,
+            requests,
+            warnings,
+        })
+    }
     pub fn new(
         revision: u64,
         source: Option<SourceImage>,
@@ -259,79 +549,227 @@ pub(crate) fn reconstruct_patch(
     filter: &FilterDisplayItem,
     source: &SourceImage,
     cancel: &CanvasCancellation,
+    profiler: &mut Profiler<'_>,
 ) -> Result<Option<Arc<SmartErasePatch>>, CanvasError> {
-    cancel.check()?;
-    let geometry = normalized(filter);
+    match prepare_patch_inner(
+        filter,
+        source,
+        cancel,
+        profiler,
+        crate::SmartEraseExecution::Cpu,
+    )? {
+        Some(PreparedPatch::Cpu(patch)) => Ok(Some(patch)),
+        None => Ok(None),
+        #[cfg(target_os = "windows")]
+        Some(PreparedPatch::Gpu(_)) => unreachable!("CPU solve cannot prepare a GPU request"),
+    }
+}
+
+fn donor_regions(
+    filter: &FilterDisplayItem,
+    source: &SourceImage,
+) -> Result<Option<DonorRegions>, CanvasError> {
     let units = source.units_per_pixel();
-    let (left, top, right, bottom) = mask_bounds(&geometry)?;
-    let x0 = (((left - source.origin().x) / units).floor() - 512.0)
+    let (left, top, right, bottom) = mask_bounds(filter)?;
+    let x0 = ((left - source.origin().x) / units)
+        .floor()
         .clamp(0.0, f64::from(source.width())) as u32;
-    let y0 = (((top - source.origin().y) / units).floor() - 512.0)
+    let y0 = ((top - source.origin().y) / units)
+        .floor()
         .clamp(0.0, f64::from(source.height())) as u32;
-    let x1 = (((right - source.origin().x) / units).ceil() + 512.0)
+    let x1 = ((right - source.origin().x) / units)
+        .ceil()
         .clamp(0.0, f64::from(source.width())) as u32;
-    let y1 = (((bottom - source.origin().y) / units).ceil() + 512.0)
+    let y1 = ((bottom - source.origin().y) / units)
+        .ceil()
         .clamp(0.0, f64::from(source.height())) as u32;
     if x1 <= x0 || y1 <= y0 {
         return Ok(None);
     }
-    let width = x1 - x0;
-    let height = y1 - y0;
-    if u64::from(width) * u64::from(height) > MAX_WORKING_PIXELS {
-        return Err(CanvasError::ResourceLimit);
-    }
-    let origin = Point::new(
-        source.origin().x + f64::from(x0) * units,
-        source.origin().y + f64::from(y0) * units,
-    );
-    let mask = reconstruction_mask(&geometry, origin, units, width, height)?;
-    let mut affected = [width, height, 0, 0];
-    for y in 0..height {
-        cancel.check()?;
-        for x in 0..width {
-            if mask[y as usize * width as usize + x as usize] != 0 {
-                affected[0] = affected[0].min(x);
-                affected[1] = affected[1].min(y);
-                affected[2] = affected[2].max(x + 1);
-                affected[3] = affected[3].max(y + 1);
+    Ok(Some(DonorRegions::new(
+        [x0, y0, x1, y1],
+        source.dimensions(),
+    )))
+}
+
+fn prepare_patch_inner(
+    filter: &FilterDisplayItem,
+    source: &SourceImage,
+    cancel: &CanvasCancellation,
+    profiler: &mut Profiler<'_>,
+    _execution: crate::SmartEraseExecution,
+) -> Result<Option<PreparedPatch>, CanvasError> {
+    cancel.check()?;
+    let geometry = normalized(filter);
+    let units = source.units_per_pixel();
+    let Some(regions) = donor_regions(&geometry, source)? else {
+        return Ok(None);
+    };
+    #[cfg(target_os = "windows")]
+    if _execution != crate::SmartEraseExecution::Cpu
+        && (source.layers().is_some() || source.gpu_texture().is_some())
+    {
+        let Some(plan) = GpuLayeredInput::new(&geometry, source, None, cancel)? else {
+            return Ok(None);
+        };
+        match layered_fast_patch(&geometry, source, &plan, cancel)? {
+            LayeredHint::Complete(patch) => return Ok(Some(PreparedPatch::Cpu(patch))),
+            LayeredHint::CpuPeriodic => {}
+            LayeredHint::Gpu => {
+                return Ok(Some(PreparedPatch::Gpu(Box::new(GpuPatchRequest {
+                    input: GpuPatchInput::Source(Box::new(plan)),
+                    key: GpuPatchKey {
+                        filter: geometry,
+                        source: SmartSourceKey::from(source),
+                        fallback_source: source.clone(),
+                    },
+                }))));
             }
         }
     }
-    if affected[2] == 0 || affected[3] == 0 {
-        return Ok(None);
+    let mut halo = regions.initial_halo();
+    let aligned_region = |halo| regions.region(halo);
+    loop {
+        cancel.check()?;
+        let start = profiler.start();
+        let [x0, y0, width, height] = aligned_region(halo);
+        if let Some(data) = &mut profiler.data {
+            data.source_region = [x0, y0, width, height];
+            data.working_pixels = width as usize * height as usize;
+            data.attempts += 1;
+            data.donor_halo = halo;
+        }
+        if u64::from(width) * u64::from(height) > MAX_WORKING_PIXELS {
+            return Err(CanvasError::ResourceLimit);
+        }
+        let origin = Point::new(
+            source.origin().x + f64::from(x0) * units,
+            source.origin().y + f64::from(y0) * units,
+        );
+        let mask = reconstruction_mask(&geometry, origin, units, width, height)?;
+        let mut affected = [width, height, 0, 0];
+        for y in 0..height {
+            cancel.check()?;
+            for x in 0..width {
+                if mask[y as usize * width as usize + x as usize] != 0 {
+                    affected[0] = affected[0].min(x);
+                    affected[1] = affected[1].min(y);
+                    affected[2] = affected[2].max(x + 1);
+                    affected[3] = affected[3].max(y + 1);
+                }
+            }
+        }
+        if affected[2] == 0 || affected[3] == 0 {
+            return Ok(None);
+        }
+        profiler.finish(Stage::Mask, start);
+        cancel.check()?;
+        let start = profiler.start();
+        let original = Arc::new(source.eligible_region([x0, y0, width, height], cancel)?);
+        profiler.finish(Stage::DonorAssembly, start);
+        let context = regions.context(halo);
+        #[cfg(target_os = "windows")]
+        let reconstructed = if _execution != crate::SmartEraseExecution::Cpu {
+            crate::smart_erase::prepare_in_region(
+                &original,
+                &mask,
+                cancel,
+                Some(&context),
+                profiler,
+                if source.layers().is_some() {
+                    crate::SmartEraseExecution::GpuPreferred
+                } else {
+                    _execution
+                },
+            )?
+        } else {
+            crate::smart_erase::reconstruct_in_region(
+                &original,
+                &mask,
+                None,
+                cancel,
+                Some(&context),
+                profiler,
+            )?
+        };
+        #[cfg(not(target_os = "windows"))]
+        let reconstructed = crate::smart_erase::reconstruct_in_region(
+            &original,
+            &mask,
+            None,
+            cancel,
+            Some(&context),
+            profiler,
+        )?;
+        let output = match reconstructed {
+            Reconstruction::Complete(image) => image,
+            Reconstruction::ExpandDonors => {
+                halo = (halo * 2).min(512);
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            Reconstruction::Gpu(grid) => {
+                cancel.check()?;
+                let [gx, gy, gw, gh] = grid.region;
+                let pixels = if grid.region == [0, 0, width, height] {
+                    original
+                } else {
+                    Arc::new(image::imageops::crop_imm(&*original, gx, gy, gw, gh).to_image())
+                };
+                let left = affected[0].saturating_sub(2).max(gx) - gx;
+                let top = affected[1].saturating_sub(2).max(gy) - gy;
+                let right = affected[2].saturating_add(2).min(gx + gw) - gx;
+                let bottom = affected[3].saturating_add(2).min(gy + gh) - gy;
+                let input = crate::GpuSmartEraseInput::prepared(
+                    pixels,
+                    grid.flags,
+                    [left, top, right - left, bottom - top],
+                    Point::new(origin.x + gx as f64 * units, origin.y + gy as f64 * units),
+                    units,
+                    grid.search_span,
+                );
+                return Ok(Some(PreparedPatch::Gpu(Box::new(GpuPatchRequest {
+                    input: GpuPatchInput::Prepared(input),
+                    key: GpuPatchKey {
+                        filter: geometry,
+                        source: SmartSourceKey::from(source),
+                        fallback_source: source.clone(),
+                    },
+                }))));
+            }
+        };
+        let start = profiler.start();
+        cancel.check()?;
+        let left = affected[0].saturating_sub(2);
+        let top = affected[1].saturating_sub(2);
+        let right = affected[2].saturating_add(2).min(width);
+        let bottom = affected[3].saturating_add(2).min(height);
+        let retained_origin = Point::new(
+            origin.x + f64::from(left) * units,
+            origin.y + f64::from(top) * units,
+        );
+        let crop = |image: &RgbaImage| -> Result<SourceImage, CanvasError> {
+            SourceImage::new(
+                image::imageops::crop_imm(image, left, top, right - left, bottom - top).to_image(),
+            )?
+            .with_placement(retained_origin, units)
+        };
+        let original = crop(&original)?;
+        let filled = crop(&output)?;
+        cancel.check()?;
+        let bytes = original.pixels.as_raw().len() + filled.pixels.as_raw().len();
+        profiler.finish(Stage::Output, start);
+        return Ok(Some(PreparedPatch::Cpu(Arc::new(SmartErasePatch {
+            geometry,
+            source: SmartSourceKey::from(source),
+            original,
+            filled,
+            bytes,
+        }))));
     }
-    cancel.check()?;
-    let original = source.eligible_region([x0, y0, width, height], cancel)?;
-    let output = crate::smart_erase::reconstruct_with_donors(&original, &mask, None, cancel)?;
-    cancel.check()?;
-    let left = affected[0].saturating_sub(2);
-    let top = affected[1].saturating_sub(2);
-    let right = affected[2].saturating_add(2).min(width);
-    let bottom = affected[3].saturating_add(2).min(height);
-    let retained_origin = Point::new(
-        origin.x + f64::from(left) * units,
-        origin.y + f64::from(top) * units,
-    );
-    let crop = |image: &RgbaImage| -> Result<SourceImage, CanvasError> {
-        SourceImage::new(
-            image::imageops::crop_imm(image, left, top, right - left, bottom - top).to_image(),
-        )?
-        .with_placement(retained_origin, units)
-    };
-    let original = crop(&original)?;
-    let filled = crop(&output)?;
-    cancel.check()?;
-    let bytes = original.pixels.as_raw().len() + filled.pixels.as_raw().len();
-    Ok(Some(Arc::new(SmartErasePatch {
-        geometry,
-        source: SmartSourceKey::from(source),
-        original,
-        filled,
-        bytes,
-    })))
 }
 
-fn mask_bounds(filter: &FilterDisplayItem) -> Result<(f64, f64, f64, f64), CanvasError> {
+pub(crate) fn mask_bounds(filter: &FilterDisplayItem) -> Result<(f64, f64, f64, f64), CanvasError> {
     let bounds = if filter.is_pen_filter {
         if filter.points.is_empty()
             || !filter.stroke_width.is_finite()
@@ -379,7 +817,7 @@ fn mask_bounds(filter: &FilterDisplayItem) -> Result<(f64, f64, f64, f64), Canva
     Ok(bounds)
 }
 
-fn reconstruction_mask(
+pub(crate) fn reconstruction_mask(
     filter: &FilterDisplayItem,
     origin: Point<f64>,
     units: f64,

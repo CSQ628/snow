@@ -46,14 +46,14 @@ impl DrawingSnapshot {
         let Some(source) = self
             .background
             .as_ref()
-            .filter(|source| source.layers().is_some())
+            .filter(|source| source.raster_pixels().is_none())
         else {
             return Ok(self);
         };
         let visual = materialize(source, false)?;
         let eligible = materialize(source, true)?;
-        if visual.layers().is_some()
-            || eligible.layers().is_some()
+        if visual.raster_pixels().is_none()
+            || eligible.raster_pixels().is_none()
             || visual.dimensions() != source.dimensions()
             || eligible.dimensions() != source.dimensions()
         {
@@ -70,7 +70,7 @@ impl DrawingSnapshot {
     pub fn requires_materialization(&self) -> bool {
         self.background
             .as_ref()
-            .is_some_and(|source| source.layers().is_some())
+            .is_some_and(|source| source.raster_pixels().is_none())
     }
     pub(crate) fn capture(
         engine: &Engine,
@@ -89,7 +89,7 @@ impl DrawingSnapshot {
         validate_budget(maximum_source_rgba_bytes)?;
         if self.requires_materialization() {
             return Err(CanvasError::Unsupported(
-                "saving layered sources before GPU materialization",
+                "saving layered or GPU sources before GPU materialization",
             ));
         }
         if self.background.as_ref().is_some_and(|source| {
