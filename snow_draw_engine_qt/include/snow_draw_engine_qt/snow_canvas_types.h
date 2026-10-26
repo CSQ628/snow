@@ -142,6 +142,8 @@ enum class SnowCanvasSerialNumberType : quint32 {
 enum class SnowCanvasBrushMode { Regular, PressureSensitive };
 
 enum SnowCanvasShapeStyleMixedFlag : quint32 {
+    SnowCanvasShapeStyleMixedArrowOutlineColor = 1u << 16,
+    SnowCanvasShapeStyleMixedArrowOutlineWidth = 1u << 17,
     SnowCanvasShapeStyleMixedStrokeRenderingStyle = 1u << 15,
     SnowCanvasShapeStyleMixedBrushMode = 1u << 14,
     SnowCanvasShapeStyleMixedFill = 1u << 0,
@@ -179,6 +181,8 @@ enum class SnowCanvasSelectionAlignment {
 };
 
 enum SnowCanvasShapeStyleProperty : quint32 {
+    SnowCanvasShapeStylePropertyArrowOutlineColor = 1u << 16,
+    SnowCanvasShapeStylePropertyArrowOutlineWidth = 1u << 17,
     SnowCanvasShapeStylePropertyStrokeRenderingStyle = 1u << 15,
     SnowCanvasShapeStylePropertyBrushMode = 1u << 14,
     SnowCanvasShapeStylePropertyFillColor = 1u << 0,
@@ -460,6 +464,8 @@ struct SnowCanvasShapeStyle {
     SnowCanvasRectangleShape shape = SnowCanvasRectangleShape::Rectangle;
     SnowCanvasBrushMode brushMode = SnowCanvasBrushMode::Regular;
     SnowCanvasStrokeRenderingStyle strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Architect;
+    QColor arrowOutlineColor{0xff, 0xcc, 0xc7};
+    double arrowOutlineWidth = 0.0;
 };
 
 struct SnowCanvasMagnifierStyle {
@@ -488,7 +494,9 @@ inline bool operator!=(const SnowCanvasMagnifierStyle& lhs, const SnowCanvasMagn
 }
 
 inline bool operator==(const SnowCanvasShapeStyle& lhs, const SnowCanvasShapeStyle& rhs) {
-    return lhs.fill == rhs.fill && lhs.fillStyle == rhs.fillStyle && lhs.stroke == rhs.stroke &&
+    return lhs.arrowOutlineColor == rhs.arrowOutlineColor &&
+           snowCanvasExactDoubleEqual(lhs.arrowOutlineWidth, rhs.arrowOutlineWidth) &&
+           lhs.fill == rhs.fill && lhs.fillStyle == rhs.fillStyle && lhs.stroke == rhs.stroke &&
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
            lhs.cornerRadii == rhs.cornerRadii && lhs.startArrowhead == rhs.startArrowhead &&
            lhs.endArrowhead == rhs.endArrowhead && lhs.strokeStyle == rhs.strokeStyle &&
@@ -596,10 +604,14 @@ struct SnowCanvasArrowStyle {
     SnowCanvasArrowShaftType arrowShaftType = SnowCanvasArrowShaftType::Plain;
     double arrowRatio = 1.0;
     SnowCanvasStrokeRenderingStyle strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Architect;
+    QColor arrowOutlineColor{0xff, 0xcc, 0xc7};
+    double arrowOutlineWidth = 0.0;
 };
 
 inline bool operator==(const SnowCanvasArrowStyle& lhs, const SnowCanvasArrowStyle& rhs) {
-    return lhs.stroke == rhs.stroke &&
+    return lhs.arrowOutlineColor == rhs.arrowOutlineColor &&
+           snowCanvasExactDoubleEqual(lhs.arrowOutlineWidth, rhs.arrowOutlineWidth) &&
+           lhs.stroke == rhs.stroke &&
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
            lhs.startArrowhead == rhs.startArrowhead && lhs.endArrowhead == rhs.endArrowhead &&
            lhs.strokeStyle == rhs.strokeStyle && lhs.arrowType == rhs.arrowType &&

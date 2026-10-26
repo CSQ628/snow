@@ -411,6 +411,9 @@ impl Editor {
             preview_arrow_from_points(
                 points,
                 ArrowStyle {
+                    arrow_outline_color: snow_draw_engine_core::arrow::default_arrow_outline_color(
+                    ),
+                    arrow_outline_width: 0.0,
                     stroke: style.stroke,
                     stroke_width: style.stroke_width,
                     start_arrowhead: None,

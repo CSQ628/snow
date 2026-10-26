@@ -105,6 +105,79 @@ QImage render(const SnowCanvasSceneItem& item, double zoom = 1, double dpr = 1) 
     return image;
 }
 
+void arrowOutlinesCoverGeometryAndPreserveDisabledPixels() {
+    for (const auto style :
+         {SNOW_STROKE_RENDERING_STYLE_ARCHITECT, SNOW_STROKE_RENDERING_STYLE_ARTIST,
+          SNOW_STROKE_RENDERING_STYLE_CARTOONIST}) {
+        for (const auto route :
+             {SNOW_ARROW_TYPE_STRAIGHT, SNOW_ARROW_TYPE_CURVE, SNOW_ARROW_TYPE_ELBOW}) {
+            for (const auto pattern :
+                 {SNOW_STROKE_STYLE_SOLID, SNOW_STROKE_STYLE_DASHED, SNOW_STROKE_STYLE_DOTTED}) {
+                for (const auto head :
+                     {SNOW_ARROWHEAD_ARROW, SNOW_ARROWHEAD_TRIANGLE, SNOW_ARROWHEAD_CIRCLE_OUTLINE,
+                      SNOW_ARROWHEAD_DIAMOND_OUTLINE}) {
+                    auto item = arrow(style, route, head);
+                    item.arrow_stroke_style = pattern;
+                    const QImage plain = render(item);
+                    item.arrow_outline_color = {255, 0, 100, 128};
+                    require(render(item) == plain,
+                            "zero outline width must preserve existing pixels");
+                    item.arrow_outline_width = 8;
+                    item.arrow_outline_color.a = 0;
+                    require(render(item) == plain,
+                            "transparent outline must preserve existing pixels");
+                    item.arrow_outline_color.a = 128;
+                    const QImage outlined = render(item);
+                    require(outlined != plain,
+                            "every arrow route, pattern, and head must support outlines");
+                    const auto bounds =
+                        snow_canvas_render_geometry::sceneItemBounds(displayInfo(), item)
+                            .adjusted(-1, -1, 1, 1)
+                            .toAlignedRect();
+                    bool outerInk = false;
+                    for (int y = 0; y < outlined.height(); ++y) {
+                        for (int x = 0; x < outlined.width(); ++x) {
+                            require(bounds.contains(x, y) || qAlpha(outlined.pixel(x, y)) == 0,
+                                    "outline pixels remain inside culling bounds");
+                            if (qAlpha(plain.pixel(x, y)) == 0 &&
+                                qAlpha(outlined.pixel(x, y)) > 0) {
+                                outerInk = true;
+                                require(
+                                    qAlpha(outlined.pixel(x, y)) <= 129,
+                                    "overlapping outline contours must receive alpha only once");
+                            }
+                        }
+                    }
+                    require(outerInk, "outline extends the rendered arrow silhouette");
+                }
+            }
+        }
+    }
+    auto item = arrow(SNOW_STROKE_RENDERING_STYLE_ARCHITECT);
+    item.arrow_outline_width = 8;
+    item.arrow_outline_color = {255, 0, 100, 128};
+    render(item);
+    snow_canvas_stroke_rendering::takeDiagnostics();
+    item.arrow_outline_color = {30, 180, 10, 200};
+    render(item, 1.5, 2.0);
+    require(snow_canvas_stroke_rendering::takeDiagnostics().geometryBuilds == 0,
+            "outline color, zoom, and DPI changes reuse coverage geometry");
+    item.stroke.a = 0;
+    const auto outlineOnly = render(item);
+    require(qAlpha(outlineOnly.pixel(160, 113)) > 0,
+            "outline remains visible with transparent arrow stroke");
+    item.has_bound_text_element = 1;
+    item.arrow_text_bounds[0] = -22;
+    item.arrow_text_bounds[1] = -9;
+    item.arrow_text_bounds[2] = 22;
+    item.arrow_text_bounds[3] = 9;
+    const auto labeled = render(item);
+    for (int y = 96; y < 124; ++y)
+        for (int x = 133; x < 187; ++x)
+            require(qAlpha(labeled.pixel(x, y)) == 0,
+                    "outline preserves transparent label exclusion");
+}
+
 void architectKeepsTheOriginalFastPath() {
     auto item = rectangle(SNOW_STROKE_RENDERING_STYLE_ARCHITECT);
     const QImage original = render(item);
@@ -288,12 +361,16 @@ void clippingAndBoundsIncludeStyledInk() {
 
 void retainedOverlayMatchesSceneArrow() {
     auto scene = arrow(SNOW_STROKE_RENDERING_STYLE_CARTOONIST, SNOW_ARROW_TYPE_CURVE);
+    scene.arrow_outline_width = 8;
+    scene.arrow_outline_color = {200, 100, 10, 128};
     SnowOverlayDisplayItem raw{};
     raw.kind = SNOW_OVERLAY_DISPLAY_ITEM_FOCUS_CONNECTION;
     raw.width = scene.width;
     raw.height = scene.height;
     raw.stroke = scene.stroke;
     raw.stroke_width = scene.stroke_width;
+    raw.arrow_outline_color = scene.arrow_outline_color;
+    raw.arrow_outline_width = scene.arrow_outline_width;
     raw.stroke_rendering_style = scene.stroke_rendering_style;
     raw.stroke_rendering_seed = scene.stroke_rendering_seed;
     raw.arrow_type = scene.arrow_type;
@@ -506,6 +583,32 @@ void runtimeArrowRecolourAndOpacityRetainInk() {
                 diagnostics.geometryBuilds == 0 && diagnostics.strokeBuilds == 0 &&
                 diagnostics.coverageUnions == 0 && diagnostics.cacheAllocations == 0,
             "real Rust colour/opacity reset patches must retain native chunks and sketch ink");
+
+    style.arrowOutlineWidth = 8;
+    style.arrowOutlineColor = QColor(12, 160, 240, 128);
+    require(canvas.setCanvasShapeStylePatch(style,
+                                            SnowCanvasShapeStylePropertyArrowOutlineWidth |
+                                                SnowCanvasShapeStylePropertyArrowOutlineColor,
+                                            SnowCanvasShapeKind::Arrow) &&
+                cache.sync(handle, viewport.get()),
+            "enable outline on a retained arrow");
+    const auto outlined = render(cache.sceneItems()[0]);
+    snow_canvas_stroke_rendering::takeDiagnostics();
+    const auto outlinedRevision = cache.sceneItems()[0].strokeRenderingGeometryRevision();
+    const auto outlinedChunk = cache.sceneItems()[0].pathChunks()[0].cacheId;
+    style.arrowOutlineColor = QColor(240, 180, 12, 128);
+    require(canvas.setCanvasShapeStylePatch(style, SnowCanvasShapeStylePropertyArrowOutlineColor,
+                                            SnowCanvasShapeKind::Arrow) &&
+                cache.sync(handle, viewport.get()),
+            "recolour an outlined arrow through Rust and the retained display cache");
+    require(render(cache.sceneItems()[0]) != outlined,
+            "outline recolour updates the exported pixels");
+    require(cache.sceneItems()[0].strokeRenderingGeometryRevision() == outlinedRevision,
+            "outline colour changes preserve native geometry revisions");
+    require(cache.sceneItems()[0].pathChunks()[0].cacheId == outlinedChunk,
+            "outline colour changes preserve retained path chunks");
+    require(snow_canvas_stroke_rendering::takeDiagnostics().geometryBuilds == 0,
+            "outline colour changes reuse cached coverage geometry");
 
     const QPainterPath before = snow_canvas_stroke_rendering::geometry(cache.sceneItems()[0]).ink;
     const auto rotation = snow_canvas_stroke_rendering::localToCanvas(0, 0, 0.37);
@@ -797,6 +900,13 @@ void writeMatrix(const QString& output, double dpr = 1, bool transparent = false
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf"));
+    if (application.arguments().contains(QStringLiteral("--arrow-outline-only"))) {
+        arrowOutlinesCoverGeometryAndPreserveDisabledPixels();
+        runtimeArrowRecolourAndOpacityRetainInk();
+        retainedOverlayMatchesSceneArrow();
+        return 0;
+    }
+    arrowOutlinesCoverGeometryAndPreserveDisabledPixels();
     architectKeepsTheOriginalFastPath();
     stylesAreStableAndDistinct();
     serialNumberStrokeTypesOnlyChangeOutlinedRings();

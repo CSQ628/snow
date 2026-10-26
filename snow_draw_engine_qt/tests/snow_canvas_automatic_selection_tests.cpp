@@ -3,6 +3,8 @@
 
 #include <QKeyEvent>
 #include <QFocusEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 using canvas_quick_selection_test::mouse;
 using canvas_quick_selection_test::require;
@@ -15,6 +17,153 @@ void drawShape(SnowCanvasWidget& canvas, QPointF start = {60, 60}) {
     mouse(canvas, QEvent::MouseMove, start + QPointF(100, 60), Qt::NoButton, Qt::LeftButton);
     mouse(canvas, QEvent::MouseButtonRelease, start + QPointF(100, 60), Qt::LeftButton,
           Qt::NoButton);
+}
+
+QJsonArray textRecords(const SnowCanvasRuntime& runtime) {
+    QJsonArray texts;
+    const auto elements = QJsonDocument::fromJson(runtime.serializeDocumentSession())
+                              .object()
+                              .value(QStringLiteral("document"))
+                              .toObject()
+                              .value(QStringLiteral("slots"))
+                              .toArray();
+    for (const auto& slot : elements) {
+        const auto data = slot.toObject().value(QStringLiteral("data")).toObject();
+        if (data.contains(QStringLiteral("Text"))) {
+            auto text = data.value(QStringLiteral("Text")).toObject();
+            text.insert(QStringLiteral("id"), slot.toObject().value(QStringLiteral("id")));
+            texts.append(text);
+        }
+    }
+    return texts;
+}
+
+void outsideClickCommitsAndDeselects() {
+    for (const auto tool :
+         {SnowCanvasTool::Text, SnowCanvasTool::Arrow, SnowCanvasTool::SpeechBubble,
+          SnowCanvasTool::SerialNumber, SnowCanvasTool::Shape, SnowCanvasTool::Distance}) {
+        for (const bool reopen : {false, true}) {
+            for (const bool empty : {false, true}) {
+                if (tool == SnowCanvasTool::Distance && empty)
+                    continue;
+                const bool useSelectTool = reopen && (tool == SnowCanvasTool::Arrow ||
+                                                      tool == SnowCanvasTool::SpeechBubble ||
+                                                      tool == SnowCanvasTool::Distance);
+                SnowCanvasRuntimeConfig config;
+                config.automaticallySelectNewlyCreatedElements = true;
+                config.automaticSelectionExcludedTools.clear();
+                SnowCanvasRuntime runtime(config);
+                SnowCanvasWidget canvas(runtime);
+                SnowCanvasWidget second(runtime);
+                canvas.resize(800, 600);
+                second.resize(800, 600);
+                canvas.show();
+                QApplication::processEvents();
+                require(canvas.setCanvasTool(tool), "activate text dismissal fixture tool");
+                const auto key = [&](int code, Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                                     const QString& text = QString()) {
+                    QKeyEvent event(QEvent::KeyPress, code, modifiers, text);
+                    QApplication::sendEvent(&canvas, &event);
+                };
+                const auto click = [&](QPointF point) {
+                    mouse(canvas, QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton);
+                    mouse(canvas, QEvent::MouseButtonRelease, point, Qt::LeftButton, Qt::NoButton);
+                };
+                mouse(canvas, QEvent::MouseButtonPress, {200, 180}, Qt::LeftButton, Qt::LeftButton);
+                if (tool == SnowCanvasTool::Text) {
+                    mouse(canvas, QEvent::MouseButtonRelease, {200, 180}, Qt::LeftButton,
+                          Qt::NoButton);
+                } else {
+                    const QPointF end(400, tool == SnowCanvasTool::SpeechBubble ||
+                                                   tool == SnowCanvasTool::Shape
+                                               ? 260
+                                               : 180);
+                    mouse(canvas, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+                    mouse(canvas, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+                }
+                if (tool == SnowCanvasTool::Arrow)
+                    require(canvas.editSelectedArrowText(), "begin selected arrow label");
+                else if (tool == SnowCanvasTool::Shape)
+                    click({300, 284});
+                else if (tool == SnowCanvasTool::Distance)
+                    click({290, 180});
+                require(canvas.hasActiveTextEditing(), "fixture begins text editing");
+                if (reopen || tool == SnowCanvasTool::Text) {
+                    if (tool != SnowCanvasTool::Distance)
+                        key(Qt::Key_A, Qt::NoModifier, QStringLiteral("original"));
+                    key(Qt::Key_Return, Qt::ControlModifier);
+                    require(!canvas.hasActiveTextEditing(), "keyboard commit closes the editor");
+                    require(tool == SnowCanvasTool::Shape ||
+                                runtime.selectedElementIds().size() == 1,
+                            "keyboard commit retains the selected fixture");
+                    if (useSelectTool)
+                        require(canvas.setCanvasTool(SnowCanvasTool::Select),
+                                "reopen existing labels with the select tool");
+                    const auto text = textRecords(runtime).at(0).toObject();
+                    if (tool == SnowCanvasTool::SerialNumber || tool == SnowCanvasTool::Shape) {
+                        const auto id = text.value(QStringLiteral("id")).toObject();
+                        SnowCanvasRuntimeEditor editor(runtime);
+                        require(editor.select(
+                                    static_cast<quint32>(id.value(QStringLiteral("index")).toInt()),
+                                    static_cast<quint32>(
+                                        id.value(QStringLiteral("generation")).toInt())),
+                                "select bound text before reopening its editor");
+                    }
+                    const auto center = text.value(QStringLiteral("center")).toObject();
+                    QPointF point = canvas.canvasToViewTransform().map(
+                        QPointF(center.value(QStringLiteral("x")).toDouble(),
+                                center.value(QStringLiteral("y")).toDouble()));
+                    if (tool == SnowCanvasTool::Distance) {
+                        click(point - QPointF(10, 0));
+                    } else if (tool == SnowCanvasTool::Arrow ||
+                               tool == SnowCanvasTool::SpeechBubble) {
+                        mouse(canvas, QEvent::MouseButtonDblClick, point, Qt::LeftButton,
+                              Qt::LeftButton);
+                        mouse(canvas, QEvent::MouseButtonRelease, point, Qt::LeftButton,
+                              Qt::NoButton);
+                    } else {
+                        click(point);
+                    }
+                }
+                if (!canvas.hasActiveTextEditing() || runtime.selectedElementIds().size() != 1) {
+                    std::cerr << "fixture: tool=" << static_cast<int>(tool) << ", reopen=" << reopen
+                              << ", empty=" << empty
+                              << ", editing=" << canvas.hasActiveTextEditing()
+                              << ", selected=" << runtime.selectedElementIds().size() << '\n';
+                }
+                require(canvas.hasActiveTextEditing() && runtime.selectedElementIds().size() == 1,
+                        "outside click fixture is selected and editing");
+                key(Qt::Key_A, Qt::ControlModifier);
+                key(Qt::Key_Backspace);
+                const QString content = tool == SnowCanvasTool::Distance ? QStringLiteral("25")
+                                                                         : QStringLiteral("edited");
+                if (!empty)
+                    key(Qt::Key_A, Qt::NoModifier, content);
+                click({700, 500});
+                if (canvas.hasActiveTextEditing() || !runtime.selectedElementIds().isEmpty()) {
+                    std::cerr << "outside click: tool=" << static_cast<int>(tool)
+                              << ", reopen=" << reopen << ", empty=" << empty << '\n';
+                }
+                require(!canvas.hasActiveTextEditing() && runtime.selectedElementIds().isEmpty(),
+                        "one outside click must finish editing and deselect");
+                require(second.canvasStyleToolbarState().selectedElementCount == 0 &&
+                            canvas.canvasStyleToolbarState().selectedElementCount == 0 &&
+                            canvas.canvasTool() == (useSelectTool ? SnowCanvasTool::Select : tool),
+                        "dismissal updates every viewport and preserves the active tool");
+                const auto texts = textRecords(runtime);
+                require(empty ? texts.isEmpty()
+                              : texts.size() == 1 && texts.at(0)
+                                                         .toObject()
+                                                         .value(QStringLiteral("text"))
+                                                         .toString()
+                                                         .startsWith(content),
+                        "outside click commits content or removes the empty label");
+                const auto committed = runtime.documentCheckpoint();
+                require(canvas.undo() && canvas.redo() && runtime.documentCheckpoint() == committed,
+                        "dismissing selection adds no document mutation after the text commit");
+            }
+        }
+    }
 }
 
 void selectionAndRuntimeReplacement() {
@@ -342,6 +491,11 @@ void speechBubbleSelectionPolicy() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--text-dismiss-only"))) {
+        outsideClickCommitsAndDeselects();
+        return 0;
+    }
+    outsideClickCommitsAndDeselects();
     selectionAndRuntimeReplacement();
     automaticSelectionExclusions();
     selectedShapeHasWorkingHandles();

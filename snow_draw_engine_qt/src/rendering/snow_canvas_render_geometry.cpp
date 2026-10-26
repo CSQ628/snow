@@ -653,13 +653,17 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
                 snowCanvasNormalizeArrowRatio(item.arrow_ratio) * projection.cameraZoom;
             bounds = bounds.adjusted(-maxHeadSize, -maxHeadSize, maxHeadSize, maxHeadSize);
         }
-        const double extra =
-            item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT &&
-                    item.is_free_draw == 0 && item.stroke.a != 0 && item.stroke_width > 0
-                ? snow_stroke_rendering_outset(item.stroke_rendering_style,
-                                               std::numeric_limits<double>::max()) *
-                      projection.cameraZoom
-                : 0.0;
+        double extra = item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT &&
+                               item.is_free_draw == 0 &&
+                               (item.stroke.a != 0 || (item.arrow_outline_color.a != 0 &&
+                                                       item.arrow_outline_width > 0)) &&
+                               item.stroke_width > 0
+                           ? snow_stroke_rendering_outset(item.stroke_rendering_style,
+                                                          std::numeric_limits<double>::max()) *
+                                 projection.cameraZoom
+                           : 0.0;
+        if (item.is_free_draw == 0 && item.arrow_outline_color.a != 0 && item.stroke_width > 0)
+            extra += qMax(0.0, item.arrow_outline_width) * projection.cameraZoom / 2.0;
         return bounds.adjusted(-extra, -extra, extra, extra);
     }
     default:
@@ -669,7 +673,8 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
 
 QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowCanvasSceneItem& item) {
     if (item.kind == SNOW_SCENE_DISPLAY_ITEM_ARROW && item.is_free_draw == 0 &&
-        item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT) {
+        (item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT ||
+         (item.arrow_outline_width > 0 && item.arrow_outline_color.a != 0))) {
         if (const auto* cache = snow_canvas_stroke_rendering::cachedGeometry(item)) {
             const QRectF canvasBounds = snow_canvas_stroke_rendering::localToCanvas(
                                             item.center_x, item.center_y, item.rotation)
@@ -705,6 +710,10 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowCanvasScen
                              projection.cameraZoom;
         pathBounds.adjust(-extra, -extra, extra, extra);
     }
+    if (item.is_free_draw == 0 && item.arrow_outline_color.a != 0 && item.stroke_width > 0) {
+        const double outline = qMax(0.0, item.arrow_outline_width) * projection.cameraZoom / 2.0;
+        pathBounds.adjust(-outline, -outline, outline, outline);
+    }
     if (pressure && !item.pressurePathChunks().empty()) {
         const QRectF ink = item.pressureCanvasBounds();
         pathBounds = pathBounds.united(QRectF(canvasToView(projection, ink.left(), ink.top()),
@@ -716,7 +725,8 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowCanvasScen
 
 QRectF overlayItemBounds(const OverlayDisplayInfo& displayInfo, const SnowCanvasOverlayItem& item) {
     if (item.kind == SNOW_OVERLAY_DISPLAY_ITEM_FOCUS_CONNECTION &&
-        item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT) {
+        (item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT ||
+         (item.arrow_outline_width > 0 && item.arrow_outline_color.a != 0))) {
         if (const auto* cache = snow_canvas_stroke_rendering::cachedGeometry(item)) {
             const QRectF canvasBounds = snow_canvas_stroke_rendering::localToCanvas(
                                             item.center_x, item.center_y, item.rotation)
@@ -769,12 +779,13 @@ QRectF overlayItemBounds(const OverlayDisplayInfo& displayInfo,
                 snowCanvasNormalizeArrowRatio(item.arrow_ratio) * projection.cameraZoom;
             bounds = bounds.adjusted(-maxHeadSize, -maxHeadSize, maxHeadSize, maxHeadSize);
         }
-        const double extra =
-            item.stroke_rendering_style == SNOW_STROKE_RENDERING_STYLE_ARCHITECT
-                ? 0.0
-                : snow_stroke_rendering_outset(item.stroke_rendering_style,
-                                               std::numeric_limits<double>::max()) *
-                      projection.cameraZoom;
+        double extra = item.stroke_rendering_style == SNOW_STROKE_RENDERING_STYLE_ARCHITECT
+                           ? 0.0
+                           : snow_stroke_rendering_outset(item.stroke_rendering_style,
+                                                          std::numeric_limits<double>::max()) *
+                                 projection.cameraZoom;
+        if (item.arrow_outline_color.a != 0 && item.stroke_width > 0)
+            extra += qMax(0.0, item.arrow_outline_width) * projection.cameraZoom / 2.0;
         return bounds.adjusted(-extra, -extra, extra, extra);
     }
     case SNOW_OVERLAY_DISPLAY_ITEM_PEN_FILTER_CONTOUR: {

@@ -1207,6 +1207,32 @@ void completeToolStyleContract() {
                 (styles.properties & SnowCanvasShapeStylePropertyArrowRatio) &&
                 (styles.properties & SnowCanvasShapeStylePropertyArrowShaftType),
             "arrow shaft and ratio must reach the command sink with exact property flags");
+    require(apply(QStringLiteral("arrow"),
+                  {{QStringLiteral("arrow_outline_width"), 8.0},
+                   {QStringLiteral("arrow_outline_color"), QJsonArray{255, 204, 0, 128}}}) &&
+                styles.state.shapeStyle.arrowOutlineWidth == 8.0 &&
+                styles.state.shapeStyle.arrowOutlineColor == QColor(255, 204, 0, 128) &&
+                styles.properties == (SnowCanvasShapeStylePropertyArrowOutlineColor |
+                                      SnowCanvasShapeStylePropertyArrowOutlineWidth),
+            "MCP arrow outlines preserve alpha and exact property flags");
+    const auto outlineState = styles.state;
+    const auto outlineProperties = styles.properties;
+    const int outlineUpdates = styles.updates;
+    for (const auto& invalidColor :
+         {QJsonValue(QStringLiteral("#80ffcc00")), QJsonValue(QJsonArray{255, 204, 0}),
+          QJsonValue(QJsonArray{255, 204, 0, 128, 255}), QJsonValue(QJsonArray{-1, 204, 0, 128}),
+          QJsonValue(QJsonArray{256, 204, 0, 128}), QJsonValue(QJsonArray{255, 204, 0, 128.5}),
+          QJsonValue(QJsonArray{255, 204, 0, QStringLiteral("128")})}) {
+        require(!apply(QStringLiteral("arrow"),
+                       {{QStringLiteral("arrow_outline_width"), 4.0},
+                        {QStringLiteral("arrow_outline_color"), invalidColor}}) &&
+                    styles.state.shapeStyle == outlineState.shapeStyle &&
+                    styles.properties == outlineProperties && styles.updates == outlineUpdates,
+                "malformed MCP outline colors reject the entire patch before dispatch");
+    }
+    require(!apply(QStringLiteral("line"), {{QStringLiteral("arrow_outline_width"), 2.0}}) &&
+                !apply(QStringLiteral("arrow"), {{QStringLiteral("arrow_outline_width"), 73.0}}),
+            "MCP rejects outlines for other tools and invalid outline widths");
     require(apply(QStringLiteral("arrow"), {{QStringLiteral("arrow_ratio"), 0.5}}) &&
                 styles.state.shapeStyle.arrowRatio == 0.5 &&
                 styles.properties == SnowCanvasShapeStylePropertyArrowRatio,

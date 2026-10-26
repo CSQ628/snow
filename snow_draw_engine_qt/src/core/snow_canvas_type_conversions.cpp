@@ -528,6 +528,8 @@ SnowCanvasShapeStyle toCanvasShapeStyle(const SnowShapeStyle& style) {
             ? SnowCanvasBrushMode::PressureSensitive
             : SnowCanvasBrushMode::Regular,
         toCanvasStrokeRenderingStyle(style.stroke_rendering_style),
+        toQColor(style.arrow_outline_color),
+        style.arrow_outline_width,
     };
 }
 
@@ -545,6 +547,10 @@ SnowShapeStyle toEngineShapeStyle(const SnowCanvasShapeStyle& style) {
     engineStyle.arrow_type = toEngineArrowType(style.arrowType);
     engineStyle.arrow_shaft_type = static_cast<SnowArrowShaftType>(style.arrowShaftType);
     engineStyle.arrow_ratio = snowCanvasNormalizeArrowRatio(style.arrowRatio);
+    engineStyle.arrow_outline_color = toEngineColor(style.arrowOutlineColor);
+    engineStyle.arrow_outline_width = std::isfinite(style.arrowOutlineWidth)
+                                          ? std::clamp(style.arrowOutlineWidth, 0.0, 72.0)
+                                          : 0.0;
     engineStyle.opacity = style.opacity;
     engineStyle.highlight_shape = style.highlightShape == SnowCanvasHighlightShape::Ellipse
                                       ? SNOW_HIGHLIGHT_SHAPE_ELLIPSE

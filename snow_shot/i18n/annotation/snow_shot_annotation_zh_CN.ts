@@ -128,6 +128,22 @@
             <translation>箭头</translation>
         </message>
         <message>
+            <source>Arrow outline color %1</source>
+            <translation>箭头描边颜色 %1</translation>
+        </message>
+        <message>
+            <source>Arrow outline color transparent</source>
+            <translation>箭头描边颜色透明</translation>
+        </message>
+        <message>
+            <source>Arrow outline width</source>
+            <translation>箭头描边宽度</translation>
+        </message>
+        <message>
+            <source>Arrow outline width %1px</source>
+            <translation>箭头描边宽度 %1px</translation>
+        </message>
+        <message>
             <source>Arrow ratio (scroll to adjust)</source>
             <translation>箭头比例（滚动调整）</translation>
         </message>
