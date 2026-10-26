@@ -12958,6 +12958,21 @@ foreach(_automatic_selection_pair IN ITEMS
     endif()
 endforeach()
 
+if(SNOW_APPS_BUILD_BENCHMARKS)
+    add_executable(snow-shot-image-content-detection-performance-benchmark
+        tests/image_content_detection_performance_benchmark.cpp)
+    target_link_libraries(snow-shot-image-content-detection-performance-benchmark PRIVATE
+        snow_shot_image_codec)
+    if(WIN32 AND NOT SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC)
+        _snow_shot_stage_image_runtime(snow-shot-image-content-detection-performance-benchmark)
+    endif()
+    add_test(NAME snow-shot-image-content-detection-performance-benchmark
+        COMMAND snow-shot-image-content-detection-performance-benchmark)
+    set_tests_properties(snow-shot-image-content-detection-performance-benchmark PROPERTIES
+        LABELS benchmark TIMEOUT 120
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
 if(SNOW_SHOT_BUILD_TESTS)
     include(SnowShotTestResources)
 endif()
