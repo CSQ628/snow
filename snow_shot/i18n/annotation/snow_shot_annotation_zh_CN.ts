@@ -1456,6 +1456,10 @@
             <translation>文本翻译</translation>
         </message>
         <message>
+            <source>Thought Bubble</source>
+            <translation>思考气泡</translation>
+        </message>
+        <message>
             <source>Translation settings</source>
             <translation>翻译设置</translation>
         </message>

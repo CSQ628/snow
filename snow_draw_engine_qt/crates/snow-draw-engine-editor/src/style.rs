@@ -3,11 +3,11 @@ use snow_draw_engine_core::{
     arrow::{ArrowType, Arrowhead, StrokeStyle},
 };
 use snow_draw_engine_document::{
-    ArrowData, FillStyle, FilterData, MIN_SERIAL_NUMBER_FONT_SIZE, MIN_TEXT_FONT_SIZE,
-    RectangleData, SerialNumberData, SpotlightConfig, TextData, Transaction, WatermarkConfig,
-    normalize_font_family, resolve_serial_number_data_diameter, serial_number_rect_proxy,
-    serial_number_with_label_style, text_with_auto_resize_layout, text_with_wrapped_layout,
-    validate_serial_number, validate_text,
+    ArrowData, FillStyle, FilterData, HighlightShape, MIN_SERIAL_NUMBER_FONT_SIZE,
+    MIN_TEXT_FONT_SIZE, RectangleData, SerialNumberData, SpotlightConfig, TextData, Transaction,
+    WatermarkConfig, normalize_font_family, resolve_serial_number_data_diameter,
+    serial_number_rect_proxy, serial_number_with_label_style, text_with_auto_resize_layout,
+    text_with_wrapped_layout, validate_serial_number, validate_text,
 };
 use snow_draw_engine_interaction::Modifiers;
 use snow_draw_engine_model::DocumentModel;
@@ -482,14 +482,18 @@ pub(crate) fn normalized_line_arrow_type(arrow_type: ArrowType) -> ArrowType {
     }
 }
 fn validate_shape_style_patch(patch: ShapeStylePatch) -> Result<(), ErrorCode> {
-    if patch.has_unsupported_properties() {
+    if patch.has_unsupported_properties()
+        || (patch.kind != ShapeKind::SpeechBubble
+            && patch.style.shape == HighlightShape::ThoughtBubble)
+    {
         return Err(ErrorCode::InvalidArgument);
     }
 
     match patch.kind {
-        ShapeKind::Rectangle | ShapeKind::SpeechBubble => {
-            validate_rectangle_shape_style(patch.style.rectangle_shape_style())
+        ShapeKind::SpeechBubble => {
+            validate_speech_bubble_style(patch.style.rectangle_shape_style())
         }
+        ShapeKind::Rectangle => validate_rectangle_shape_style(patch.style.rectangle_shape_style()),
         ShapeKind::Arrow => validate_arrow_style(patch.style.arrow_style()),
         ShapeKind::Line
         | ShapeKind::FreeDraw
@@ -500,7 +504,9 @@ fn validate_shape_style_patch(patch: ShapeStylePatch) -> Result<(), ErrorCode> {
 }
 
 pub(crate) fn validate_line_style(style: ShapeStyle) -> Result<(), ErrorCode> {
-    if !style.stroke_width.is_finite()
+    if style.shape == HighlightShape::ThoughtBubble
+        || style.highlight_shape == HighlightShape::ThoughtBubble
+        || !style.stroke_width.is_finite()
         || style.stroke_width < 0.0
         || !style.opacity.is_finite()
         || !(0.0..=1.0).contains(&style.opacity)
@@ -511,6 +517,13 @@ pub(crate) fn validate_line_style(style: ShapeStyle) -> Result<(), ErrorCode> {
 }
 
 pub(crate) fn validate_rectangle_shape_style(style: RectangleShapeStyle) -> Result<(), ErrorCode> {
+    if style.shape == HighlightShape::ThoughtBubble {
+        return Err(ErrorCode::InvalidArgument);
+    }
+    validate_speech_bubble_style(style)
+}
+
+pub(crate) fn validate_speech_bubble_style(style: RectangleShapeStyle) -> Result<(), ErrorCode> {
     let scalar_fields = [
         style.stroke_width,
         style.corner_radii.top_left,

@@ -133,6 +133,9 @@ pub(crate) fn scene_item_from_rect(id: ElementId, rect: RectangleData) -> SceneD
         corner_radii: rect.corner_radii,
         opacity: rect.opacity,
         shape: match rect.highlight_shape {
+            snow_draw_engine_document::HighlightShape::ThoughtBubble => {
+                unreachable!("thought bubbles use dedicated path geometry")
+            }
             snow_draw_engine_document::HighlightShape::Rectangle => {
                 snow_draw_engine_display::DisplayRectangleShape::Rectangle
             }
@@ -1688,10 +1691,13 @@ pub(crate) fn scene_item_from_speech_bubble(
     id: ElementId,
     bubble: &snow_draw_engine_document::SpeechBubbleData,
 ) -> SceneDisplayItem {
-    let SceneDisplayItem::Rectangle(body) = scene_item_from_rect(
-        id,
-        snow_draw_engine_document::speech_bubble_body_proxy(bubble),
-    ) else {
+    let mut proxy = snow_draw_engine_document::speech_bubble_body_proxy(bubble);
+    // This rectangle carries placement and paint attributes only. The bubble
+    // contour below is authoritative, including its disconnected circle trails.
+    if proxy.highlight_shape == snow_draw_engine_document::HighlightShape::ThoughtBubble {
+        proxy.highlight_shape = snow_draw_engine_document::HighlightShape::Rectangle;
+    }
+    let SceneDisplayItem::Rectangle(body) = scene_item_from_rect(id, proxy) else {
         unreachable!()
     };
     let geometry = Arc::new(snow_draw_engine_document::speech_bubble_path_geometry(

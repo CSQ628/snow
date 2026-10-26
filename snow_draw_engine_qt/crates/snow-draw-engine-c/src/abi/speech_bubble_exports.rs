@@ -162,6 +162,9 @@ pub unsafe extern "C" fn snow_speech_bubble_resolve_text_layout(
                 SnowRectangleShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
                 SnowRectangleShape::Ellipse => snow_draw_engine::HighlightShape::Ellipse,
                 SnowRectangleShape::Diamond => snow_draw_engine::HighlightShape::Diamond,
+                SnowRectangleShape::ThoughtBubble => {
+                    snow_draw_engine::HighlightShape::ThoughtBubble
+                }
             },
             center: Point::new(info.center_x, info.center_y),
             width: info.bubble_body_width,
@@ -436,6 +439,7 @@ mod tests {
             SnowRectangleShape::Rectangle,
             SnowRectangleShape::Ellipse,
             SnowRectangleShape::Diamond,
+            SnowRectangleShape::ThoughtBubble,
         ] {
             let info = SnowTextElementInfo {
                 bubble_body_width: 20.0,
@@ -498,6 +502,7 @@ mod tests {
     fn speech_bubble_abi_values_preserve_existing_tools_and_shapes() {
         assert_eq!(SnowActiveTool::SpeechBubble as u32, 20);
         assert_eq!(SnowShapeKind::SpeechBubble as u32, 7);
+        assert_eq!(SnowRectangleShape::ThoughtBubble as u32, 3);
         assert_eq!(SnowStyleToolbarSource::DefaultSpeechBubble as u32, 32);
         assert_eq!(SnowStyleToolbarSource::SelectedSpeechBubble as u32, 33);
         assert_eq!(SnowSceneDisplayItemKind::SpeechBubble as u32, 10);

@@ -217,6 +217,7 @@ enum class SnowCanvasRectangleShape {
     Rectangle,
     Ellipse,
     Diamond,
+    ThoughtBubble = 3,
 };
 
 enum class SnowCanvasMagnifierConnectionType {

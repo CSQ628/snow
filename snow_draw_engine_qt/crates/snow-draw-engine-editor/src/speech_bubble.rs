@@ -72,6 +72,21 @@ pub fn speech_bubble_text_constraints(
                 height * factor - 2.0 * padding,
             )
         }
+        HighlightShape::ThoughtBubble => {
+            // The cloud stays outside an ellipse with 86% of the body radii.
+            // A centered 60% rectangle fits that ellipse even at extreme aspect ratios.
+            let factor = 0.6;
+            let width = body.width.max((g + 2.0 * padding) / factor);
+            let height = body
+                .height
+                .max((text_height.max(1.0) + 2.0 * padding) / factor);
+            (
+                width,
+                height,
+                width * factor - 2.0 * padding,
+                height * factor - 2.0 * padding,
+            )
+        }
         HighlightShape::Rectangle => {
             let radius = [
                 body.corner_radii.top_left,
@@ -1217,6 +1232,7 @@ mod tests {
             HighlightShape::Rectangle,
             HighlightShape::Ellipse,
             HighlightShape::Diamond,
+            HighlightShape::ThoughtBubble,
         ] {
             for width in [1.0, 20.0, 100.0, 900.0] {
                 for height in [1.0, 30.0, 1000.0] {

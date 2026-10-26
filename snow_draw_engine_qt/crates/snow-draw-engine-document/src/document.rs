@@ -739,6 +739,7 @@ pub enum HighlightShape {
     Rectangle,
     Ellipse,
     Diamond,
+    ThoughtBubble,
 }
 
 impl RectangleData {
@@ -776,7 +777,11 @@ impl RectangleData {
     }
 
     pub fn supports_corner_radius(&self) -> bool {
-        !self.is_highlight() && self.highlight_shape != HighlightShape::Ellipse
+        !self.is_highlight()
+            && !matches!(
+                self.highlight_shape,
+                HighlightShape::Ellipse | HighlightShape::ThoughtBubble
+            )
     }
 
     pub fn element_kind(&self) -> ElementKind {

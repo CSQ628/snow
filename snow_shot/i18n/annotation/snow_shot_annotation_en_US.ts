@@ -1456,6 +1456,10 @@
             <translation>Text translation</translation>
         </message>
         <message>
+            <source>Thought Bubble</source>
+            <translation>Thought Bubble</translation>
+        </message>
+        <message>
             <source>Translation settings</source>
             <translation>Translation settings</translation>
         </message>

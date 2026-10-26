@@ -1,6 +1,7 @@
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "snow_canvas_ffi_handles.h"
+#include "snow_canvas_display_item.h"
 #include "snow_canvas_commands.h"
 #include "snow_canvas_runtime_access.h"
 #include "snow_canvas_text.h"
@@ -16,6 +17,8 @@
 #include <QKeyEvent>
 #include <QLineF>
 #include <QMouseEvent>
+#include <QPainter>
+#include <vector>
 
 #include <cmath>
 #include <cstdlib>
@@ -108,9 +111,10 @@ void create(SnowCanvasWidget& canvas, SnowCanvasRuntime& runtime,
     mouse(canvas, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
     require(records(runtime, QStringLiteral("SpeechBubble")).size() == 1, "drag creates bubble");
     const QString expectedShape =
-        shape == SnowCanvasRectangleShape::Ellipse   ? QStringLiteral("Ellipse")
-        : shape == SnowCanvasRectangleShape::Diamond ? QStringLiteral("Diamond")
-                                                     : QStringLiteral("Rectangle");
+        shape == SnowCanvasRectangleShape::ThoughtBubble ? QStringLiteral("ThoughtBubble")
+        : shape == SnowCanvasRectangleShape::Ellipse     ? QStringLiteral("Ellipse")
+        : shape == SnowCanvasRectangleShape::Diamond     ? QStringLiteral("Diamond")
+                                                         : QStringLiteral("Rectangle");
     require(payload(runtime, QStringLiteral("SpeechBubble"))
                     .value(QStringLiteral("body"))
                     .toObject()
@@ -140,8 +144,9 @@ void open(SnowCanvasWidget& canvas, const SnowCanvasRuntime& runtime) {
 }
 
 void textAlignmentDefaultsToCenter() {
-    for (auto shape : {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
-                       SnowCanvasRectangleShape::Diamond}) {
+    for (auto shape :
+         {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
+          SnowCanvasRectangleShape::Diamond, SnowCanvasRectangleShape::ThoughtBubble}) {
         SnowCanvasRuntime runtime;
         SnowCanvasWidget canvas(runtime);
         prepare(canvas);
@@ -182,8 +187,9 @@ void textAlignmentDefaultsToCenter() {
 }
 
 void wrappingGrowthAndCancellation() {
-    for (auto shape : {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
-                       SnowCanvasRectangleShape::Diamond}) {
+    for (auto shape :
+         {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
+          SnowCanvasRectangleShape::Diamond, SnowCanvasRectangleShape::ThoughtBubble}) {
         SnowCanvasRuntime runtime;
         SnowCanvasWidget canvas(runtime);
         prepare(canvas);
@@ -250,8 +256,9 @@ QPointF tailTipCanvas(const QJsonObject& bubble) {
 }
 
 void bodyMovementAndRotationKeepTailTipFixed() {
-    for (auto shape : {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
-                       SnowCanvasRectangleShape::Diamond}) {
+    for (auto shape :
+         {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
+          SnowCanvasRectangleShape::Diamond, SnowCanvasRectangleShape::ThoughtBubble}) {
         SnowCanvasRuntime runtime;
         SnowCanvasWidget canvas(runtime);
         prepare(canvas);
@@ -414,8 +421,9 @@ void tailGesturesAndLifecycle() {
 }
 
 void patternedAndTransparentTailExports() {
-    for (auto shape : {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
-                       SnowCanvasRectangleShape::Diamond}) {
+    for (auto shape :
+         {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
+          SnowCanvasRectangleShape::Diamond, SnowCanvasRectangleShape::ThoughtBubble}) {
         for (auto fillStyle : {SnowCanvasFillStyle::Border, SnowCanvasFillStyle::Solid,
                                SnowCanvasFillStyle::Line, SnowCanvasFillStyle::CrossLine}) {
             SnowCanvasRuntime runtime;
@@ -440,8 +448,10 @@ void patternedAndTransparentTailExports() {
             auto image = runtime.renderToImage(QRectF(-400, -350, 800, 700), QSize(800, 700), {});
             require(!image.isNull(), "export styled bubble with tail");
             bool tailPainted = false;
-            for (int y = 377; y <= 415; ++y) {
-                for (int x = 290; x <= 330; ++x) {
+            const QPoint sample =
+                shape == SnowCanvasRectangleShape::ThoughtBubble ? tip.toPoint() : QPoint(310, 395);
+            for (int y = sample.y() - 20; y <= sample.y() + 20; ++y) {
+                for (int x = sample.x() - 20; x <= sample.x() + 20; ++x) {
                     tailPainted |= image.pixelColor(x, y).alpha() != 0;
                 }
             }
@@ -460,8 +470,10 @@ void patternedAndTransparentTailExports() {
             image = runtime.renderToImage(QRectF(-400, -350, 800, 700), QSize(800, 700), {});
             require(image.pixelColor(280, 255).alpha() == 0,
                     "transparent body fill leaves the center unpainted");
-            mouse(canvas, QEvent::MouseButtonDblClick, QPointF(310, 395), Qt::LeftButton,
-                  Qt::LeftButton);
+            require(canvas.setCanvasTool(SnowCanvasTool::Select), "switch to selection");
+            mouse(canvas, QEvent::MouseButtonPress, {720, 650}, Qt::LeftButton, Qt::LeftButton);
+            mouse(canvas, QEvent::MouseButtonRelease, {720, 650}, Qt::LeftButton, Qt::NoButton);
+            mouse(canvas, QEvent::MouseButtonDblClick, sample, Qt::LeftButton, Qt::LeftButton);
             require(canvas.hasActiveTextEditing(), "tail-only double-click opens bound editing");
             require(canvas.cancelActiveTextEditing(), "cancel tail text edit");
         }
@@ -599,8 +611,9 @@ void imeAndRotatedGrowthAndExport() {
 }
 
 void manualResizeKeepsTextMinimums() {
-    for (auto shape : {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
-                       SnowCanvasRectangleShape::Diamond}) {
+    for (auto shape :
+         {SnowCanvasRectangleShape::Rectangle, SnowCanvasRectangleShape::Ellipse,
+          SnowCanvasRectangleShape::Diamond, SnowCanvasRectangleShape::ThoughtBubble}) {
         SnowCanvasRuntime runtime;
         SnowCanvasWidget canvas(runtime);
         prepare(canvas);
@@ -798,6 +811,158 @@ void shapeStyleReflowCommitsWithItsUndoStep() {
                 payload(runtime, QStringLiteral("Text")) == formattedText,
             "one redo restores formatted growth");
 }
+void disconnectedContoursAcrossChunkBoundaries() {
+    for (int segments : {62, 63, 64}) {
+        for (bool curved : {false, true}) {
+            std::vector<SnowArrowPathCommand> commands;
+            QPainterPath expected;
+            expected.setFillRule(Qt::WindingFill);
+            for (int contour = 0; contour < 2; ++contour) {
+                const double cx = 40.0 + contour * 90.0;
+                for (int vertex = 0; vertex <= segments; ++vertex) {
+                    const double angle =
+                        vertex == segments ? 0.0 : 2.0 * 3.14159265358979323846 * vertex / segments;
+                    const QPointF point(cx + 20.0 * std::cos(angle), 40.0 + 20.0 * std::sin(angle));
+                    SnowArrowPathCommand command{};
+                    command.kind = vertex == 0 ? SNOW_ARROW_PATH_COMMAND_MOVE_TO
+                                               : SNOW_ARROW_PATH_COMMAND_LINE_TO;
+                    command.point = {point.x(), point.y()};
+                    if (vertex != 0 && curved) {
+                        const double step = 2.0 * 3.14159265358979323846 / segments;
+                        const double previous = (vertex - 1) * step;
+                        const double tangent = 20.0 * 4.0 / 3.0 * std::tan(step / 4.0);
+                        command.kind = SNOW_ARROW_PATH_COMMAND_CUBIC_TO;
+                        command.control1 = {
+                            cx + 20.0 * std::cos(previous) - tangent * std::sin(previous),
+                            40.0 + 20.0 * std::sin(previous) + tangent * std::cos(previous)};
+                        command.control2 = {point.x() + tangent * std::sin(angle),
+                                            point.y() - tangent * std::cos(angle)};
+                        expected.cubicTo(command.control1.x, command.control1.y, command.control2.x,
+                                         command.control2.y, point.x(), point.y());
+                    } else if (vertex == 0) {
+                        expected.moveTo(point);
+                    } else {
+                        expected.lineTo(point);
+                    }
+                    commands.push_back(command);
+                }
+                expected.closeSubpath();
+            }
+            std::vector<SnowPathChunk> chunks;
+            for (std::size_t offset = 0; offset < commands.size(); offset += 64) {
+                SnowPathChunk chunk{};
+                chunk.stable_id = chunks.size() + 1;
+                chunk.command_start = static_cast<std::uint32_t>(offset);
+                chunk.command_offset = static_cast<std::uint32_t>(offset);
+                chunk.command_count =
+                    static_cast<std::uint32_t>(std::min<std::size_t>(64, commands.size() - offset));
+                if (offset != 0) {
+                    chunk.start_x = commands[offset - 1].point.x;
+                    chunk.start_y = commands[offset - 1].point.y;
+                }
+                chunk.max_x = 160;
+                chunk.max_y = 80;
+                chunks.push_back(chunk);
+            }
+            SnowPathChunkRange range{};
+            range.insert_chunk_count = static_cast<std::uint32_t>(chunks.size());
+            SnowCanvasSceneItem item;
+            item.kind = SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE;
+            require(item.applyPathGeometryPatch(
+                        0, 1, &range, 1, chunks.data(), static_cast<std::uint32_t>(chunks.size()),
+                        commands.data(), static_cast<std::uint32_t>(commands.size()), true, true),
+                    "accept closed contours spanning 64-command chunks");
+            const auto paint = [](const QPainterPath& path, double zoom = 1.0,
+                                  double rotation = 0.0) {
+                QImage image(qCeil(170 * zoom), qCeil(80 * zoom),
+                             QImage::Format_ARGB32_Premultiplied);
+                image.fill(Qt::transparent);
+                QPainter painter(&image);
+                painter.scale(zoom, zoom);
+                painter.translate(85, 40);
+                painter.rotate(rotation);
+                painter.translate(-85, -40);
+                painter.setRenderHint(QPainter::Antialiasing);
+                painter.setPen(QPen(Qt::black, 3));
+                painter.setBrush(QColor(80, 120, 240, 128));
+                painter.drawPath(path);
+                return image;
+            };
+            const auto actual = paint(item.aggregateClosedPath());
+            require(actual == paint(expected),
+                    "chunk assembly preserves closed contours without connecting lines or seams");
+            require(actual.pixelColor(85, 40).alpha() == 0 &&
+                        actual.pixelColor(40, 40).alpha() == 128 &&
+                        actual.pixelColor(130, 40).alpha() == 128,
+                    "separate circles retain their fill and transparent gap");
+            for (double zoom : {0.5, 1.25, 2.0})
+                for (double rotation : {0.0, 21.0})
+                    require(
+                        paint(item.aggregateClosedPath(), zoom, rotation) ==
+                            paint(expected, zoom, rotation),
+                        "disconnected lines and cubics retain their joins under zoom and rotation");
+        }
+    }
+}
+
+void thoughtBubbleStyleSwitchPreservesTrailsAndText() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    prepare(canvas);
+    create(canvas, runtime, SnowCanvasRectangleShape::ThoughtBubble, {160, 140}, {440, 320});
+    key(canvas, Qt::Key_A, Qt::NoModifier, QStringLiteral("Thinking..."));
+    commit(canvas);
+    SnowCanvasShapeStyle style;
+    style.shape = SnowCanvasRectangleShape::ThoughtBubble;
+    style.fill = QColor(230, 244, 255);
+    style.stroke = QColor(22, 119, 255);
+    style.strokeWidth = 3;
+    style.cornerRadii = {7, 8, 9, 10};
+    require(canvas.setCanvasShapeStylePatch(style,
+                                            SnowCanvasShapeStylePropertyFillColor |
+                                                SnowCanvasShapeStylePropertyStrokeColor |
+                                                SnowCanvasShapeStylePropertyStrokeWidth |
+                                                SnowCanvasShapeStylePropertyCornerRadius,
+                                            SnowCanvasShapeKind::SpeechBubble),
+            "set thought bubble appearance");
+    const auto handle = addHandle(canvas, runtime);
+    mouse(canvas, QEvent::MouseButtonPress, handle, Qt::LeftButton, Qt::LeftButton);
+    mouse(canvas, QEvent::MouseButtonRelease, handle + QPointF(-90, 130), Qt::LeftButton,
+          Qt::NoButton);
+    const auto original = payload(runtime, QStringLiteral("SpeechBubble"));
+    const auto text = payload(runtime, QStringLiteral("Text"));
+    if (const auto path = qEnvironmentVariable("SNOW_THOUGHT_BUBBLE_PREVIEW"); !path.isEmpty()) {
+        require(runtime.renderToImage(QRectF(-400, -350, 800, 700), QSize(800, 700), {}).save(path),
+                "save thought bubble visual inspection export");
+    }
+    style.shape = SnowCanvasRectangleShape::Diamond;
+    require(canvas.setCanvasShapeStylePatch(style, SnowCanvasShapeStylePropertyShape,
+                                            SnowCanvasShapeKind::SpeechBubble),
+            "switch thought bubble to diamond");
+    const auto diamond = payload(runtime, QStringLiteral("SpeechBubble"));
+    require(diamond.value(QStringLiteral("tails")) == original.value(QStringLiteral("tails")),
+            "switching type preserves tail identities, endpoints and widths");
+    style.shape = SnowCanvasRectangleShape::ThoughtBubble;
+    require(canvas.setCanvasShapeStylePatch(style, SnowCanvasShapeStylePropertyShape,
+                                            SnowCanvasShapeKind::SpeechBubble),
+            "switch back to thought bubble");
+    const auto restored = payload(runtime, QStringLiteral("SpeechBubble"));
+    require(restored.value(QStringLiteral("tails")) == original.value(QStringLiteral("tails")) &&
+                restored.value(QStringLiteral("body"))
+                        .toObject()
+                        .value(QStringLiteral("corner_radii")) ==
+                    original.value(QStringLiteral("body"))
+                        .toObject()
+                        .value(QStringLiteral("corner_radii")) &&
+                payload(runtime, QStringLiteral("Text")).value(QStringLiteral("text")) ==
+                    text.value(QStringLiteral("text")),
+            "switching back retains requested radii, trails and label");
+    require(canvas.undo() && payload(runtime, QStringLiteral("SpeechBubble")) == diamond,
+            "undo restores the previous bubble type and geometry");
+    require(canvas.redo() && payload(runtime, QStringLiteral("SpeechBubble")) == restored,
+            "redo restores the thought bubble");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -807,6 +972,8 @@ int main(int argc, char** argv) {
         patternedAndTransparentTailExports();
         return 0;
     }
+    disconnectedContoursAcrossChunkBoundaries();
+    thoughtBubbleStyleSwitchPreservesTrailsAndText();
     textAlignmentDefaultsToCenter();
     wrappingGrowthAndCancellation();
     tailGesturesAndLifecycle();

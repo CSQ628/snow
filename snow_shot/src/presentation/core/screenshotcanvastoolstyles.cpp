@@ -309,7 +309,8 @@ QJsonObject freeDrawValue(const SnowCanvasShapeStyle& style) {
     return value;
 }
 
-void readShapeValue(const QJsonObject& object, SnowCanvasShapeStyle* style) {
+void readShapeValue(const QJsonObject& object, SnowCanvasShapeStyle* style,
+                    bool speechBubble = false) {
     if (style == nullptr)
         return;
     QColor color;
@@ -341,7 +342,9 @@ void readShapeValue(const QJsonObject& object, SnowCanvasShapeStyle* style) {
     readDouble(object, QStringLiteral("opacity"), &style->opacity);
     readEnum(object, QStringLiteral("highlight_shape"),
              static_cast<int>(SnowCanvasHighlightShape::Ellipse), &style->highlightShape);
-    readEnum(object, QStringLiteral("shape"), static_cast<int>(SnowCanvasRectangleShape::Diamond),
+    readEnum(object, QStringLiteral("shape"),
+             static_cast<int>(speechBubble ? SnowCanvasRectangleShape::ThoughtBubble
+                                           : SnowCanvasRectangleShape::Diamond),
              &style->shape);
 }
 
@@ -522,7 +525,7 @@ SnowCanvasStyleDefaults screenshotCanvasToolStyleDefaults() {
         return defaults;
     const auto& configuration = storage.configuration();
     readShapeValue(configuration.value(kShapeKey).toObject(), &defaults.rectangle);
-    readShapeValue(configuration.value(kSpeechBubbleKey).toObject(), &defaults.speechBubble);
+    readShapeValue(configuration.value(kSpeechBubbleKey).toObject(), &defaults.speechBubble, true);
     readShapeValue(configuration.value(kArrowKey).toObject(), &defaults.arrow);
     readDistanceValue(configuration.value(kDistanceKey).toObject(), &defaults.distance);
     readAngleValue(configuration.value(kAngleKey).toObject(), &defaults.angle);

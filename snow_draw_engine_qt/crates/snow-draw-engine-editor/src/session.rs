@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use snow_draw_engine_core::{EngineConfig, ErrorCode, GridConfig, Point, SnapConfig};
-use snow_draw_engine_document::{ElementId, SerialNumberNumericType, TextLayoutSize};
+use snow_draw_engine_document::{
+    ElementId, HighlightShape, SerialNumberNumericType, TextLayoutSize,
+};
 use snow_draw_engine_interaction::InputEvent;
 use snow_draw_engine_model::DocumentModel;
 
@@ -1230,9 +1232,12 @@ mod borrowed_view_query_tests {
 }
 
 pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<(), ErrorCode> {
+    if defaults.spotlight_shape == HighlightShape::ThoughtBubble {
+        return Err(ErrorCode::InvalidArgument);
+    }
     crate::validate_magnifier_style(defaults.magnifier)?;
     super::style::validate_rectangle_shape_style(defaults.rectangle)?;
-    super::style::validate_rectangle_shape_style(defaults.speech_bubble)?;
+    super::style::validate_speech_bubble_style(defaults.speech_bubble)?;
     super::style::validate_rectangle_shape_style(RectangleShapeStyle {
         corner_radii: defaults.spotlight_corner_radii,
         ..defaults.rectangle
@@ -1277,8 +1282,13 @@ pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<
 }
 
 fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Result<(), ErrorCode> {
+    if persisted.spotlight_shape == HighlightShape::ThoughtBubble
+        || persisted.rectangle.shape == HighlightShape::ThoughtBubble
+    {
+        return Err(ErrorCode::InvalidArgument);
+    }
     crate::validate_magnifier_style(persisted.magnifier)?;
-    super::style::validate_rectangle_shape_style(persisted.speech_bubble)?;
+    super::style::validate_speech_bubble_style(persisted.speech_bubble)?;
     crate::validate_distance_style(persisted.distance)?;
     crate::validate_angle_style(persisted.angle)?;
     fn finite_non_negative(value: f64) -> bool {
@@ -1295,7 +1305,9 @@ fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Resul
         .all(finite_non_negative)
     }
     fn valid_shape(style: super::ShapeStyle) -> bool {
-        finite_non_negative(style.stroke_width)
+        style.shape != HighlightShape::ThoughtBubble
+            && style.highlight_shape != HighlightShape::ThoughtBubble
+            && finite_non_negative(style.stroke_width)
             && style.opacity.is_finite()
             && (0.0..=1.0).contains(&style.opacity)
             && valid_corner_radii(style.corner_radii)

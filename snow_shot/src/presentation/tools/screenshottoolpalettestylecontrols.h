@@ -472,7 +472,8 @@ class ScreenshotToolPaletteStyleControls final {
     void updateWatermarkControls();
     ScreenshotToolPaletteShapeFamilyResult
     buildShapeSelector(QWidget* controls, const ScreenshotToolPaletteStyleFamilyHost& host,
-                       const ScreenshotToolPaletteButtonMetrics& metrics, bool spotlight);
+                       const ScreenshotToolPaletteButtonMetrics& metrics, bool spotlight,
+                       bool speechBubble = false);
     void updateSpotlightShapeControls();
     void setSpotlightShape(SnowCanvasRectangleShape shape);
     void buildCornerRadiusEditor(QWidget* controls, int radius,

@@ -28,7 +28,7 @@ void defaultsPersistIndependently() {
     require(initial.speechBubble == initial.rectangle,
             "Speech Bubble starts with the Shape appearance");
     auto changed = initial.speechBubble;
-    changed.shape = SnowCanvasRectangleShape::Diamond;
+    changed.shape = SnowCanvasRectangleShape::ThoughtBubble;
     changed.stroke = QColor(12, 34, 56);
     changed.strokeWidth = 4;
     changed.fill = QColor(240, 230, 220, 200);
@@ -169,6 +169,23 @@ void mcpRoutesShapeStylesExplicitly() {
                 accepted.fillStyle == SnowCanvasFillStyle::Line &&
                 accepted.cornerRadii == SnowCanvasCornerRadii{1, 2, 3, 4},
             "MCP style patches reach Speech Bubble defaults instead of Spotlight");
+    require(apply({{QStringLiteral("shape"), QStringLiteral("thought_bubble")}}) &&
+                editor.canvasStyleToolbarState().shapeStyle.shape ==
+                    SnowCanvasRectangleShape::ThoughtBubble,
+            "MCP accepts Thought Bubble for Speech Bubble");
+    const auto thought = editor.canvasStyleToolbarState().shapeStyle;
+    for (const QString& target :
+         {QStringLiteral("rectangle"), QStringLiteral("magnifier"), QStringLiteral("spotlight")}) {
+        require(!mcpStylePatch(
+                    editor, editor,
+                    {{QStringLiteral("target"), target},
+                     {QStringLiteral("style"),
+                      QJsonObject{{QStringLiteral("shape"), QStringLiteral("thought_bubble")}}}}) &&
+                    editor.canvasStyleToolbarState().shapeStyle == thought,
+                "Thought Bubble rejects unrelated targets without changing state");
+    }
+    require(apply({{QStringLiteral("shape"), QStringLiteral("ellipse")}}),
+            "restore the accepted ellipse appearance");
     for (const auto& invalid : {QJsonObject{{QStringLiteral("shape"), QStringLiteral("triangle")}},
                                 QJsonObject{{QStringLiteral("stroke_width"), -1}},
                                 QJsonObject{{QStringLiteral("font_size"), 42}}})

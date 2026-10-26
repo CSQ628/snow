@@ -336,6 +336,7 @@ snow_c_enum! {
         Rectangle = 0,
         Ellipse = 1,
         Diamond = 2,
+        ThoughtBubble = 3,
     }
 }
 
