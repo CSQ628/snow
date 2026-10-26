@@ -4,12 +4,14 @@
 #![doc = include_str!("../README.md")]
 
 pub mod behavior;
+pub mod button;
 pub mod config;
 pub mod icons;
 pub mod locale;
 pub mod root;
 pub mod theme;
 
+pub use button::Button;
 pub use config::{
     ConfigPatch, ConfigScope, Direction, ResolvedConfig, Size, ValidationStatus, Variant,
 };

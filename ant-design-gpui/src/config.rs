@@ -279,7 +279,7 @@ impl Global for ApplicationDefaults {}
 ///
 /// Views retain the subscription returned by [`Self::observe`]. Parent propagation
 /// is coalesced by GPUI's notification queue at the end of the current update.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ConfigScope(Entity<ConfigState>);
 
 impl ConfigScope {
@@ -364,6 +364,17 @@ impl ConfigScope {
 
     pub fn observe<T: 'static>(&self, cx: &mut Context<T>) -> Subscription {
         cx.observe(&self.0, |_, _, cx| cx.notify())
+    }
+
+    pub(crate) fn observe_in<T: 'static>(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut Context<T>,
+        mut on_notify: impl FnMut(&mut T, &mut gpui::Window, &mut Context<T>) + 'static,
+    ) -> Subscription {
+        cx.observe_in(&self.0, window, move |this, _, window, cx| {
+            on_notify(this, window, cx)
+        })
     }
 }
 

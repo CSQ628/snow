@@ -5,7 +5,7 @@ Adapted algorithms, translations and artwork retain the upstream MIT notices.
 
 ## Ant Design
 
-Theme derivation, token defaults and common translations are adapted from
+Theme derivation, token defaults, Button visual rules and common translations are adapted from
 Ant Design 6.6.7, commit `f8f5595ab5e891fff6a2a06c5b3b98af643d008e`:
 https://github.com/ant-design/ant-design
 
@@ -32,6 +32,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 The original license is also preserved in `fixtures/theme/licenses/ant-design.txt`.
+Independent Button browser style captures and their input provenance are under
+`fixtures/button/`; their generator executes the original MIT-licensed sources.
 
 ## Ant Design colors and fast-color
 

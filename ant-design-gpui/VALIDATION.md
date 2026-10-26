@@ -65,3 +65,70 @@ Active/cached scene leases are measured separately from CPU-LRU ownership.
 Identity fast paths reduced the measured 32-scope update from approximately
 42.92 µs in the initial implementation to 9.99 µs. No-op identity, obsolete-theme
 release and local-catalog reuse are also covered by deterministic tests.
+
+## Button component validation (2026-10-26)
+
+Validated on the same Windows x64 host and pinned Rust/GPUI versions above.
+
+- `cargo test --locked --offline --lib button::`: **43 passed**, 58 filtered out.
+  These include 28 offscreen interaction/layout tests, nine token tests, five
+  stroke geometry/cache tests and one independent browser comparison test.
+- The browser comparison checks **780 snapshots** from the original Ant Design
+  source: four themes, three interaction states and 65 controls per case. It
+  checks colors, borders, dimensions, padding, radii, font metrics, loading opacity
+  and shadows. See `fixtures/button/README.md` for provenance and regeneration.
+- Two focused font bridge tests and the existing focus-outline regression passed.
+  Windows skips Apple-only font aliases so Ant's Segoe UI family takes precedence.
+  Pill focus outlines clamp their radius to the actual painted dimensions.
+- The README examples compiled and passed. Normal library and native example
+  builds, `cargo fmt --check`, strict Clippy for the library/tests/Button example/
+  Button benchmark, and `git diff --check` passed.
+- Repeating the independent browser capture produced byte-identical fixtures,
+  SHA-256 `0bc7761289a8b195bf41af81b29b7a5884d00f2a07a12c3df3112329e13a6827`.
+
+The offscreen tests cover pointer/keyboard activation, held-key suppression,
+pointer exit and reentry, release outside, source-order traversal, disabled and
+busy semantics, retained/internal focus, subscribed cached consumers, delayed
+loading cancellation and unmount, loader entry/exit, interrupted transitions,
+RTL icon placement, Chinese label spacing, and reduced/disabled motion.
+Idle controls and static custom loaders schedule no continuous animation frames.
+
+`scripts/test-button-accessibility.ps1 -SkipBuild` passed twice on the final
+native gallery. It checks names/roles, icon-only labels, native focus and Tab,
+exactly-once Invoke/Enter/Space, disabled focus removal, loading suppression and
+recovery, configuration changes and normal shutdown. The interactive fixture
+explicitly activates and verifies its own foreground HWND before child focus;
+the top-level AccessKit provider does not expose a focus action itself.
+
+Native light and dark/compact/RTL screenshots were inspected against the original
+browser-generated reference. Primary's width matches at **117 physical pixels**
+at 150% scaling. Thin dashed borders match the measured **3-pixel dash / 2-pixel
+gap** pattern. Additional source measurements at 100%/150% and border widths
+1/2/3 verify device-pixel snapping and the thicker-stroke pattern. Rounded stroke
+geometry is cached independently of color and rebuilt when geometry or display
+scale changes. Screenshots and measurement JSON are under the ignored
+`build/ant-design-gpui/button-reference/` directory.
+
+macOS/Linux native rendering and accessibility remain to be validated on their
+respective platforms. No repository-wide or complete library test suite was run.
+
+### Button Release measurements
+
+Run with `scripts/run-button-perf.ps1` under the verified
+`windows-msvc-performance` preset and Cargo's optimized Release profile. The grid
+measurements redraw 100 retained controls through the offscreen layout/paint
+pipeline; they are CPU diagnostics, not GPU presentation latency. Every grid
+iteration also asserts that idle controls schedule zero animation frames.
+
+| Workload | Iterations | Mean time |
+| --- | ---: | ---: |
+| Style from cached component tokens | 200,000 | 21.0 ns |
+| Style including cached theme lookup | 200,000 | 43.5 ns |
+| Builder with label, primary type and icon | 200,000 | 70.0 ns |
+| Warm redraw of 100 buttons | 2,000 | 2.00 ms |
+| Warm redraw of 100 buttons with icons | 2,000 | 2.69 ms |
+| Warm redraw of 100 dashed buttons | 2,000 | 2.94 ms |
+
+These measurements vary with host load. The final raw output is in
+`build/ant-design-gpui/button-performance.txt`; no hardware-independent timing
+threshold is imposed by tests.

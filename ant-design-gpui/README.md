@@ -1,8 +1,8 @@
 # Ant Design GPUI
 
-An Apache-2.0 Rust foundation for Ant Design controls built with GPUI. Button will
-be the first public control. This crate provides themes, retained configuration,
-localization, all 829 pinned icons, focus, accessibility and motion infrastructure.
+Apache-2.0 Ant Design controls built with GPUI. The public Button component uses
+native layout, focus, accessibility and motion, with retained configuration,
+localization, complete themes and all 829 pinned icons.
 
 The reference is Ant Design **6.6.7**, revision
 `f8f5595ab5e891fff6a2a06c5b3b98af643d008e`. Windows native behavior is verified;
@@ -31,6 +31,83 @@ GPUI 0.2.2 is pinned to `mg-chao/gpui` revision
 Defaults are disabled and `gpu-extensions` enabled. Consumers select their own
 backend; native platform dependencies are development-only here. Keep these
 projects' GPUI pins synchronized.
+
+## Button
+
+```rust
+use ant_design_gpui::{Button, ConfigScope};
+use ant_design_gpui::icons::IconName;
+
+# fn save_button(scope: ConfigScope) -> impl gpui::IntoElement {
+Button::new("save")
+    .scope(scope)
+    .label("Save")
+    .primary()
+    .icon(IconName::SaveOutlined)
+    .on_click(|activation, window, cx| {
+        // All activation paths share this callback.
+    })
+# }
+```
+
+Build Buttons during a view's render with stable, locally unique IDs. Internal
+state retains focus and pending input across rerenders and is released on unmount.
+Pass the window's `ConfigScope` with `.scope(...)`; omitting it uses application
+defaults. Each Button observes its own scope, including inside cached parent views.
+`.on_click(cx.listener(...))` works with a handler taking `&behavior::Activation`.
+
+`ButtonType::{Default, Primary, Dashed, Text, Link}` supplies familiar appearances.
+For independent choices, use `ButtonColor::{Default, Primary, Danger, Preset(...)}`
+and `ButtonVariant::{Outlined, Dashed, Solid, Filled, Text, Link}`. Explicit color
+and variant override their type defaults; `.variant(Solid)` alone implies primary.
+`.danger(true)` selects danger unless color was explicit. The provider's input
+`Variant` is independent of the Button variant.
+
+Sizes inherit the provider's `Size` unless `.size(...)` overrides it. Shapes are
+`Default`, `Square`, `Circle` and `Round`; upstream's square alias retains the
+standard corner radius. `.block(true)` fills available width, and `.ghost(true)`
+renders bordered appearances over their parent's background.
+
+`.icon(...)` and `.icon_placement(Start | End)` follow logical RTL order. Empty
+labels produce square icon-only controls; give these `.accessibility_label(...)`.
+Plain two-character Chinese labels receive Ant Design's automatic space unless
+an icon is present, the variant is Text/Link, or `.auto_insert_space(false)` is set.
+Accessible names keep the original label. Applications localize labels and explicit
+accessible descriptions through their own catalogs.
+
+`.disabled(false)` overrides a disabled provider. Disabled controls leave the tab
+order; `.loading(true)` blocks activation but retains focus. `.loading_delay(...)`
+keeps the control ready until the delay expires, cancels when cleared or unmounted,
+and does not restart on unrelated rerenders. `.loading_icon(...)` overrides the
+default rotating loader. Static custom loaders do not schedule continuous frames.
+Color transitions, loader expansion/collapse and click waves respect scoped and
+application reduced motion. Idle controls schedule no animation frames.
+
+Pointer, Enter, Space and accessible invocation share availability guards. For
+programmatic focus, pass a retained `behavior::focus_handle(cx)` using
+`.focus_handle(&handle)`; externally supplied handles keep their tab settings.
+`.href(...)` exposes native link semantics and opens through GPUI, with Enter
+activation. `.automation_id(...)` supplies a stable native accessibility identifier.
+
+Customize component tokens with `ComponentThemes::set::<ButtonTheme>(ButtonTokenPatch
+{ ... })`. Component-local global overrides and algorithms affect the complete
+control, including fonts, focus and motion. GPUI `Styled` refinements customize the
+decorative surface without replacing its stable focus/activation owner.
+
+```powershell
+cd ant-design-gpui
+cargo run --locked --offline --example button
+# Optional: --dark --compact --rtl --reduced-motion --capture C:/temp/button.png
+cargo test --locked --offline --lib button::
+./scripts/run-button-perf.ps1
+```
+
+The gallery contains interactive loading, theme, density, RTL, availability and
+motion controls, all six variants and all 13 preset colors. The performance script
+requires the repository's configured `windows-msvc-performance` Release build.
+Independent [browser fixtures](fixtures/button/README.md) check 780 original
+Ant Design computed styles across four themes and three interaction states.
+`scripts/test-button-accessibility.ps1` provides opt-in Windows UI Automation checks.
 
 ## Retained configuration
 
@@ -76,7 +153,7 @@ custom child algorithm, the child keeps its last good snapshot and exposes
 without notifying. Weak observers avoid cycles; children release obsolete themes.
 
 Snapshots cache fonts and icon palettes. `availability(local_disabled, busy)`,
-`focus_ring()` and `motion_policy(cx)` give future controls consistent defaults.
+`focus_ring()` and `motion_policy(cx)` give controls consistent defaults.
 
 ## Complete native tokens
 
@@ -92,7 +169,7 @@ implementations must be pure; custom steps compare by `Arc` identity. The HSV
 palette algorithm and rounding follow upstream. Typed preset/tone indexing
 unifies legacy spellings such as `blue-1` and `blue1`.
 
-Future controls implement `ComponentTheme` with associated token/patch types,
+Controls implement `ComponentTheme` with associated token/patch types,
 default derivation, merging and application. Register through
 `ComponentThemes::set` or `set_theme`; resolve with
 `ResolvedTheme::component::<Marker>()`. Results are cached per type/snapshot.

@@ -661,11 +661,19 @@ fn theme_color_font_and_palette_bridges_are_deterministic() {
         "Test CJK",
     ])
     .to_gpui_font();
-    assert_eq!(fonts.family.as_ref(), ".SystemUIFont");
-    assert_eq!(
-        fonts.fallbacks.unwrap().fallback_list(),
-        ["Segoe UI", "Test CJK"]
-    );
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        assert_eq!(fonts.family.as_ref(), ".SystemUIFont");
+        assert_eq!(
+            fonts.fallbacks.unwrap().fallback_list(),
+            ["Segoe UI", "Test CJK"]
+        );
+    } else {
+        assert_eq!(fonts.family.as_ref(), "Segoe UI");
+        assert_eq!(
+            fonts.fallbacks.unwrap().fallback_list(),
+            [".SystemUIFont", "Test CJK"]
+        );
+    }
     assert_eq!(
         FontStack::default().to_gpui_font().family.as_ref(),
         ".SystemUIFont"
@@ -690,5 +698,33 @@ fn theme_color_font_and_palette_bridges_are_deterministic() {
             .get(PresetColor::Blue)
             .tone(11)
             .is_none()
+    );
+}
+
+#[test]
+fn font_stack_preserves_supported_platform_family_precedence() {
+    // Browser CSS ignores Apple-only family aliases on other platforms. Turning
+    // them into a native system font there masks Ant's first supported family.
+    let default = ThemeConfig::default()
+        .resolve()
+        .tokens
+        .font_family
+        .to_gpui_font();
+    assert_eq!(
+        default.family.as_ref(),
+        if cfg!(any(target_os = "macos", target_os = "ios")) {
+            ".SystemUIFont"
+        } else {
+            "Segoe UI"
+        }
+    );
+    let generic = FontStack::new(["system-ui", "Segoe UI"]).to_gpui_font();
+    assert_eq!(generic.family.as_ref(), ".SystemUIFont");
+    assert_eq!(generic.fallbacks.unwrap().fallback_list(), ["Segoe UI"]);
+    let explicit = FontStack::new(["Test UI", "Test UI", "sans-serif"]).to_gpui_font();
+    assert_eq!(explicit.family.as_ref(), "Test UI");
+    assert_eq!(
+        explicit.fallbacks.unwrap().fallback_list(),
+        [".SystemUIFont"]
     );
 }

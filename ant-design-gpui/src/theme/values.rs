@@ -247,24 +247,30 @@ impl FontStack {
         &self.0
     }
 
-    /// Resolve CSS generic aliases without probing the operating system font database.
+    /// Resolve platform-supported CSS aliases without probing the font database.
     /// Cache this descriptor with the resolved configuration rather than per render.
     pub fn to_gpui_font(&self) -> gpui::Font {
         let native_family = |family: &str| {
-            match family {
-                "-apple-system" | "BlinkMacSystemFont" | "system-ui" | "sans-serif" => {
-                    ".SystemUIFont"
+            let family = match family {
+                "-apple-system" | "BlinkMacSystemFont" => {
+                    // These CSS names are Apple-specific. Mapping them to another
+                    // platform's system font masks later supported families,
+                    // including Ant's Segoe UI choice on Windows.
+                    cfg!(any(target_os = "macos", target_os = "ios")).then_some(".SystemUIFont")
                 }
-                "monospace" if cfg!(target_os = "windows") => "Consolas",
-                "monospace" if cfg!(target_os = "macos") => "SFMono-Regular",
-                other => other,
-            }
-            .to_owned()
+                "system-ui" | "sans-serif" => Some(".SystemUIFont"),
+                "monospace" if cfg!(target_os = "windows") => Some("Consolas"),
+                "monospace" if cfg!(target_os = "macos") => Some("SFMono-Regular"),
+                other => Some(other),
+            };
+            family.map(str::to_owned)
         };
         let mut families = Vec::new();
         for family in self.families() {
-            let family = native_family(family);
-            if !family.is_empty() && !families.contains(&family) {
+            if let Some(family) = native_family(family)
+                && !family.is_empty()
+                && !families.contains(&family)
+            {
                 families.push(family);
             }
         }

@@ -179,7 +179,12 @@ impl<E: Element> Element for FocusRingElement<E> {
         {
             let offset = finite_nonnegative(self.ring.offset);
             let extent = offset + self.ring.width;
-            let radius = finite_nonnegative(self.ring.radius) + extent;
+            // CSS resolves oversized radii against the painted box. GPUI's
+            // quad shader accepts raw radii, so clamp before expanding an outline
+            // (notably pill buttons and controls narrower than their height).
+            let radius = finite_nonnegative(self.ring.radius)
+                .min(bounds.size.width.min(bounds.size.height).max(px(0.)) / 2.)
+                + extent;
             window.paint_quad(
                 gpui::outline(bounds.dilate(extent), self.ring.color, Default::default())
                     .border_widths(self.ring.width)
