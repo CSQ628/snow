@@ -12845,6 +12845,20 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-region-shadow-renderer-tests PROPERTIES
         LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 90
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    if(MSVC AND WIN32)
+        add_executable(snow-shot-shadow-startup-tests
+            tests/screenshot_shadow_startup_tests.cpp
+            ../test-support/windows_early_tls.cpp
+            src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
+        target_include_directories(snow-shot-shadow-startup-tests PRIVATE include
+            "${CMAKE_CURRENT_SOURCE_DIR}/../test-support")
+        target_link_libraries(snow-shot-shadow-startup-tests PRIVATE
+            Qt6::Widgets ant_design_qt snow_draw_engine_qt_canvas)
+        add_test(NAME snow-shot-shadow-startup-tests COMMAND snow-shot-shadow-startup-tests)
+        set_tests_properties(snow-shot-shadow-startup-tests PROPERTIES
+            LABELS "unit;windows" TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
     add_executable(snow-shot-selection-background-tests
         tests/screenshot_selection_background_tests.cpp
         src/presentation/overlay/screenshotselectionshadowrenderer.cpp)
