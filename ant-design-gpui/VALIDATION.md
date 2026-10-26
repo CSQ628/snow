@@ -482,3 +482,46 @@ are diagnostic; they do not measure GPU presentation latency.
 
 Only Radio's related tests were run. Native macOS/Linux rendering and accessibility
 remain unverified on those platforms.
+
+## Component motion audit (2026-10-26)
+
+Compared the seven implemented components with `E:/ant-design` at revision
+`f8f5595ab5e891fff6a2a06c5b3b98af643d008e`, including each component's style
+generators, `_util/wave/{style.ts,WaveEffect.tsx,useWave.ts,util.ts}` and the shared
+icon spin rule in `components/style/index.tsx`.
+
+| Component | Animation rules checked |
+| --- | --- |
+| Button | Mid-duration colors with `motionEaseInOut`; slow loader insertion/removal; one-second linear spinner; regular wave. |
+| Checkbox | Slow box colors with CSS `ease`; delayed mid-duration tick entrance with `motionEaseOutBack`; fast tick exit with separate opacity easing; immediate wrapper label; quick wave when checking. |
+| Radio | Mid-duration ring colors with CSS `ease`; slow dot size/opacity/color with `motionEaseInOutCirc`; immediate button border; quick circle wave and regular button wave. |
+| Switch | Mid-duration track colors with CSS `ease`; handle and content movement with CSS `ease-in-out`; one-second spinner; regular wave. |
+| Segmented | Mid-duration colors with CSS `ease`; slow thumb movement with `motionEaseInOut`; continuous interrupted selection. |
+| Tag / CheckableTag | Mid-duration colors with CSS `ease`; regular wave for clickable ordinary tags; immediate component removal. |
+| Divider | Static styling; no animation or frame loop. |
+
+Fixed Radio's incorrect short button wave and checked-only wave gate. All five
+wave consumers now share timing, color selection and retained wave lifetimes:
+quick waves use `motionDurationSlow` / `motionEaseInOut`; regular waves expand to
+6 px over 400 ms and fade from 0.2 opacity over two seconds with `motionEaseOutCirc`.
+Opaque white and transparent wave colors are skipped. Color is captured per click,
+multiple clicks retain independent fading waves, and unchecking Checkbox suppresses
+only the new wave. Disabling motion cancels all waves permanently.
+
+Also corrected Button's interpolation to premultiplied sRGB so transparent fades
+preserve hue, and removed Checkbox's unintended wrapper-label color animation.
+
+Validation used deterministic clocks and offscreen native scenes, including
+painted wave spread/opacity, overlapping clicks, controlled-owner refusal,
+custom colors/timing, cancellation, interruption, loaders and idle scheduling.
+The focused animation test selection passed **57 tests**; strict library/test
+Clippy, rustfmt on changed files and `git diff --check` passed. No complete crate
+or repository suite was run. This audit covers component-owned motion; custom
+animations supplied by application content or third-party demo wrappers are
+outside this comparison. Native side-by-side video and macOS/Linux verification
+were not performed.
+
+```powershell
+cargo test --locked --offline --lib -- wave transition loading loader radio_dot checkbox_tick thumb motion animat color_interpolation checkbox_disabled_label radio_disabled_label radio_button_border button_transparent_color
+cargo clippy --locked --offline --lib --tests -- -D warnings
+```

@@ -770,3 +770,138 @@ fn radio_wave_uses_visible_background_when_checked_hover_border_is_transparent()
     assert_eq!(wave_color(&style, hover), primary);
     assert_eq!(wave_color(&StyleRefinement::default(), primary), primary);
 }
+
+#[test]
+fn radio_wave_duration_matches_the_reference_target() {
+    for button in [false, true] {
+        let mut f = Fixture::with_motion(true, |c| {
+            c.button = button;
+            c.default_checked = true;
+        });
+        f.click_at(20.);
+        f.frame(350);
+        let pending = f.frame(16);
+        assert_eq!(
+            pending > 0,
+            button,
+            "only button radios have a two-second wave"
+        );
+        f.frame(1700);
+        assert_eq!(f.frame(16), 0, "completed waves stop requesting frames");
+    }
+}
+
+#[test]
+fn radio_wave_does_not_depend_on_a_controlled_owner_accepting_selection() {
+    for button in [false, true] {
+        let mut f = Fixture::with_motion(true, |c| {
+            c.button = button;
+            c.checked = Some(false);
+        });
+        f.key("tab");
+        f.key("space");
+        assert_eq!(f.changes().len(), 1);
+        assert!(!f.checked());
+        f.frame(30);
+        f.cx.update_window(f.window.into(), |_, window, _| {
+            assert!(
+                window.rendered_scene().quads.iter().any(|quad| {
+                    quad.border_color.a > 0.
+                        && quad.border_color.a < 0.2
+                        && quad.background.as_solid().is_none_or(|color| color.a == 0.)
+                }),
+                "an enabled radio paints its wave even when selection is refused"
+            );
+        })
+        .unwrap();
+    }
+}
+
+fn painted_waves(f: &mut Fixture) -> Vec<(f32, Hsla)> {
+    f.cx.update_window(f.window.into(), |_, window, _| {
+        let scale = window.scale_factor();
+        let mut waves: Vec<_> = window
+            .rendered_scene()
+            .quads
+            .iter()
+            .filter(|quad| {
+                quad.border_color.a > 0.
+                    && quad.border_color.a < 0.2
+                    && quad.background.as_solid().is_none_or(|color| color.a == 0.)
+            })
+            .map(|quad| (quad.border_widths.top.0 / scale, quad.border_color))
+            .collect();
+        // GPUI splits a border-only quad into strips with separate clip masks.
+        waves.dedup();
+        waves
+    })
+    .unwrap()
+}
+
+#[test]
+fn radio_wave_paints_reference_spread_opacity_and_captures_color_per_click() {
+    let purple = crate::theme::Color::rgb(0x722ed1).to_hsla();
+    let orange = crate::theme::Color::rgb(0xfa8c16).to_hsla();
+    for button in [false, true] {
+        let refinement = |color| {
+            StyleRefinement::default()
+                .border_color(crate::theme::Color::WHITE)
+                .bg(color)
+        };
+        let mut f = Fixture::with_motion(true, |c| {
+            c.button = button;
+            c.default_checked = true;
+            if button {
+                c.style = refinement(purple);
+            } else {
+                c.icon_style = Some(refinement(purple));
+            }
+        });
+        f.click_at(20.);
+        f.frame(if button { 400 } else { 150 });
+        let waves = painted_waves(&mut f);
+        assert_eq!(waves.len(), 1);
+        let (spread, opacity) = if button {
+            (6., 0.042_833_667)
+        } else {
+            (3.101_25, 0.096_625)
+        };
+        let scale =
+            f.cx.update_window(f.window.into(), |_, window, _| window.scale_factor())
+                .unwrap();
+        let snapped_spread = (spread * scale).round().max(1.) / scale;
+        assert!((waves[0].0 - snapped_spread).abs() < 0.001);
+        assert!((waves[0].1.a - opacity).abs() < 0.000_01);
+        assert_eq!(
+            waves[0].1.h, purple.h,
+            "white border falls through to background"
+        );
+        f.edit(|c| {
+            if button {
+                c.style = refinement(orange);
+            } else {
+                c.icon_style = Some(refinement(orange));
+            }
+        });
+        assert_eq!(painted_waves(&mut f)[0].1.h, purple.h);
+        f.click_at(20.);
+        f.frame(50);
+        let waves = painted_waves(&mut f);
+        assert_eq!(
+            waves.len(),
+            2,
+            "a repeated click does not remove the first wave"
+        );
+        assert!(waves.iter().any(|(_, color)| color.h == purple.h));
+        assert!(waves.iter().any(|(_, color)| color.h == orange.h));
+        f.cx.update(|cx| cx.set_reduce_motion(true));
+        f.draw();
+        assert!(painted_waves(&mut f).is_empty());
+        f.cx.update(|cx| cx.set_reduce_motion(false));
+        f.draw();
+        assert!(
+            painted_waves(&mut f).is_empty(),
+            "cancelled waves stay cancelled"
+        );
+    }
+}

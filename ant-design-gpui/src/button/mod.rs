@@ -31,7 +31,7 @@ use crate::{
     ConfigScope, Direction, Size,
     behavior::{
         Accessibility, Activation, ActivationGuard, FocusRing, MotionPolicy, ScalarTransition,
-        focus_handle,
+        WaveMotion, WaveState, focus_handle, wave_color,
     },
     icons::{IconName, IconPalette, IconRef, IconRenderOptions, IconRenderer},
     theme::{Color, CubicBezier, LineType},
@@ -353,7 +353,7 @@ struct ButtonState {
     keyboard_pressed: bool,
     visual: VisualTransition,
     loader: Option<ScalarTransition>,
-    wave_started: Option<Duration>,
+    wave: WaveState,
     clock: Box<dyn Fn(&App) -> Duration>,
     frame_pending: bool,
     dashed_border: DashedBorderCache,
@@ -387,7 +387,7 @@ impl ButtonState {
             keyboard_pressed: false,
             visual: VisualTransition::default(),
             loader: None,
-            wave_started: None,
+            wave: WaveState::default(),
             // Use the executor's clock for deterministic transitions without a
             // dependency on the scheduler's otherwise opaque Instant type.
             clock: Box::new(move |cx| cx.background_executor().now().duration_since(epoch)),
@@ -439,7 +439,7 @@ impl ButtonState {
         if !availability.can_activate() {
             self.pointer_armed = false;
             self.keyboard_pressed = false;
-            self.wave_started = None;
+            self.wave.clear();
         }
     }
 
@@ -550,7 +550,7 @@ impl RenderOnce for Button {
         });
         let inserted_loader = !has_explicit_icon && !self.label.is_empty();
         let custom_loader = self.loading_icon.is_some();
-        let (current, loader_progress, wave_progress, spin_phase) =
+        let (current, loader_progress, has_active_wave, spin_phase) =
             state.update(cx, |state, cx| {
                 let now = (state.clock)(cx);
                 let (current, color_animating) = state.visual.resolve(
@@ -568,18 +568,17 @@ impl RenderOnce for Button {
                 let loader = loader.sample(now);
                 let show_loader =
                     loading || (inserted_loader && !custom_loader && loader.value > 0.);
-                let wave = state.wave_started.and_then(|started| {
-                    let progress = now.saturating_sub(started).as_secs_f64() / 2.;
-                    (self.wave && self.href.is_none() && motion.allows_motion() && progress < 1.)
-                        .then_some(progress)
-                });
-                if wave.is_none() {
-                    state.wave_started = None;
-                }
+                let wave = state.wave.sample(
+                    now,
+                    WaveMotion::Regular,
+                    global,
+                    motion,
+                    self.wave && self.href.is_none(),
+                );
                 let loader_animating = !loader.finished && inserted_loader && !custom_loader;
                 if color_animating
                     || loader_animating
-                    || wave.is_some()
+                    || wave
                     || (show_loader && spin_loader && motion.allows_motion())
                 {
                     state.request_frame(window, cx);
@@ -765,6 +764,7 @@ impl RenderOnce for Button {
         }
         .to_pixels(window.rem_size());
         let opacity = effective.opacity.unwrap_or(1.);
+        let wave_color = wave_color(effective, global.color_primary.to_hsla());
         // The fitted path covers uniform borders. GPUI handles deliberately
         // asymmetric refinements using the same geometry as its own surface.
         let dashed = effective.border_style == Some(gpui::BorderStyle::Dashed)
@@ -917,47 +917,38 @@ impl RenderOnce for Button {
                 ),
             );
         }
-        if let Some(progress) = wave_progress {
-            let color = wave_color(
-                self.style.border_color.unwrap_or(current.border.to_hsla()),
-                self.style
-                    .background
-                    .as_ref()
-                    .and_then(gpui::Fill::color)
-                    .and_then(|background| background.as_solid())
-                    .unwrap_or(current.background.to_hsla()),
-                global.color_primary.to_hsla(),
-            );
-            let curve = global.motion_ease_out_circ;
-            let fade = crate::behavior::evaluate_cubic_bezier(curve, progress);
-            let spread =
-                6. * crate::behavior::evaluate_cubic_bezier(curve, (progress * 5.).min(1.)) as f32;
-            let color = color.opacity(0.2 * (1. - fade as f32));
-            element = element.child(
-                overlay().child(
-                    canvas(
-                        |_, _, _| (),
-                        move |bounds, (), window, _| {
-                            if color.a > 0.001 && spread > 0. {
-                                window.paint_quad(
-                                    gpui::outline(
-                                        bounds.dilate(px(spread)),
-                                        color,
-                                        Default::default(),
-                                    )
-                                    .border_widths(px(spread))
-                                    .corner_radii(
-                                        radii
-                                            .clamp_radii_for_quad_size(bounds.size)
-                                            .map(|radius| *radius + px(spread)),
-                                    ),
-                                );
-                            }
-                        },
-                    )
-                    .size_full(),
-                ),
-            );
+        if has_active_wave {
+            for (wave, wave_color) in
+                state.update(cx, |state, _| state.wave.paint_samples(wave_color))
+            {
+                let spread = wave.spread;
+                let color = wave_color.opacity(wave.opacity);
+                element = element.child(
+                    overlay().child(
+                        canvas(
+                            |_, _, _| (),
+                            move |bounds, (), window, _| {
+                                if color.a > 0.001 && spread > 0. {
+                                    window.paint_quad(
+                                        gpui::outline(
+                                            bounds.dilate(px(spread)),
+                                            color,
+                                            Default::default(),
+                                        )
+                                        .border_widths(px(spread))
+                                        .corner_radii(
+                                            radii
+                                                .clamp_radii_for_quad_size(bounds.size)
+                                                .map(|radius| *radius + px(spread)),
+                                        ),
+                                    );
+                                }
+                            },
+                        )
+                        .size_full(),
+                    ),
+                );
+            }
         }
         let callback = self.on_click;
         let href = self.href;
@@ -973,7 +964,7 @@ impl RenderOnce for Button {
             }
             if self.wave && href.is_none() && !variant.is_unbordered() && motion.allows_motion() {
                 let _ = weak.update(cx, |state, cx| {
-                    state.wave_started = Some((state.clock)(cx));
+                    state.wave.start((state.clock)(cx));
                     cx.notify();
                 });
             }
@@ -1039,11 +1030,28 @@ fn interpolate_style(
 ) -> ButtonStateStyle {
     fn color(from: Color, to: Color, progress: f64) -> Color {
         let progress = progress.clamp(0., 1.);
-        // Token color mixing quantizes alpha for palette derivation. Rendering
-        // retains continuous opacity, including subtle text-button backgrounds.
+        if progress == 0. || from == to {
+            return from;
+        }
+        if progress == 1. {
+            return to;
+        }
+        // CSS transitions use premultiplied sRGB. Palette mixing would darken
+        // a colored surface as it fades to transparent black.
+        let alpha = from.a + (to.a - from.a) * progress;
+        let channel = |a: u8, b: u8| {
+            if alpha > f64::EPSILON {
+                ((f64::from(a) * from.a * (1. - progress) + f64::from(b) * to.a * progress) / alpha)
+                    .round() as u8
+            } else {
+                0
+            }
+        };
         Color {
-            a: from.a + (to.a - from.a) * progress,
-            ..from.mix(to, progress)
+            r: channel(from.r, to.r),
+            g: channel(from.g, to.g),
+            b: channel(from.b, to.b),
+            a: alpha,
         }
     }
     let progress = f64::from(progress);
@@ -1052,13 +1060,6 @@ fn interpolate_style(
         border: color(from.border, to.border, progress),
         text: color(from.text, to.text, progress),
     }
-}
-
-fn wave_color(border: gpui::Hsla, background: gpui::Hsla, fallback: gpui::Hsla) -> gpui::Hsla {
-    [border, background]
-        .into_iter()
-        .find(|color| color.a > 0. && !(color.l == 1. && color.a == 1.))
-        .unwrap_or(fallback)
 }
 
 fn foreground_icon(reference: IconRef, options: IconRenderOptions, scale: f32) -> gpui::Canvas<()> {

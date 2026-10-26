@@ -25,7 +25,7 @@ use crate::{
     ConfigScope, Size,
     behavior::{
         Accessibility, Activation, ActivationGuard, Availability, FocusRing, MotionPolicy,
-        ScalarTransition, focus_handle,
+        ScalarTransition, WaveMotion, WaveState, focus_handle, wave_color,
     },
     icons::{IconName, IconPalette, IconRenderOptions, IconRenderer},
     theme::CubicBezier,
@@ -207,7 +207,7 @@ struct SwitchState {
     color_from: Option<Hsla>,
     color_target: Option<Hsla>,
     color_progress: ScalarTransition,
-    wave_started: Option<Duration>,
+    wave: WaveState,
     frame_pending: bool,
     clock: Box<dyn Fn(&App) -> Duration>,
     _config: Subscription,
@@ -243,7 +243,7 @@ impl SwitchState {
             color_from: None,
             color_target: None,
             color_progress: ScalarTransition::new(1., EASE),
-            wave_started: None,
+            wave: WaveState::default(),
             frame_pending: false,
             clock: Box::new(move |cx| cx.background_executor().now().duration_since(epoch)),
             _config: config,
@@ -291,7 +291,7 @@ impl SwitchState {
         if disabled {
             self.pointer_pressed = false;
             self.keyboard_pressed = false;
-            self.wave_started = None;
+            self.wave.clear();
         }
     }
 
@@ -384,7 +384,7 @@ impl RenderOnce for Switch {
             metrics.background
         };
         let duration = global.motion_duration_mid;
-        let (position, press, background, wave_progress, spin) = state.update(cx, |state, cx| {
+        let (position, press, background, has_active_wave, spin) = state.update(cx, |state, cx| {
             let now = (state.clock)(cx);
             state
                 .position
@@ -420,20 +420,14 @@ impl RenderOnce for Switch {
             }
             let position = state.position.sample(now);
             let press = state.press.sample(now);
-            let wave = state.wave_started.and_then(|start| {
-                let elapsed = now.saturating_sub(start);
-                if motion.allows_motion() && self.wave && elapsed < Duration::from_secs(2) {
-                    Some(elapsed.as_secs_f64() / 2.)
-                } else {
-                    state.wave_started = None;
-                    None
-                }
-            });
+            let wave = state
+                .wave
+                .sample(now, WaveMotion::Regular, global, motion, self.wave);
             let spinning = self.loading && motion.allows_motion();
             if !position.finished
                 || !press.finished
                 || !state.color_progress.sample(now).finished
-                || wave.is_some()
+                || wave
                 || spinning
             {
                 state.request_frame(window, cx);
@@ -663,46 +657,37 @@ impl RenderOnce for Switch {
             bottom_right: root.style().corner_radii.bottom_right.unwrap_or_default(),
         }
         .to_pixels(window.rem_size());
-        if let Some(progress) = wave_progress {
-            let spread = (crate::behavior::evaluate_cubic_bezier(
-                global.motion_ease_out_circ,
-                (progress * 5.).min(1.),
-            ) * 6.) as f32;
-            let fade =
-                crate::behavior::evaluate_cubic_bezier(global.motion_ease_out_circ, progress);
-            let color = root
-                .style()
-                .background
-                .as_ref()
-                .and_then(gpui::Fill::color)
-                .and_then(|c| c.as_solid())
-                .unwrap_or(background)
-                .opacity((0.2 * (1. - fade)) as f32);
-            root = root.child(
-                div().absolute().inset_0().child(
-                    canvas(
-                        |_, _, _| (),
-                        move |bounds, (), window, _| {
-                            if spread > 0. && color.a > 0.001 {
-                                window.paint_quad(
-                                    gpui::outline(
-                                        bounds.dilate(px(spread)),
-                                        color,
-                                        Default::default(),
-                                    )
-                                    .border_widths(px(spread))
-                                    .corner_radii(
-                                        radii
-                                            .clamp_radii_for_quad_size(bounds.size)
-                                            .map(|r| *r + px(spread)),
-                                    ),
-                                );
-                            }
-                        },
-                    )
-                    .size_full(),
-                ),
-            );
+        if has_active_wave {
+            let color = wave_color(root.style(), global.color_primary.to_hsla());
+            for (wave, color) in state.update(cx, |state, _| state.wave.paint_samples(color)) {
+                let spread = wave.spread;
+                let color = color.opacity(wave.opacity);
+                root = root.child(
+                    div().absolute().inset_0().child(
+                        canvas(
+                            |_, _, _| (),
+                            move |bounds, (), window, _| {
+                                if spread > 0. && color.a > 0.001 {
+                                    window.paint_quad(
+                                        gpui::outline(
+                                            bounds.dilate(px(spread)),
+                                            color,
+                                            Default::default(),
+                                        )
+                                        .border_widths(px(spread))
+                                        .corner_radii(
+                                            radii
+                                                .clamp_radii_for_quad_size(bounds.size)
+                                                .map(|r| *r + px(spread)),
+                                        ),
+                                    );
+                                }
+                            },
+                        )
+                        .size_full(),
+                    ),
+                );
+            }
         }
         let weak = state.downgrade();
         root = root.on_hover(move |hovered, _, cx| {
@@ -827,7 +812,7 @@ fn request_change(
                 state.checked = checked;
             }
             if wave && motion.allows_motion() {
-                state.wave_started = Some((state.clock)(cx));
+                state.wave.start((state.clock)(cx));
             }
             cx.notify();
             Some(SwitchChange {

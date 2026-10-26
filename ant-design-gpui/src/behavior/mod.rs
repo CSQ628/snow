@@ -7,6 +7,7 @@ mod accessibility;
 mod activation;
 mod focus;
 mod motion;
+mod wave;
 
 pub use accessibility::{Accessibility, SemanticElement};
 pub use activation::{Activation, ActivationGuard, Availability};
@@ -14,6 +15,7 @@ pub use focus::{
     FocusNext, FocusPrevious, FocusRing, FocusRingElement, focus_handle, initialize, traversal,
 };
 pub use motion::{MotionPolicy, ScalarTransition, TransitionSample, evaluate_cubic_bezier};
+pub(crate) use wave::{WaveMotion, WaveSample, WaveState, wave_color};
 
 #[cfg(test)]
 mod tests;

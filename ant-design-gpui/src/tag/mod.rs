@@ -24,7 +24,7 @@ use crate::{
     ConfigScope, Direction,
     behavior::{
         Accessibility, Activation, ActivationGuard, Availability, FocusRing, MotionPolicy,
-        ScalarTransition, focus_handle,
+        ScalarTransition, WaveMotion, WaveState, focus_handle, wave_color,
     },
     icons::{IconName, IconPalette, IconRef, IconRenderOptions, IconRenderer},
     theme::{Color, CubicBezier, LineType, PresetColor},
@@ -428,7 +428,7 @@ struct TagState {
     pressed: bool,
     close_hovered: bool,
     visual: VisualTransition,
-    wave_started: Option<Duration>,
+    wave: WaveState,
     frame_pending: bool,
     epoch: std::time::Instant,
     _config: Subscription,
@@ -481,7 +481,7 @@ impl TagState {
             pressed: false,
             close_hovered: false,
             visual: VisualTransition::default(),
-            wave_started: None,
+            wave: WaveState::default(),
             frame_pending: false,
             epoch: cx.background_executor().now(),
         }
@@ -526,7 +526,7 @@ impl TagState {
         }
         if disabled || self.closed || !self.actionable {
             self.pressed = false;
-            self.wave_started = None;
+            self.wave.clear();
         }
     }
     fn update(
@@ -639,17 +639,10 @@ impl RenderOnce for Tag {
                 state
                     .visual
                     .resolve(target, now, global.motion_duration_mid, motion);
-            let wave = state.wave_started.and_then(|started| {
-                let elapsed = now.saturating_sub(started);
-                // Tag uses Ant's regular wave: a 400ms expansion and 2s fade.
-                if motion.allows_motion() && self.wave && elapsed < Duration::from_secs(2) {
-                    Some(elapsed.as_secs_f64() / 2.)
-                } else {
-                    state.wave_started = None;
-                    None
-                }
-            });
-            if animating || wave.is_some() {
+            let wave = state
+                .wave
+                .sample(now, WaveMotion::Regular, global, motion, self.wave);
+            if animating || wave {
                 state.request_frame(window, cx);
             }
             (current, wave)
@@ -891,19 +884,9 @@ impl RenderOnce for Tag {
                 };
             }
         }
-        if let Some(progress) = wave {
+        if wave {
             let effective = root.style();
-            let border = effective.border_color.unwrap_or(current.border);
-            let background = effective
-                .background
-                .as_ref()
-                .and_then(gpui::Fill::color)
-                .and_then(|color| color.as_solid())
-                .unwrap_or(current.background);
-            let color = [border, background]
-                .into_iter()
-                .find(|color| color.a > 0. && !(color.l == 1. && color.a == 1.))
-                .unwrap_or_else(|| global.color_primary.to_hsla());
+            let color = wave_color(effective, global.color_primary.to_hsla());
             let borders = gpui::Edges {
                 top: effective.border_widths.top.unwrap_or_default(),
                 bottom: effective.border_widths.bottom.unwrap_or_default(),
@@ -911,38 +894,36 @@ impl RenderOnce for Tag {
                 right: effective.border_widths.right.unwrap_or_default(),
             }
             .to_pixels(window.rem_size());
-            let curve = global.motion_ease_out_circ;
-            root = root.child(
-                canvas(
-                    |_, _, _| (),
-                    move |bounds, (), window, _| {
-                        let fade = crate::behavior::evaluate_cubic_bezier(curve, progress) as f32;
-                        let spread = px(6.
-                            * crate::behavior::evaluate_cubic_bezier(curve, (progress * 5.).min(1.))
-                                as f32);
-                        if spread > px(0.) && fade < 1. {
-                            window.paint_quad(
-                                gpui::outline(
-                                    bounds.dilate(spread),
-                                    color.opacity(0.2 * (1. - fade)),
-                                    Default::default(),
-                                )
-                                .border_widths(spread)
-                                .corner_radii(
-                                    radii
-                                        .clamp_radii_for_quad_size(bounds.size)
-                                        .map(|radius| *radius + spread),
-                                ),
-                            );
-                        }
-                    },
-                )
-                .absolute()
-                .top(-borders.top)
-                .bottom(-borders.bottom)
-                .left(-borders.left)
-                .right(-borders.right),
-            );
+            for (wave, color) in state.update(cx, |state, _| state.wave.paint_samples(color)) {
+                root = root.child(
+                    canvas(
+                        |_, _, _| (),
+                        move |bounds, (), window, _| {
+                            let spread = px(wave.spread);
+                            if spread > px(0.) && wave.opacity > 0. {
+                                window.paint_quad(
+                                    gpui::outline(
+                                        bounds.dilate(spread),
+                                        color.opacity(wave.opacity),
+                                        Default::default(),
+                                    )
+                                    .border_widths(spread)
+                                    .corner_radii(
+                                        radii
+                                            .clamp_radii_for_quad_size(bounds.size)
+                                            .map(|radius| *radius + spread),
+                                    ),
+                                );
+                            }
+                        },
+                    )
+                    .absolute()
+                    .top(-borders.top)
+                    .bottom(-borders.bottom)
+                    .left(-borders.left)
+                    .right(-borders.right),
+                );
+            }
         }
         let wave = self.wave && self.on_click.is_some() && self.checked.is_none();
         let callback = self.on_click;
@@ -960,7 +941,7 @@ impl RenderOnce for Tag {
                 let change = weak
                     .update(cx, |state, cx| {
                         if wave && motion.allows_motion() {
-                            state.wave_started = Some(state.now(cx));
+                            state.wave.start(state.now(cx));
                         }
                         state.pressed = false;
                         cx.notify();

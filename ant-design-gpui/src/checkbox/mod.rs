@@ -29,7 +29,7 @@ use crate::{
     ConfigScope, Direction,
     behavior::{
         Accessibility, Activation, ActivationGuard, FocusRing, MotionPolicy, ScalarTransition,
-        focus_handle,
+        WaveMotion, WaveState, focus_handle, wave_color,
     },
     theme::{AliasTokens, CubicBezier},
 };
@@ -180,7 +180,12 @@ impl VisualTransition {
     fn sample(&self, now: Duration) -> CheckboxStateStyle {
         let target = self.target.expect("initialized checkbox visual state");
         let progress = self.progress.map_or(1., |p| p.sample(now).value) as f32;
-        interpolate_style(self.from.unwrap_or(target), target, progress)
+        CheckboxStateStyle {
+            // Only the box and its pseudo-element transition; the wrapper's
+            // label switches immediately when its inherited color changes.
+            label: target.label,
+            ..interpolate_style(self.from.unwrap_or(target), target, progress)
+        }
     }
 
     fn resolve(
@@ -192,7 +197,10 @@ impl VisualTransition {
         motion: MotionPolicy,
     ) -> (CheckboxStateStyle, bool) {
         if self.target != Some(target) {
-            self.from = Some(self.target.map_or(target, |_| self.sample(now)));
+            self.from = Some(CheckboxStateStyle {
+                label: target.label,
+                ..self.target.map_or(target, |_| self.sample(now))
+            });
             self.target = Some(target);
             let mut progress = ScalarTransition::new(0., curve);
             progress.retarget(
@@ -286,7 +294,7 @@ struct CheckboxState {
     hovered: bool,
     visual: VisualTransition,
     mark: Option<MarkTransition>,
-    wave_started: Option<Duration>,
+    wave: WaveState,
     frame_pending: bool,
     clock: Box<dyn Fn(&App) -> Duration>,
     checkmark: CheckmarkCache,
@@ -316,7 +324,7 @@ impl CheckboxState {
             hovered: false,
             visual: VisualTransition::default(),
             mark: None,
-            wave_started: None,
+            wave: WaveState::default(),
             frame_pending: false,
             clock: Box::new(move |cx| cx.background_executor().now().duration_since(epoch)),
             checkmark: CheckmarkCache::default(),
@@ -340,7 +348,7 @@ impl CheckboxState {
         let availability = self.scope.snapshot(cx).availability(self.disabled, false);
         self.guard.update(availability, &self.focus, window, cx);
         if !availability.can_activate() {
-            self.wave_started = None;
+            self.wave.clear();
         }
     }
 
@@ -414,7 +422,7 @@ impl RenderOnce for Checkbox {
             style.rest
         };
         let mark_target = f64::from(checked && !self.indeterminate);
-        let (current, mark_progress, mark_opacity, wave_progress) =
+        let (current, mark_progress, mark_opacity, has_active_wave) =
             state.update(cx, |state, cx| {
                 let now = (state.clock)(cx);
                 let (colors, color_animating) = state.visual.resolve(
@@ -429,24 +437,14 @@ impl RenderOnce for Checkbox {
                     .get_or_insert_with(|| MarkTransition::new(mark_target, global));
                 let (mark_scale, mark_opacity, mark_animating) =
                     mark.resolve(mark_target, now, global, motion);
-                let wave = state.wave_started.and_then(|start| {
-                    // Checkbox uses Ant's short wave, only when the rendered
-                    // checked value is true, including controlled owner updates.
-                    let duration = global.motion_duration_slow;
-                    let elapsed = now.saturating_sub(start);
-                    if checked
-                        && motion.allows_motion()
-                        && self.wave
-                        && !duration.is_zero()
-                        && elapsed < duration
-                    {
-                        Some(elapsed.as_secs_f64() / duration.as_secs_f64())
-                    } else {
-                        state.wave_started = None;
-                        None
-                    }
-                });
-                if color_animating || mark_animating || wave.is_some() {
+                // Only Checkbox suppresses the wave when the owner leaves it unchecked.
+                if !checked {
+                    state.wave.discard_pending();
+                }
+                let wave = state
+                    .wave
+                    .sample(now, WaveMotion::Quick, global, motion, self.wave);
+                if color_animating || mark_animating || wave {
                     state.request_frame(window, cx);
                 }
                 (colors, mark_scale, mark_opacity, wave)
@@ -481,18 +479,7 @@ impl RenderOnce for Checkbox {
         // The root's opacity is already active while painting this child. The
         // icon's own opacity ends before the external focus ring is painted.
         let focus_opacity = effective.opacity.unwrap_or(1.);
-        let wave_color = effective
-            .border_color
-            .filter(|color| color.a > 0.)
-            .or_else(|| {
-                effective
-                    .background
-                    .as_ref()
-                    .and_then(gpui::Fill::color)
-                    .and_then(|background| background.as_solid())
-                    .filter(|color| color.a > 0.)
-            })
-            .unwrap_or_else(|| global.color_primary.to_hsla());
+        let wave_color = wave_color(effective, global.color_primary.to_hsla());
         let overlay = || {
             div()
                 .absolute()
@@ -532,36 +519,38 @@ impl RenderOnce for Checkbox {
                 ),
             );
         }
-        if let Some(progress) = wave_progress {
-            let fade =
-                crate::behavior::evaluate_cubic_bezier(global.motion_ease_in_out, progress) as f32;
-            let spread = 6. * fade;
-            let color = wave_color.opacity(0.2 * (1. - fade));
-            icon = icon.child(
-                overlay().child(
-                    canvas(
-                        |_, _, _| (),
-                        move |bounds, (), window, _| {
-                            if spread > 0. && color.a > 0.001 {
-                                window.paint_quad(
-                                    gpui::outline(
-                                        bounds.dilate(px(spread)),
-                                        color,
-                                        Default::default(),
-                                    )
-                                    .border_widths(px(spread))
-                                    .corner_radii(
-                                        radii
-                                            .clamp_radii_for_quad_size(bounds.size)
-                                            .map(|r| *r + px(spread)),
-                                    ),
-                                );
-                            }
-                        },
-                    )
-                    .size_full(),
-                ),
-            );
+        if has_active_wave {
+            for (wave, wave_color) in
+                state.update(cx, |state, _| state.wave.paint_samples(wave_color))
+            {
+                let spread = wave.spread;
+                let color = wave_color.opacity(wave.opacity);
+                icon = icon.child(
+                    overlay().child(
+                        canvas(
+                            |_, _, _| (),
+                            move |bounds, (), window, _| {
+                                if spread > 0. && color.a > 0.001 {
+                                    window.paint_quad(
+                                        gpui::outline(
+                                            bounds.dilate(px(spread)),
+                                            color,
+                                            Default::default(),
+                                        )
+                                        .border_widths(px(spread))
+                                        .corner_radii(
+                                            radii
+                                                .clamp_radii_for_quad_size(bounds.size)
+                                                .map(|r| *r + px(spread)),
+                                        ),
+                                    );
+                                }
+                            },
+                        )
+                        .size_full(),
+                    ),
+                );
+            }
         }
         let icon = FocusRing::new(
             style.focus_color.opacity(focus_opacity),
@@ -637,7 +626,7 @@ impl RenderOnce for Checkbox {
                     state.checked = change.checked;
                 }
                 if wave && motion.allows_motion() {
-                    state.wave_started = Some((state.clock)(cx));
+                    state.wave.start((state.clock)(cx));
                 }
                 cx.notify();
                 change

@@ -638,3 +638,79 @@ fn checkbox_controlled_owner_refusal_does_not_start_a_wave_for_an_unchecked_cont
     assert!(!f.checked());
     assert_eq!(f.frame(16), 0);
 }
+
+#[test]
+fn checkbox_disabled_label_changes_immediately_while_the_box_animates() {
+    let theme = crate::theme::ResolvedTheme::default();
+    let enabled = CheckboxStyle::resolve(&theme, true, false, false).rest;
+    let disabled = CheckboxStyle::resolve(&theme, true, false, true).rest;
+    let mut visual = VisualTransition::default();
+    let motion = MotionPolicy::new(true, false);
+    let duration = theme.tokens.motion_duration_slow;
+    visual.resolve(enabled, Duration::ZERO, duration, CSS_EASE, motion);
+    let (first, animating) = visual.resolve(disabled, Duration::ZERO, duration, CSS_EASE, motion);
+    assert!(animating);
+    assert_eq!(
+        first.label, disabled.label,
+        "the wrapper has no CSS transition"
+    );
+    assert_eq!(first.border, enabled.border);
+    let (middle, _) = visual.resolve(
+        disabled,
+        Duration::from_millis(100),
+        duration,
+        CSS_EASE,
+        motion,
+    );
+    assert_eq!(middle.label, disabled.label);
+    assert_ne!(middle.border, disabled.border);
+    let label_only = CheckboxStateStyle {
+        label: enabled.label,
+        ..disabled
+    };
+    let (settled, animating) = visual.resolve(
+        label_only,
+        Duration::from_secs(1),
+        duration,
+        CSS_EASE,
+        motion,
+    );
+    assert_eq!(settled, label_only);
+    assert!(
+        !animating,
+        "a label-only change does not schedule box animation frames"
+    );
+}
+
+#[test]
+fn checkbox_unchecking_preserves_the_existing_wave_without_creating_another() {
+    let mut f = Fixture::with_motion(true, |_| {});
+    let waves = |f: &mut Fixture| {
+        f.cx.update_window(f.window.into(), |_, window, _| {
+            let mut waves: Vec<_> = window
+                .rendered_scene()
+                .quads
+                .iter()
+                .filter(|quad| {
+                    quad.border_color.a > 0.
+                        && quad.border_color.a < 0.2
+                        && quad.background.as_solid().is_none_or(|color| color.a == 0.)
+                })
+                .map(|quad| (quad.border_widths.top.0, quad.border_color))
+                .collect();
+            // Count logical outlines, not GPUI's clipped border strips.
+            waves.dedup();
+            waves.len()
+        })
+        .unwrap()
+    };
+    f.click_at(20.);
+    f.frame(100);
+    assert_eq!(waves(&mut f), 1);
+    f.click_at(20.);
+    assert!(!f.checked());
+    f.frame(50);
+    assert_eq!(waves(&mut f), 1);
+    f.frame(150);
+    assert_eq!(waves(&mut f), 0);
+}

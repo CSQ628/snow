@@ -1514,6 +1514,29 @@ fn subtle_text_button_hover_opacity_interpolates_without_palette_quantization() 
 }
 
 #[test]
+fn button_transparent_color_transitions_preserve_the_visible_hue() {
+    let color = Color::rgb(0x1677ff);
+    let visible = ButtonStateStyle {
+        background: color,
+        border: color,
+        text: color,
+    };
+    let transparent = ButtonStateStyle {
+        background: Color::TRANSPARENT,
+        border: Color::TRANSPARENT,
+        text: Color::TRANSPARENT,
+    };
+    for (from, to) in [(visible, transparent), (transparent, visible)] {
+        let middle = interpolate_style(from, to, 0.5);
+        assert_eq!(middle.background, color.with_alpha(0.5));
+        assert_eq!(middle.border, color.with_alpha(0.5));
+        assert_eq!(middle.text, color.with_alpha(0.5));
+        assert_eq!(interpolate_style(from, to, 0.), from);
+        assert_eq!(interpolate_style(from, to, 1.), to);
+    }
+}
+
+#[test]
 fn space_does_not_press_a_control_with_link_semantics() {
     let mut fixture = Fixture::configured(|consumer| consumer.href = true);
     fixture.key("tab");

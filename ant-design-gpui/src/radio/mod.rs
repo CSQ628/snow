@@ -31,7 +31,7 @@ use crate::{
     ConfigScope, Direction, Size,
     behavior::{
         Accessibility, Activation, ActivationGuard, FocusRing, MotionPolicy, ScalarTransition,
-        focus_handle,
+        WaveMotion, WaveSample, WaveState, focus_handle, wave_color,
     },
     theme::CubicBezier,
 };
@@ -396,7 +396,7 @@ struct RadioState {
     dot_size: Option<ScalarTransition>,
     dot_color: ColorTransition,
     pressed: bool,
-    wave_started: Option<Duration>,
+    wave: WaveState,
     frame_pending: bool,
     clock: Box<dyn Fn(&App) -> Duration>,
     _config: Subscription,
@@ -423,7 +423,7 @@ impl RadioState {
             dot_size: None,
             dot_color: ColorTransition::default(),
             pressed: false,
-            wave_started: None,
+            wave: WaveState::default(),
             frame_pending: false,
             clock: Box::new(move |cx| cx.background_executor().now().duration_since(epoch)),
             _config: config,
@@ -465,7 +465,7 @@ impl RadioState {
         let availability = self.scope.snapshot(cx).availability(self.disabled, false);
         self.guard.update(availability, &self.focus, window, cx);
         if !availability.can_activate() {
-            self.wave_started = None;
+            self.wave.clear();
             self.pressed = false;
         }
     }
@@ -557,7 +557,7 @@ impl RenderOnce for Radio {
         } else {
             circle.rest
         };
-        let (current, dot_progress, dot_size, wave_progress) = state.update(cx, |state, cx| {
+        let (current, dot_progress, dot_size, has_active_wave) = state.update(cx, |state, cx| {
             let now = (state.clock)(cx);
             let (visual, color_animating) = state.visual.resolve(
                 AnimatedStyle::new(target, button),
@@ -586,24 +586,15 @@ impl RenderOnce for Radio {
             });
             size.retarget(circle.dot_size, now, global.motion_duration_slow, motion);
             let size = size.sample(now);
-            let wave = state.wave_started.and_then(|start| {
-                let elapsed = now.saturating_sub(start);
-                let duration = global.motion_duration_slow;
-                if checked
-                    && self.wave
-                    && motion.allows_motion()
-                    && !duration.is_zero()
-                    && elapsed < duration
-                {
-                    Some(elapsed.as_secs_f64() / duration.as_secs_f64())
-                } else {
-                    state.wave_started = None;
-                    None
-                }
-            });
+            let kind = if button {
+                WaveMotion::Regular
+            } else {
+                WaveMotion::Quick
+            };
+            let wave = state.wave.sample(now, kind, global, motion, self.wave);
             if color_animating
                 || (!button && (!dot.finished || !size.finished || mark_animating))
-                || wave.is_some()
+                || wave
             {
                 state.request_frame(window, cx);
             }
@@ -736,14 +727,12 @@ impl RenderOnce for Radio {
                     ),
                 );
             }
-            if let Some(progress) = wave_progress {
-                icon = icon.child(wave_overlay(
-                    borders,
-                    radii,
-                    wave_color,
-                    progress,
-                    global.motion_ease_in_out,
-                ));
+            if has_active_wave {
+                for (sample, color) in
+                    state.update(cx, |state, _| state.wave.paint_samples(wave_color))
+                {
+                    icon = icon.child(wave_overlay(borders, radii, color, sample));
+                }
             }
             root = root.child(
                 FocusRing::new(
@@ -813,16 +802,14 @@ impl RenderOnce for Radio {
                 root.cursor_pointer()
             };
         }
-        if button && let Some(progress) = wave_progress {
+        if button && has_active_wave {
             let borders = border_widths(root.style(), window);
             let radii = corner_radii(root.style(), window);
-            root = root.child(wave_overlay(
-                borders,
-                radii,
-                button_wave_color,
-                progress,
-                global.motion_ease_in_out,
-            ));
+            for (sample, color) in
+                state.update(cx, |state, _| state.wave.paint_samples(button_wave_color))
+            {
+                root = root.child(wave_overlay(borders, radii, color, sample));
+            }
         }
         let weak = state.downgrade();
         root = root.on_hover(move |hovered, _, cx| {
@@ -889,7 +876,7 @@ impl RenderOnce for Radio {
             }
             let change = weak.update(cx, |state, cx| {
                 if wave && motion.allows_motion() {
-                    state.wave_started = Some((state.clock)(cx));
+                    state.wave.start((state.clock)(cx));
                     cx.notify();
                 }
                 if state.checked && !in_group {
@@ -970,31 +957,14 @@ fn outer_overlay(borders: gpui::Edges<gpui::Pixels>) -> gpui::Div {
         .right(-borders.right)
 }
 
-fn wave_color(style: &StyleRefinement, fallback: Hsla) -> Hsla {
-    style
-        .border_color
-        .filter(|color| color.a > 0.)
-        .or_else(|| {
-            style
-                .background
-                .as_ref()
-                .and_then(gpui::Fill::color)
-                .and_then(|color| color.as_solid())
-                .filter(|color| color.a > 0.)
-        })
-        .unwrap_or(fallback)
-}
-
 fn wave_overlay(
     borders: gpui::Edges<gpui::Pixels>,
     radii: gpui::Corners<gpui::Pixels>,
     color: Hsla,
-    progress: f64,
-    curve: CubicBezier,
+    wave: WaveSample,
 ) -> gpui::Div {
-    let progress = crate::behavior::evaluate_cubic_bezier(curve, progress) as f32;
-    let spread = px(6. * progress);
-    let color = color.opacity(0.2 * (1. - progress));
+    let spread = px(wave.spread);
+    let color = color.opacity(wave.opacity);
     outer_overlay(borders).child(
         canvas(
             |_, _, _| (),
