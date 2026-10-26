@@ -1361,6 +1361,58 @@ void printScreenRecordingPreservesEventOrderAndLifecycle() {
 #endif
 }
 
+void applicationEnterRecorderUnifiesBothKeys() {
+    using Scope = ShortcutKeyRowConfig::ValidationScope;
+    for (const auto scope : {Scope::ScreenshotShortcut, Scope::DrawingShortcut,
+                             Scope::PinnedWindowShortcut, Scope::RecordingShortcut}) {
+        for (const bool keypad : {false, true}) {
+            PrintScreenRecordingSession session(scope);
+            session.key(QEvent::KeyPress, keypad ? Qt::Key_Enter : Qt::Key_Return,
+                        keypad ? Qt::KeypadModifier : Qt::NoModifier);
+            session.flush();
+            auto* recorded = session.row->findChild<adqt::widgets::AdButton*>(
+                QStringLiteral("shortcutConfigKeyButton"));
+            require(session.validated == QStringList{QStringLiteral("Enter")} && recorded &&
+                        recorded->text() == QStringLiteral("Enter"),
+                    "every application recorder must capture and show both keys as Enter");
+            session.modal->acceptButton()->click();
+            session.flush();
+            require(portableText(session.saved) == QStringList{QStringLiteral("Enter")},
+                    "application recording must persist the canonical Enter binding");
+        }
+    }
+
+    PrintScreenRecordingSession duplicate(Scope::ScreenshotShortcut, {QStringLiteral("Return")});
+    auto* saved = duplicate.row->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("shortcutConfigKeyButton"));
+    require(saved && saved->text() == QStringLiteral("Enter"),
+            "legacy Return bindings must display as Enter in the editor");
+    duplicate.row->findChild<adqt::widgets::AdButton*>(QStringLiteral("shortcutConfigAddButton"))
+        ->click();
+    duplicate.key(QEvent::KeyPress, Qt::Key_Enter, Qt::KeypadModifier);
+    duplicate.flush();
+    auto* feedback = duplicate.row->findChild<InfoTooltipIcon*>(
+        QStringLiteral("shortcutConfigValidationTooltipTrigger"));
+    require(!duplicate.modal->acceptButton()->isEnabled() && feedback &&
+                feedback->tooltipText().contains(QStringLiteral("Enter")) &&
+                !feedback->tooltipText().contains(QStringLiteral("Num")),
+            "keypad Enter must conflict with an existing Return and use the unified label");
+    duplicate.modal->reject();
+    duplicate.flush();
+
+    for (const auto combination :
+         {QKeyCombination(Qt::Key_Return), QKeyCombination(Qt::KeypadModifier, Qt::Key_Enter)}) {
+        PrintScreenRecordingSession global;
+        global.key(QEvent::KeyPress, combination.key(), combination.keyboardModifiers());
+        global.flush();
+        require(global.validated ==
+                    QStringList{QKeySequence(combination).toString(QKeySequence::PortableText)},
+                "global hotkey recording must preserve Enter key distinctions");
+        global.modal->reject();
+        global.flush();
+    }
+}
+
 #ifdef Q_OS_WIN
 bool sendNativeRecorderMessage(QWidget* window, UINT message, Qt::KeyboardModifiers modifiers,
                                WPARAM key = VK_SNAPSHOT, LPARAM flags = 0, DWORD timestamp = 0) {
@@ -2213,6 +2265,7 @@ int main(int argc, char** argv) {
     printScreenReleaseFollowsPlatformPolicy();
     printScreenRecordingPreservesEventOrderAndLifecycle();
     localShortcutRecordersUseOnlyNormalKeyEvents();
+    applicationEnterRecorderUnifiesBothKeys();
     recordingShortcutRecorderAcceptsControlKeysAndEscape();
     contextMenuRecorderAcceptsOnlyOneLogicalCharacter();
     shortcutRecordersOwnFocusNavigationKeysWhileRecording();

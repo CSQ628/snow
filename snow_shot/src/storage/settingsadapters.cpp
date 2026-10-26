@@ -1455,8 +1455,9 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
                                                     QStringLiteral("pin_to_screen_shortcuts/") ||
                                                 PinToScreenShortcutSettings::actionsMayConflict(
                                                     existing.first, id)) &&
-                                               shortcuts::bindingsConflict(existing.second,
-                                                                           binding);
+                                               shortcuts::bindingsConflict(
+                                                   existing.second, binding,
+                                                   shortcuts::ShortcutPolicy::Application);
                                     })) {
                         return false;
                     }

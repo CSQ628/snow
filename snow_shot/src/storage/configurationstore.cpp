@@ -140,7 +140,9 @@ void reconcileLocalShortcutDefaults(MaterializedConfiguration& result,
             if (std::any_of(assigned.cbegin(), assigned.cend(),
                             [&binding, &actionsMayConflict](const auto& existing) {
                                 return actionsMayConflict(existing.first) &&
-                                       shortcuts::bindingsConflict(existing.second, binding);
+                                       shortcuts::bindingsConflict(
+                                           existing.second, binding,
+                                           shortcuts::ShortcutPolicy::Application);
                             }))
                 continue;
             retained.push_back(binding);

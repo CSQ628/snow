@@ -1962,7 +1962,8 @@ BuiltInSettingsBackend::validateLocalShortcut(SettingsLocalShortcutScope scope,
     const bool allowModifierOnlyShift = storage::ConfigurationSchema::allowsModifierOnlyShift(key);
     const shortcuts::ShortcutBinding canonical =
         shortcuts::canonicalBinding(shortcut, allowModifierOnlyShift,
-                                    key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
+                                    key == QStringLiteral("screenshot_shortcuts/toggle_guides"),
+                                    false, shortcuts::ShortcutPolicy::Application);
     if (canonical.portableText.isEmpty()) {
         return {shortcut.portableText, false, GlobalShortcutFailureReason::InvalidShortcut,
                 canonical};
@@ -1994,7 +1995,8 @@ BuiltInSettingsBackend::validateLocalShortcut(SettingsLocalShortcutScope scope,
             continue;
         }
         for (const shortcuts::ShortcutBinding& existing : it.value()) {
-            if (shortcuts::bindingsConflict(existing, canonical)) {
+            if (shortcuts::bindingsConflict(existing, canonical,
+                                            shortcuts::ShortcutPolicy::Application)) {
                 return {canonical.portableText, false, GlobalShortcutFailureReason::AlreadyInUse,
                         canonical};
             }
