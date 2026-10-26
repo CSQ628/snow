@@ -470,6 +470,31 @@ void builtInCatalogIsCompleteAndValid() {
                     QStringLiteral("screenshot.middle-mouse-button-action") &&
                 quickModificationSection->items.at(5).id == quickModification->id,
             "quick selection modification must immediately follow middle mouse button action");
+    const std::pair<QString, QString> pointerActions[] = {
+        {QStringLiteral("copy"), QStringLiteral("Copy to clipboard")},
+        {QStringLiteral("save"), QStringLiteral("Save as file")},
+        {QStringLiteral("quick_save"), QStringLiteral("Quick save")},
+        {QStringLiteral("pin"), QStringLiteral("Pin to screen")},
+        {QStringLiteral("ocr"), QStringLiteral("Text recognition")},
+        {QStringLiteral("ocr_copy"), QStringLiteral("Copy after text recognition")},
+        {QStringLiteral("none"), QStringLiteral("None")},
+    };
+    for (const QString& itemId : {QStringLiteral("screenshot.double-click-action"),
+                                  QStringLiteral("screenshot.middle-mouse-button-action")}) {
+        const auto* item = catalog.item(
+            {QStringLiteral("screenshots"), QStringLiteral("screenshot-settings"), itemId});
+        require(item != nullptr, "Screenshots must expose both pointer action settings");
+        const auto& options = std::get<settings::SettingsSelectDefinition>(item->payload).options;
+        require(options.size() == 7, "both pointer action settings must expose seven choices");
+        for (qsizetype index = 0; index < options.size(); ++index) {
+            require(options.at(index).value == pointerActions[index].first &&
+                        options.at(index).label.translated() == pointerActions[index].second &&
+                        storage::ConfigurationSchema::normalize(item->configurationKey,
+                                                                options.at(index).value.toString())
+                            .valid,
+                    "pointer actions must share ordered, translated, schema-supported choices");
+        }
+    }
     const auto* selectionResizeMode =
         catalog.item({QStringLiteral("screenshots"), QStringLiteral("screenshot-settings"),
                       QStringLiteral("screenshot.selection-resize-mode")});

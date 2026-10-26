@@ -1161,8 +1161,8 @@ void completeToolStyleContract() {
         return mcpStylePatch(
             styles, styles, {{QStringLiteral("target"), target}, {QStringLiteral("style"), patch}});
     };
-    for (const auto& target :
-         {QStringLiteral("rectangle"), QStringLiteral("arrow"), QStringLiteral("line")}) {
+    for (const auto& target : {QStringLiteral("rectangle"), QStringLiteral("speech_bubble"),
+                               QStringLiteral("arrow"), QStringLiteral("line")}) {
         const QStringList values{QStringLiteral("architect"), QStringLiteral("artist"),
                                  QStringLiteral("cartoonist")};
         for (int index = 0; index < values.size(); ++index) {
@@ -1188,8 +1188,8 @@ void completeToolStyleContract() {
                 "sequence MCP stroke types must dispatch only the stroke rendering property");
     }
     const int renderingUpdates = styles.updates;
-    for (const auto& target : {QStringLiteral("freehand"), QStringLiteral("speech_bubble"),
-                               QStringLiteral("text"), QStringLiteral("rectangle_highlight")}) {
+    for (const auto& target : {QStringLiteral("freehand"), QStringLiteral("text"),
+                               QStringLiteral("rectangle_highlight")}) {
         require(
             !apply(target, {{QStringLiteral("stroke_rendering_style"), QStringLiteral("artist")}}),
             "rendering MCP styles should reject unsupported tool targets");

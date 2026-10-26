@@ -318,10 +318,7 @@ pub const SHAPE_STYLE_PROPERTY_ALL: u32 = SHAPE_STYLE_PROPERTY_RECTANGLE
 impl ShapeKind {
     pub const fn supported_properties(self) -> u32 {
         match self {
-            Self::Rectangle => SHAPE_STYLE_PROPERTY_RECTANGLE,
-            Self::SpeechBubble => {
-                SHAPE_STYLE_PROPERTY_RECTANGLE & !SHAPE_STYLE_PROPERTY_STROKE_RENDERING_STYLE
-            }
+            Self::Rectangle | Self::SpeechBubble => SHAPE_STYLE_PROPERTY_RECTANGLE,
             Self::Arrow => SHAPE_STYLE_PROPERTY_ARROW,
             Self::Line => SHAPE_STYLE_PROPERTY_LINE,
             Self::FreeDraw => SHAPE_STYLE_PROPERTY_FREE_DRAW,

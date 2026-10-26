@@ -625,7 +625,14 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
                                      item.stroke_width * projection.cameraZoom);
         }
         const double halfStroke = qMax(0.0, item.stroke_width * projection.cameraZoom) / 2.0;
-        return path.boundingRect().adjusted(-halfStroke, -halfStroke, halfStroke, halfStroke);
+        const double extra =
+            item.stroke.a != 0 && item.stroke_width > 0
+                ? snow_stroke_rendering_outset(item.stroke_rendering_style,
+                                               std::numeric_limits<double>::max()) *
+                      projection.cameraZoom
+                : 0.0;
+        const double padding = halfStroke + extra;
+        return path.boundingRect().adjusted(-padding, -padding, padding, padding);
     }
     case SNOW_SCENE_DISPLAY_ITEM_ARROW: {
         const QVector<QPointF> points =
@@ -672,9 +679,12 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
 }
 
 QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowCanvasSceneItem& item) {
-    if (item.kind == SNOW_SCENE_DISPLAY_ITEM_ARROW && item.is_free_draw == 0 &&
+    if ((item.kind == SNOW_SCENE_DISPLAY_ITEM_ARROW ||
+         item.kind == SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE) &&
+        item.is_free_draw == 0 &&
         (item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT ||
-         (item.arrow_outline_width > 0 && item.arrow_outline_color.a != 0))) {
+         (item.kind == SNOW_SCENE_DISPLAY_ITEM_ARROW && item.arrow_outline_width > 0 &&
+          item.arrow_outline_color.a != 0))) {
         if (const auto* cache = snow_canvas_stroke_rendering::cachedGeometry(item)) {
             const QRectF canvasBounds = snow_canvas_stroke_rendering::localToCanvas(
                                             item.center_x, item.center_y, item.rotation)

@@ -1103,10 +1103,23 @@ ScreenshotToolbarWindow* ScreenshotController::Impl::toolbarForShortcut() {
 }
 
 bool ScreenshotController::Impl::activateScreenshotShortcut(const QString& actionId) {
+    if (actionId == QStringLiteral("text_recognition_copy")) {
+        const QScopedValueRollback<bool> copyGuard(m_activatingOcrCopy, true);
+        return activateScreenshotShortcut(QStringLiteral("text_recognition"));
+    }
     ScreenshotToolbarWindow* toolbar = toolbarForShortcut();
     ScreenshotToolPalette* palette = toolbar != nullptr ? toolbar->palette() : nullptr;
     if (palette)
         palette->setCloudUploadBusy(m_cloudUploadPreparing || m_cloudUploadJob);
+    if (palette != nullptr && m_activatingOcrCopy &&
+        actionId == QStringLiteral("text_recognition") &&
+        m_interaction.activeTool() == ScreenshotActiveTool::Ocr) {
+        if (!palette->canActivateScreenshotShortcut(actionId))
+            return false;
+        // Copying an existing OCR result must not toggle the active tool off.
+        setOcrTool();
+        return true;
+    }
     return palette != nullptr && palette->activateScreenshotShortcut(actionId);
 }
 

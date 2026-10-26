@@ -713,9 +713,7 @@ void applyScreenshotCanvasToolStyles(SnowCanvasWidget& canvas,
         static_cast<void>(canvas.setCanvasShapeStylePatch(style, properties, kind));
     };
     applyShape(defaults.rectangle, kRectangleShapeProperties, SnowCanvasShapeKind::Rectangle);
-    applyShape(defaults.speechBubble,
-               kRectangleShapeProperties & ~SnowCanvasShapeStylePropertyStrokeRenderingStyle,
-               SnowCanvasShapeKind::SpeechBubble);
+    applyShape(defaults.speechBubble, kRectangleShapeProperties, SnowCanvasShapeKind::SpeechBubble);
     applyShape(defaults.arrow, kArrowShapeProperties, SnowCanvasShapeKind::Arrow);
     static_cast<void>(canvas.setCanvasDistanceStyle(defaults.distance));
     static_cast<void>(canvas.setCanvasAngleStyle(defaults.angle));

@@ -1004,10 +1004,12 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
           QStringLiteral("enable_edit_mode")}},
         {QStringLiteral("screenshot/double_click_action"),
          {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
-          QStringLiteral("pin"), QStringLiteral("none")}},
+          QStringLiteral("pin"), QStringLiteral("ocr"), QStringLiteral("ocr_copy"),
+          QStringLiteral("none")}},
         {QStringLiteral("screenshot/middle_mouse_button_action"),
          {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
-          QStringLiteral("pin"), QStringLiteral("none")}},
+          QStringLiteral("pin"), QStringLiteral("ocr"), QStringLiteral("ocr_copy"),
+          QStringLiteral("none")}},
         {QStringLiteral("screenshot/image_format"),
          {QStringLiteral("png"), QStringLiteral("jpeg"), QStringLiteral("bmp"),
           QStringLiteral("webp"), QStringLiteral("jxl"), QStringLiteral("avif"),
@@ -2385,6 +2387,53 @@ void recordingPostProcessingPreferencesPersistAndValidate() {
                 recording.postProcessingEffect() == QStringLiteral("playback_time") &&
                 recording.progressBarColor() == QColor(12, 34, 56, 78),
             "post-processing preferences survive storage restart");
+    applicationStorage.shutdown();
+}
+
+void screenshotMouseActionSettingsRoundTrip() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "create isolated screenshot mouse settings storage");
+    const QString executable = QDir(temporary.path()).filePath(QStringLiteral("bin"));
+    require(QDir().mkpath(executable), "create screenshot mouse settings executable directory");
+    auto& applicationStorage = initialize(executable, temporary.path());
+    const storage::ScreenshotSettings screenshot;
+    require(screenshot.doubleClickAction() == QStringLiteral("copy") &&
+                screenshot.middleMouseButtonAction() == QStringLiteral("pin"),
+            "screenshot mouse actions must retain their defaults");
+    for (const QString& action :
+         {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
+          QStringLiteral("pin"), QStringLiteral("ocr"), QStringLiteral("ocr_copy"),
+          QStringLiteral("none")}) {
+        const QString previousMiddleAction = screenshot.middleMouseButtonAction();
+        require(screenshot.setDoubleClickAction(action) &&
+                    screenshot.doubleClickAction() == action &&
+                    screenshot.middleMouseButtonAction() == previousMiddleAction,
+                "double-click actions must round-trip without changing the middle-click action");
+        require(screenshot.setMiddleMouseButtonAction(action) &&
+                    screenshot.middleMouseButtonAction() == action &&
+                    screenshot.doubleClickAction() == action,
+                "middle-click actions must round-trip without changing the double-click action");
+    }
+    for (const bool swapActions : {false, true}) {
+        const QString doubleAction =
+            swapActions ? QStringLiteral("ocr_copy") : QStringLiteral("ocr");
+        const QString middleAction =
+            swapActions ? QStringLiteral("ocr") : QStringLiteral("ocr_copy");
+        require(screenshot.setDoubleClickAction(doubleAction) &&
+                    screenshot.setMiddleMouseButtonAction(middleAction) &&
+                    applicationStorage.flushNow().success,
+                "save independent screenshot recognition mouse actions");
+        applicationStorage.shutdown();
+        static_cast<void>(initialize(executable, temporary.path()));
+        require(screenshot.doubleClickAction() == doubleAction &&
+                    screenshot.middleMouseButtonAction() == middleAction,
+                "both recognition mouse actions must survive restart independently");
+        require(!screenshot.setDoubleClickAction(QStringLiteral("unsupported")) &&
+                    !screenshot.setMiddleMouseButtonAction(QStringLiteral("unsupported")) &&
+                    screenshot.doubleClickAction() == doubleAction &&
+                    screenshot.middleMouseButtonAction() == middleAction,
+                "invalid screenshot mouse actions must preserve both saved choices");
+    }
     applicationStorage.shutdown();
 }
 
@@ -4096,6 +4145,10 @@ int main(int argc, char** argv) {
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--screenshot-mouse-actions-only"))) {
+        screenshotMouseActionSettingsRoundTrip();
+        return 0;
+    }
     ocrHighlightingSettingsPersistAndValidate();
     pinnedManagementConfigurationAndTrayMigration();
     updateSettingsPersistAndValidate();
@@ -4124,6 +4177,7 @@ int main(int argc, char** argv) {
     recordingActionToolbarLayoutRepairsAndPersistsIndependently();
     screenshotTranslationSettingsRoundTripSupportedValues();
     settingsAdaptersRoundTripAndRejectInvalidValues();
+    screenshotMouseActionSettingsRoundTrip();
     pinnedMouseActionSettingsRoundTrip();
     recordingPostProcessingPreferencesPersistAndValidate();
     invalidCaptureCursorConfigurationFallsBackToDisabled();

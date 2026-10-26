@@ -225,8 +225,9 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         allowed = {QStringLiteral("stroke"), QStringLiteral("stroke_width")};
     else
         return false;
-    if (target == QStringLiteral("rectangle") || target == QStringLiteral("arrow") ||
-        target == QStringLiteral("line") || target == QStringLiteral("serial_number")) {
+    if (target == QStringLiteral("rectangle") || target == QStringLiteral("speech_bubble") ||
+        target == QStringLiteral("arrow") || target == QStringLiteral("line") ||
+        target == QStringLiteral("serial_number")) {
         allowed.append(QStringLiteral("stroke_rendering_style"));
     }
     if (patch.contains(QStringLiteral("corner_radius")) &&

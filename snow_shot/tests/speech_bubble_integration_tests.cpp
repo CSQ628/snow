@@ -34,10 +34,12 @@ void defaultsPersistIndependently() {
     changed.fill = QColor(240, 230, 220, 200);
     changed.fillStyle = SnowCanvasFillStyle::CrossLine;
     changed.cornerRadii = {7, 8, 9, 10};
+    changed.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Cartoonist;
     constexpr quint32 properties =
         SnowCanvasShapeStylePropertyShape | SnowCanvasShapeStylePropertyStrokeColor |
         SnowCanvasShapeStylePropertyStrokeWidth | SnowCanvasShapeStylePropertyFillColor |
-        SnowCanvasShapeStylePropertyFillStyle | SnowCanvasShapeStylePropertyCornerRadius;
+        SnowCanvasShapeStylePropertyFillStyle | SnowCanvasShapeStylePropertyCornerRadius |
+        SnowCanvasShapeStylePropertyStrokeRenderingStyle;
     require(persistScreenshotCanvasStyleEdit(
                 SnowCanvasShapeEdit{changed, properties, SnowCanvasShapeKind::SpeechBubble}),
             "persist independent Speech Bubble appearance");
@@ -162,11 +164,13 @@ void mcpRoutesShapeStylesExplicitly() {
     require(apply({{QStringLiteral("shape"), QStringLiteral("ellipse")},
                    {QStringLiteral("stroke_width"), 5},
                    {QStringLiteral("fill_style"), QStringLiteral("line")},
+                   {QStringLiteral("stroke_rendering_style"), QStringLiteral("artist")},
                    {QStringLiteral("corner_radii"), QJsonArray{1, 2, 3, 4}}}),
             "MCP applies Speech Bubble shape properties");
     const auto accepted = editor.canvasStyleToolbarState().shapeStyle;
     require(accepted.shape == SnowCanvasRectangleShape::Ellipse && accepted.strokeWidth == 5 &&
                 accepted.fillStyle == SnowCanvasFillStyle::Line &&
+                accepted.strokeRenderingStyle == SnowCanvasStrokeRenderingStyle::Artist &&
                 accepted.cornerRadii == SnowCanvasCornerRadii{1, 2, 3, 4},
             "MCP style patches reach Speech Bubble defaults instead of Spotlight");
     require(apply({{QStringLiteral("shape"), QStringLiteral("thought_bubble")}}) &&
@@ -186,9 +190,11 @@ void mcpRoutesShapeStylesExplicitly() {
     }
     require(apply({{QStringLiteral("shape"), QStringLiteral("ellipse")}}),
             "restore the accepted ellipse appearance");
-    for (const auto& invalid : {QJsonObject{{QStringLiteral("shape"), QStringLiteral("triangle")}},
-                                QJsonObject{{QStringLiteral("stroke_width"), -1}},
-                                QJsonObject{{QStringLiteral("font_size"), 42}}})
+    for (const auto& invalid :
+         {QJsonObject{{QStringLiteral("shape"), QStringLiteral("triangle")}},
+          QJsonObject{{QStringLiteral("stroke_rendering_style"), QStringLiteral("rough")}},
+          QJsonObject{{QStringLiteral("stroke_width"), -1}},
+          QJsonObject{{QStringLiteral("font_size"), 42}}})
         require(!apply(invalid) && editor.canvasStyleToolbarState().shapeStyle == accepted,
                 "invalid Speech Bubble styles reject without modifying defaults");
     require(editor.setActiveTool(SnowCanvasTool::Shape) &&
