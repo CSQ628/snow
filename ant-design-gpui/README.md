@@ -19,6 +19,8 @@ cargo run --locked --offline --example gallery
 # Open Divider directly: -- --component divider
 # Open Segmented directly: -- --component segmented
 # Open Tag directly: -- --component tag
+# Open Input directly: -- --component input
+# Open InputNumber directly: -- --component input-number
 ```
 
 The native gallery has a fixed component sidebar, direct example links and a
@@ -80,6 +82,147 @@ GPUI 0.2.2 is pinned to `mg-chao/gpui` revision
 Defaults are disabled and `gpu-extensions` enabled. Consumers select their own
 backend; native platform dependencies are development-only here. Keep these
 projects' GPUI pins synchronized.
+
+## Input controls
+
+`Input`, `TextArea`, `PasswordInput` and `SearchInput` share an `Entity<InputState>`.
+Create the entity once with `cx.new(|cx| InputState::new(window, cx))`; render fresh
+builders with stable IDs. `InputState::set_value` updates the view without emitting
+a user change. Subscribe to `InputEvent` for changes, commits, search activation,
+selection, composition and password visibility. `focus`, `blur`, `select` and
+`select_all` provide programmatic control.
+
+Common builders expose `size`, `variant`, `status`, `placeholder`, `allow_clear`,
+`prefix`, `suffix`, `show_count`, `disabled` and `read_only`. `CountConfig` provides
+an advisory maximum and a formatter. `InputState::set_max_length` sets a hard
+editing limit; grapheme clusters are the default unit, with UTF-16 and custom
+strategies available. Existing external values are not silently truncated.
+
+`TextArea::auto_size(min_rows, max_rows)` follows content height within row bounds.
+`PasswordInput` keeps visibility in the retained state; revealing a value preserves
+selection and undo history, and never exposes it through clipboard or accessibility
+text export. Use `set_password_visible` for external updates.
+`SearchInput::enter_button(label)` adds a joined search action; `primary_action`
+selects the icon-only equivalent, and `loading` suppresses activation. Outlined
+inputs use a primary filled action; the other variants follow their corresponding
+Ant Design text-button treatment. Search events identify Enter, action, clear and
+programmatic sources. Affixed controls reserve the clear slot while it is hidden,
+so availability and empty-value changes do not shift the text viewport.
+
+Keyboard actions are public in `input::actions`, scoped to `AntDesignInput` while
+the text editor holds focus. Applications may override their bindings. Ctrl/Cmd+Z
+undoes; Ctrl/Cmd+Shift+Z redoes. Enter commits a single line; multiline Enter inserts
+a newline and Ctrl/Cmd+Enter commits. Composition is a single undo transaction and
+does not activate search.
+
+The caret uses a 500 ms timer while the visible window and editor have focus.
+Edits reset it; composition and reduced motion keep it steady. Dragging outside
+the text viewport extends the selection with bounded, distance-based autoscroll.
+Blur, disabling, hiding, release and unmount cancel the associated work.
+
+`InputNumber` retains an `Entity<InputNumberState>` created with `new` or
+`with_options(NumberOptions, window, cx)`. Render it with
+`InputNumber::new(id, &state, cx)`. Use `NumberOptions::exact()` for
+`NumericValue::Decimal(ExactDecimal)` or the default finite `f64` mode.
+`None` represents an empty value. `ExactDecimal` parses signed decimal/exponent
+strings and performs exact stepping and rounding without binary intermediates.
+Its digit and scale limits bound work for extreme pasted exponents.
+
+Numeric state separates the accepted value from the raw editing draft. Incomplete,
+invalid and out-of-range drafts remain editable; Enter or blur clamps valid drafts,
+applies precision and restores the previous accepted value for invalid drafts.
+Set `change_on_blur: false` to defer this until Enter. Precision is deferred while
+typing, and configured ranges take precedence when rounding would cross a boundary.
+Standard-number ranges must contain a representable finite value.
+
+`NumberOptions` supports minimum/maximum, step, precision, keyboard stepping,
+opt-in focused wheel stepping, and parser/formatter callbacks. Formatters receive
+the untouched input, accepted value, canonical display and `user_typing` flag.
+Return `input` during typing to defer formatting. Presentation rewrites preserve
+cursor position and amend the triggering undo transaction. Arrow keys and buttons
+step once; Shift multiplies the step by ten. Held buttons repeat after 600 ms,
+then every 200 ms, with cancellation on release, leave, blur, disable or unmount.
+
+`InputNumberState::set_value` updates without user change events; equal owner echoes
+preserve the current draft and composition. `value`, `text`, `draft_status`,
+`set_options`, `focus`, `select`, `undo` and `redo` provide retained control.
+Subscribe to `InputNumberEvent` for raw input, accepted changes, commits and steps
+with their source. The builder supports the shared styling/affix/accessibility
+options, default 90 px width, `block`, optional controls and custom step icons.
+
+`OtpInput` uses an `Entity<OtpState>` with six cells by default. `OtpOptions`
+configures length, an optional single-grapheme mask, and incoming-text formatter
+and filter callbacks. Formatting and filtering precede the limit. A full-code
+paste replaces the complete code from any cell; a partial paste starts at the
+active cell. `value` returns concatenated characters and `cells` preserves empty
+positions. `set_value` is silent; equal owner echoes preserve composition and
+history. `OtpEvent` separates aggregate changes, completed codes, commits and
+focus changes. `focus_cell`, `select_all`, `undo` and `redo` act on the retained
+group. Arrow/Home/End navigation and a single Tab entry follow its active cell;
+IME commits and multi-cell pastes form single undo transactions. Masked codes
+remain protected from clipboard and accessibility text export. Cells shrink
+together in narrow containers; `block` distributes the available width. Masked
+glyphs inherit the surrounding OTP typography independently of input size tokens.
+
+`InputGroup` joins inputs, numeric controls, buttons, composite search controls
+and nested groups. Use `child`/`children`, `size`, `orientation`, `block`, and GPUI
+flex/width builders. Explicit child size, availability and scope override inherited
+values. Logical outer corners and overlapped borders follow direction and nesting;
+raised focus/hover decoration preserves source-order Tab traversal and clipping.
+Custom controls can implement `InputGroupItem` using `InputGroupContext` for
+inherited configuration, border geometry and focus decoration.
+
+The editor retains both caret positions at soft wraps. Pointer selection, vertical
+navigation, Home/End and native candidate bounds use that affinity. Immutable
+`value_snapshot` handles are shared between render and event consumers until the
+text revision changes. Unchanged redraws reuse shaped paragraphs and geometry.
+Navigation and native IME queries immediately after edits refresh the same cache
+without waiting for a frame; the next draw reuses that geometry.
+Frame colors and focus shadows, clear/password actions, and numeric handle width,
+opacity, height and colors follow Ant Design's timing curves. Interrupted transitions
+start from the painted value and preserve CSS reversal shortening. Reduced motion and hidden windows settle immediately;
+settled controls schedule no animation frames. Foreground color changes reuse native
+glyph shaping and selection geometry.
+
+Run `cargo run --locked --offline --example input` for the current native verification
+surface, or pass `-- --capture C:/temp/input.png` for a hidden-window capture.
+The gallery has separate Input and InputNumber pages following the public
+examples in the pinned Ant Design checkout, including their order, titles and
+initial values:
+
+```powershell
+cargo run --locked --offline --example gallery -- --component input
+cargo run --locked --offline --example gallery -- --component input-number
+cargo test --locked --offline --example gallery -- input_gallery input_number_gallery --test-threads=1
+```
+
+Input has 18 reference cards (11 complete, six partial, one planned).
+InputNumber has 14 (11 complete, two partial, one planned). Partial cards show
+working rows and name their pending portions; the numeric-tooltip and spinner
+cards are planned. Addons, Select, custom password visibility icons, manual
+TextArea resizing, and independent internal-part styling remain pending.
+Styling previews demonstrate existing native root refinements and scoped tokens.
+Named retained entities keep each row independent while switching pages, theme,
+density, direction and motion. Standard count demos use UTF-16; custom emoji
+counts use Unicode scalars. The existing standalone input app remains the native
+verification surface.
+Input uses the public GPUI text-layout and native-input APIs on every platform;
+consumers do not need Cargo patches or vendored GPUI crates. Horizontal arrows,
+word movement and selection collapse follow logical text order, following
+[GPUI Kit's editing approach](https://github.com/longbridge/gpui-kit/blob/611b55e331170ca375214d580b6c5409db858f83/crates/base/src/input/base/movement.rs).
+Grapheme-safe editing, UTF-16 IME conversion, undo/redo, soft-wrap navigation and
+password protection remain supported. RTL control layout and alignment are retained,
+but Arabic/Hebrew shaping, mixed-direction selection geometry and ligature caret
+positions are limited by the pinned GPUI backend. Full browser-equivalent bidi
+editing is not guaranteed. This removes the Input-specific extensions; the shared
+`mg-chao/gpui` revision and `gpu-extensions` feature remain aligned with the drawing
+engine. GPUI Kit is an architectural reference, not an added dependency.
+Run `cargo run --locked --offline --example input -- --verify-navigation` for
+native logical navigation, wrapping and IME-bound checks.
+Verification evidence, measured performance and platform limitations are documented
+in [VALIDATION.md](VALIDATION.md). Independent settled-style, composite, custom-token
+and timed-motion measurements and regeneration steps are in
+[fixtures/input](fixtures/input/README.md).
 
 ## Button
 

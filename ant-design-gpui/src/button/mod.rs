@@ -12,6 +12,8 @@ mod label;
 mod paint;
 mod style;
 
+pub(crate) use style::ButtonStyleOverride;
+
 pub use style::{
     ButtonColor, ButtonMetrics, ButtonShape, ButtonStateStyle, ButtonStyle, ButtonStyleOptions,
     ButtonTheme, ButtonTokenPatch, ButtonTokens, ButtonType, ButtonVariant, IconPlacement,
@@ -69,6 +71,14 @@ pub struct Button {
     style: StyleRefinement,
     icon_style: Option<Box<StyleRefinement>>,
     content_style: Option<Box<StyleRefinement>>,
+    group: Option<crate::input::InputGroupContext>,
+    visual_override: ButtonStyleOverride,
+}
+
+impl crate::input::InputGroupItem for Button {
+    fn into_group_element(self, context: crate::input::InputGroupContext) -> gpui::AnyElement {
+        self.in_group(context).into_any_element()
+    }
 }
 
 impl Button {
@@ -101,6 +111,8 @@ impl Button {
             style: StyleRefinement::default(),
             icon_style: None,
             content_style: None,
+            group: None,
+            visual_override: ButtonStyleOverride::default(),
         }
     }
 
@@ -109,8 +121,20 @@ impl Button {
         self
     }
 
+    pub(crate) fn refine_visuals(mut self, refinement: ButtonStyleOverride) -> Self {
+        self.visual_override = refinement;
+        self
+    }
+
     pub fn scope(mut self, scope: ConfigScope) -> Self {
         self.scope = Some(scope);
+        self
+    }
+    pub(crate) fn in_group(mut self, context: crate::input::InputGroupContext) -> Self {
+        self.scope = self.scope.or_else(|| Some(context.scope.clone()));
+        self.size = self.size.or(Some(context.size));
+        self.disabled = self.disabled.or(context.disabled);
+        self.group = Some(context);
         self
     }
 
@@ -520,9 +544,16 @@ impl RenderOnce for Button {
         let focus = retained.focus.clone();
         let guard = retained.guard.clone();
         let tracking_pointer = retained.pointer_armed;
+        if let Some(group) = &self.group {
+            group.set_interaction(
+                availability.disabled,
+                retained.hovered,
+                focus.contains_focused(window, cx),
+            );
+        }
         let has_explicit_icon = self.icon.is_some();
         let icon_only = self.label.is_empty() && (has_explicit_icon || loading);
-        let style = ButtonStyle::from_tokens(
+        let mut style = ButtonStyle::from_tokens(
             &tokens,
             ButtonStyleOptions {
                 size: self.size.unwrap_or(config.size),
@@ -534,6 +565,7 @@ impl RenderOnce for Button {
                 icon_only,
             },
         );
+        self.visual_override.apply(&mut style, icon_only);
         let target = if availability.disabled {
             style.rest
         } else if retained.keyboard_pressed || (retained.pointer_armed && retained.hovered) {
@@ -748,6 +780,9 @@ impl RenderOnce for Button {
         }
         let mut surface = apply_colors(content, current);
         surface.style().refine(&self.style);
+        if let Some(group) = &self.group {
+            group.apply_style(surface.style());
+        }
         let effective = surface.style();
         let radii = gpui::Corners {
             top_left: effective.corner_radii.top_left.unwrap_or_default(),
@@ -807,26 +842,41 @@ impl RenderOnce for Button {
                 .left(-widths.left)
                 .right(-widths.right)
         };
+        let mut joined_border: Option<crate::input::group::BorderPainter> = None;
         if dashed {
             let color = self.style.border_color.unwrap_or(current.border.to_hsla());
             let radius = radii.top_left;
             let width = widths.top;
             let weak = state.downgrade();
-            element = element.child(
-                overlay().child(
-                    canvas(
-                        |_, _, _| (),
-                        move |bounds, (), window, cx| {
-                            let _ = weak.update(cx, |state, _| {
-                                state
-                                    .dashed_border
-                                    .paint(bounds, radius, width, color, window);
-                            });
-                        },
-                    )
-                    .size_full(),
-                ),
-            );
+            if self.group.is_some() {
+                joined_border = Some(Box::new(move |bounds, opacity, window, cx| {
+                    let _ = weak.update(cx, |state, _| {
+                        state.dashed_border.paint(
+                            bounds,
+                            radius,
+                            width,
+                            color.opacity(opacity),
+                            window,
+                        );
+                    });
+                }));
+            } else {
+                element = element.child(
+                    overlay().child(
+                        canvas(
+                            |_, _, _| (),
+                            move |bounds, (), window, cx| {
+                                let _ = weak.update(cx, |state, _| {
+                                    state
+                                        .dashed_border
+                                        .paint(bounds, radius, width, color, window);
+                                });
+                            },
+                        )
+                        .size_full(),
+                    ),
+                );
+            }
         }
         let weak = state.downgrade();
         element = element.on_hover(move |hovered, _, cx| {
@@ -958,7 +1008,7 @@ impl RenderOnce for Button {
             Role::Button
         };
         let weak = state.downgrade();
-        let element = guard.install(element, move |activation, window, cx| {
+        let mut element = guard.install(element, move |activation, window, cx| {
             if href.is_some() && activation == Activation::Keyboard(gpui::KeyboardButton::Space) {
                 return;
             }
@@ -981,13 +1031,24 @@ impl RenderOnce for Button {
         if self.accessibility.label.is_none() && !self.label.is_empty() {
             self.accessibility.label = Some(self.label);
         }
+        if let Some(group) = &self.group {
+            let ring = (focus.is_focused(window) && window.last_input_was_keyboard()).then(|| {
+                FocusRing::new(style.focus_color.to_hsla(), px(style.focus_width as f32))
+                    .with_offset(px(style.focus_offset as f32))
+            });
+            element = group.decorate_with_border(element, ring, window, joined_border);
+        }
         self.accessibility.apply(
             FocusRing::new(
                 style
                     .focus_color
                     .with_alpha(style.focus_color.a * f64::from(opacity))
                     .to_hsla(),
-                px(style.focus_width as f32),
+                px(if self.group.is_some() {
+                    0.
+                } else {
+                    style.focus_width as f32
+                }),
             )
             .with_offset(px(style.focus_offset as f32))
             .radius(radii.top_left)

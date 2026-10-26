@@ -10,6 +10,10 @@ description = "Ant Design components for GPUI"
 [dependencies]
 # Keep the source, revision and features aligned with snow-draw-engine-gpui.
 gpui = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54c018f99419f386d1cf1105dca57661", default-features = false, features = ["gpu-extensions"] }
+unicode-segmentation = "1.13"
+unicode-bidi = "0.3"
+num-bigint = "0.4"
+num-traits = "0.2"
 
 [dev-dependencies]
 gpui = { git = "https://github.com/mg-chao/gpui.git", rev = "2c0bf70b54c018f99419f386d1cf1105dca57661", default-features = false, features = ["gpu-extensions", "test-support"] }
@@ -49,6 +53,10 @@ harness = false
 
 [[bench]]
 name = "switch"
+harness = false
+
+[[bench]]
+name = "input"
 harness = false
 
 [profile.dev]

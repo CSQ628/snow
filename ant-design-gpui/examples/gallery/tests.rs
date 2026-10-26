@@ -29,6 +29,8 @@ struct Fixture {
     _window: WindowHandle<UiRoot>,
 }
 
+mod input;
+
 #[test]
 fn switch_gallery_keeps_reference_order_and_supports_native_capture_selection() {
     assert_eq!(
@@ -175,7 +177,7 @@ impl Fixture {
             scope
                 .update_patch(cx, |patch| patch.motion = Some(false))
                 .unwrap();
-            let content = cx.new(|cx| Gallery::new(scope.clone(), cx));
+            let content = cx.new(|cx| Gallery::new(scope.clone(), window, cx));
             gallery = Some(content.clone());
             UiRoot::new(scope, content, window, cx)
         });
@@ -955,6 +957,8 @@ fn divider_gallery_navigation_uses_its_own_previews_and_scroll_anchors() {
         }
     }
     fixture.resize(1280.);
+    let sidebar = fixture.bounds("gallery.sidebar");
+    fixture.scroll(sidebar.center(), -400.);
     fixture.click("gallery.jump.divider-vertical");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");
@@ -966,6 +970,7 @@ fn divider_gallery_navigation_uses_its_own_previews_and_scroll_anchors() {
         .gallery
         .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
     assert_eq!(scroll.offset().y, px(0.));
+    fixture.scroll(sidebar.center(), 400.);
     fixture.click("gallery.navigation.button");
     assert_eq!(
         fixture

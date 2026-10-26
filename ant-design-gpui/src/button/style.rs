@@ -255,6 +255,30 @@ pub struct ButtonStyle {
     pub loading_opacity: f64,
 }
 
+/// Component composition can refine settled states before Button animates them.
+/// Keeping this as values avoids allocating a render callback for every control.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ButtonStyleOverride {
+    pub height: Option<f64>,
+    pub backgrounds: Option<[Color; 3]>,
+}
+
+impl ButtonStyleOverride {
+    pub(crate) fn apply(self, style: &mut ButtonStyle, icon_only: bool) {
+        if let Some(height) = self.height {
+            style.metrics.height = height;
+            if icon_only {
+                style.metrics.min_width = height;
+            }
+        }
+        if let Some([rest, hover, active]) = self.backgrounds {
+            style.rest.background = rest;
+            style.hover.background = hover;
+            style.active.background = active;
+        }
+    }
+}
+
 impl ButtonStyle {
     /// Resolve from cached component tokens without palette generation or global merging.
     pub fn resolve(theme: &ResolvedTheme, options: ButtonStyleOptions) -> Self {

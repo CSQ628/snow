@@ -1,9 +1,350 @@
 # Foundation validation
 
-Validated on 2026-10-26 using Windows x64, Rust 1.98.1 and an AMD Ryzen 9 5950X.
-GPUI remains pinned to `2c0bf70b54c018f99419f386d1cf1105dca57661`.
+## Input gallery reference examples (2026-10-26)
 
-## Automated checks
+The gallery now has separate Input and InputNumber pages matching the public demo
+order and titles in Ant Design 6.6.7, reference revision
+`f8f5595ab5e891fff6a2a06c5b3b98af643d008e`. Input contains 18 cards: 11 complete,
+six partial and one planned. InputNumber contains 14: 11 complete, two partial
+and one planned. Partial cards show supported rows and explain missing portions.
+The numeric-tooltip and spinner cards contain explanations without substitute
+controls. Addon/Select rows, custom password visibility icons, manual TextArea
+resizing and independent internal-part styles/callbacks remain pending.
+
+All changes use existing component APIs. Named retained entities keep preview
+values independent across navigation and display changes. Standard counts use
+UTF-16; custom emoji counts use Unicode scalars. The exact-decimal example steps
+by `0.00000000000001` and displays its initial value as `1`. Focus examples use
+public focus/selection APIs, preserve page scroll for prevent-scroll activation,
+and switch Input/TextArea without replacing the retained state. Library sources,
+dependencies and the standalone input verification app are unchanged.
+
+- Nine focused input gallery checks and seven related catalog/shell checks passed:
+  `cargo test --locked --offline --example gallery -- input_gallery input_number_gallery catalogue toolbar scrolling columns_follow demo_jumps presentation_changes gallery_options --test-threads=1`.
+- The nine input checks were rerun after native visual refinements. Coverage
+  includes exact reference order/statuses, navigation and jump anchors, isolated
+  values, search/action/clear events, loading suppression, password visibility,
+  compact submission, OTP formatting/disabled/masked/length/separator options,
+  counting and limits, autosizing, cursor placement, disabled/keyboard toggles,
+  bounds, exact decimal steps, formatter/parser round trips, focused wheel
+  stepping and silent external out-of-range Reset.
+- Both pages were checked at logical widths 1280, 1100 and 640 in light and
+  dark/compact/RTL configurations.
+- Strict Clippy passed for the gallery and tests. Changed Rust files passed
+  scoped rustfmt checks; whitespace checks and the native gallery build passed.
+- Native captures were visually inspected for both pages in light, narrow and
+  dark/compact/RTL configurations. Decorative icons explicitly receive the
+  active theme palette. Captures are under
+  `build/ant-design-gpui/input-examples/` in the repository root.
+
+The native executable was built with
+`cargo rustc --locked --offline --example gallery -- -C extra-filename=-input-examples`.
+Capture helpers stopped only the processes they launched. Only related tests
+were run; no complete test suite or benchmarks were executed.
+
+## Input validation (2026-10-26)
+
+The Input-specific GPUI patches have been removed. Current results are in
+[Public GPUI layout follow-up](#public-gpui-layout-follow-up). The original
+implementation results below are historical unless repeated in that follow-up;
+old native paragraph measurements do not apply to the public GPUI backend.
+
+Implemented Input, TextArea, PasswordInput, SearchInput, OtpInput, InputNumber and
+InputGroup using retained GPUI entities, native input handling and shared layout
+geometry. Windows implementation and the finite reference matrices below are
+verified. Platform and measurement limits are explicitly listed below.
+
+- `cargo test --locked --offline --lib -- input:: input_number:: button:: locale::tests`:
+  **186 passed**, 245 unrelated tests filtered out. This covers 123 input-family
+  cases, 60 Button checks for shared group/search integration and three locale checks.
+- Covered: grapheme navigation/deletion, UTF-16 range conversion, directional
+  selection, bounded edit-delta history, typing coalescence, composition commit
+  and cancellation, limits at IME completion, external replacement semantics,
+  clipboard guards, multiline Enter, auto-height row limits, disabled focus,
+  and refreshing stale geometry after text changes. A deterministic 250-operation
+  Unicode edit/undo/redo test and a paste above 64 KB also pass.
+- Additional coverage: password reveal with preserved selection/history and
+  protected clipboard export, Tab/Enter activation of the visibility button,
+  clear-click focus and undo, exact-once search events with source identification,
+  suppression during loading/composition, affix/count layout, persistent external
+  disabled state, application rebinding of scoped editor actions, and clear hit
+  areas/viewport separation under compact RTL configuration.
+- Action colors, frame colors/shadows and numeric handle width/opacity/heights
+  now transition using the reference ease/linear curves. Tests cover interruption,
+  premultiplied transparency, reduced motion, hidden windows, zero settled frames,
+  and retained geometry during foreground-color changes. Numeric controls restored
+  after disabling are immediately clickable; cancelled presses do not reappear.
+  Keyboard actions activate on key release and cancel across availability changes.
+  Independent browser measurements now check 1,440 timed samples across 96 cases
+  (four themes), covering normal transitions and partial reversals. CSS reversal
+  shortening is preserved for colors, shadows and numeric dimensions. The clear
+  action's keyboard-focus color is immediate, matching the upstream focus rule;
+  leaving keyboard focus restores the slow color transition.
+- OTP coverage includes full/partial paste, formatter/filter-before-limit,
+  Unicode masks, aggregate history, IME commit/cancellation, equal external
+  echoes, stale queued callbacks, holes and backspace, roving Tab focus,
+  RTL arrows, read-only/disabled protection and masked text export.
+- Group coverage includes horizontal/vertical and nested borders/corners,
+  inherited and explicit configuration, flexible composite widths, mixed numeric
+  editing, clipped/opacity-correct raised decoration and unchanged Tab order.
+  At 150% scaling, automatic-height inputs stretch to meet fixed-height buttons;
+  explicit small-child typography and radius remain intact.
+  Fitted dashed Button strokes now join the same deferred decoration queue;
+  a focused stroke remains above its neighbors with group opacity applied once.
+- Soft-wrap geometry retains upstream/downstream caret positions. Tests cover
+  pointer selection, Home/End, vertical movement and native IME range bounds.
+  Unchanged redraws reuse geometry; edits and viewport changes invalidate it.
+  RTL layout now aligns each wrapped row independently. Painted text, pointer
+  selection, range bounds and native IME anchors use the same offsets; empty
+  placeholders keep their caret at the right edge with its stroke inside the clip.
+  Direction changes invalidate geometry while preserving the value and selection.
+  Typing after replacing a selection now remains one undo transaction, verified
+  in both the editing model and native Windows keyboard input.
+- Commands issued before the next draw now refresh a shared paragraph cache.
+  Native `input --verify-navigation` passes batched Hebrew/mixed-direction arrows,
+  wrapped End/Down and immediate candidate bounds after a 200-character CJK edit.
+  Offscreen tests verify current revisions, scroll-to-caret and reuse of that exact
+  geometry by the next frame. A weak cache reference avoids retaining an unmounted
+  view through its editor state.
+- Caret coverage includes 500 ms blink timing, reset after editing, steady IME
+  preedit, selection/blur suppression and zero runnable blink tasks after reduced
+  motion or hidden-window cancellation. Drag tests cover pointer capture outside
+  the field, single-line horizontal and multiline vertical autoscroll, preserved
+  anchors, reverse direction, release and provider-disable cancellation.
+- Numeric coverage includes exact large integers and decimal steps, exponent
+  parsing, resource bounds, intermediate drafts, range/precision interaction,
+  finite standard values, representable range boundaries, parser/formatter
+  context, formatter cursor/undo/redo, native IME finalization, empty values,
+  read-only protection, stale queued edits after external replacement, Enter/blur
+  commits, keyboard/Shift stepping, focused opt-in wheel behavior, 600/200 ms
+  button repetition, and release/blur/disable/unmount cancellation. Provider
+  disabling cancels held work before the next rendered frame. Cancelled holds
+  clear their pressed appearance on blur or reenable.
+- AccessKit text runs preserve grapheme lengths, source selection direction,
+  multiline endpoints and scaled/scrolled character bounds; tests cover masked
+  export, stale/foreign selection rejection and AccessKit's u8 length limits.
+  SetValue, ReplaceSelectedText and SetTextSelection are wired to the editor.
+  Native Windows UIA now verifies Edit/Spinner roles, Unicode Value/Text patterns,
+  selections, keyboard editing and undo/redo, disabled/read-only/password flags,
+  protected text export, exact-decimal text, RangeValue updates/stepping, OTP
+  focus traversal and normal teardown. Run `scripts/test-input-accessibility.ps1`.
+  The native test also verifies password Tab/Space/Enter visibility activation,
+  protected Value/Text export while revealed, and undoable accessible search clearing.
+  Audible screen-reader announcements remain unverified.
+- `scripts/test-input-accessibility.ps1 -ChineseIme` passed with the installed
+  Windows Chinese IME: native preedit and candidate confirmation, one-step
+  undo/redo, Escape cancellation, numeric accepted-value isolation and restoration,
+  and OTP's deferred focus advance and aggregate undo. The test changes only the
+  fixture thread's IME mode and restores it. It exposed a pinned GPUI bridge
+  behavior: empty cancellation preedit lacks an end-composition callback.
+  The input adapter now handles that Windows sentinel without changing the
+  general cross-platform composition model. Candidate-popup visual placement
+  and other installed IMEs still need native checks.
+- `cargo test --locked --offline --lib locale::tests`: 3 passed. The typed
+  catalogs include all input action messages in en_US, zh_CN and zh_TW.
+- Strict Clippy for the library, tests, input/gallery examples and input benchmark passed.
+  The native `input` verification example builds.
+- The main gallery now includes fifteen Input examples covering text, password,
+  search, multiline/counts, availability, OTP, numeric formatting/exact values,
+  groups, external updates and component tokens. The final focused gallery run
+  passes five input/catalogue/toolbar tests; thirty unrelated tests were filtered out.
+  Divider navigation now scrolls its jump link into view after the new input entry
+  extended the sidebar; it restores the sidebar before switching back to Button. Native
+  light, dark/compact/RTL and 640-pixel-wide captures were inspected in
+  `build/ant-design-gpui/input-gallery*.png`. Input values survive navigation and
+  display changes; keyboard search, exact stepping, grouped Apply, external value
+  changes and programmatic focus were exercised.
+
+Implemented common APIs now include Input, TextArea, PasswordInput, SearchInput,
+InputNumber, OtpInput and InputGroup,
+prefix/suffix slots, clear actions, counts with advisory maxima/custom formatters,
+localized action labels, and namespaced editor key bindings. Search uses the
+existing Button and its loading lifecycle. Unchanged layouts reuse their shaped
+paragraphs and aggregate layout; painting shares geometry instead of copying it.
+
+Independent original-source browser measurements cover **52,416 settled states**:
+8,064 default-token Input/TextArea/InputNumber/unmasked OTP states; 24,192 states
+with typography, explicit geometry and color token patches; and 20,160 composite
+states with default/custom typography. The base/custom tests compare height,
+padding, font/line metrics, radius, border width and colors across four themes,
+three sizes, four variants, validation, availability and direction states.
+The composite matrix adds affixed Input, Password, counted TextArea, both Search
+actions, joined Input/Button groups and masked OTP. It checks frame geometry and
+colors, search-button dimensions/colors, affix/clear gaps, password-icon color and
+OTP mask typography/color. It does not assert every absolute child position or
+pixel-identical icon/glyph rasterization. See `fixtures/input/README.md` for exact
+coverage, provenance, stylesheet-order assumptions and regeneration.
+
+This comparison corrected inherited small-font defaults, font-dependent padding,
+underlined disabled-hover backgrounds, borderless affix padding, Search button
+variants/heights, hidden-clear spacing and masked OTP typography. Additional
+offscreen tests cover custom small Search stretching, clear-slot stability in
+both directions, mask centering and constrained/block OTP cell widths.
+Final native captures were inspected at 150% scaling:
+`build/ant-design-gpui/input-composite-final-light.png` (1620×1260),
+`input-composite-final-filled-typography.png` and
+`input-composite-final-dark-rtl.png` (both 1620×1560). The latter uses dark/compact,
+RTL, underlined composites and custom typography. The installed Chinese IME and
+native UIA suite passes on this final build; its output is saved in
+`build/ant-design-gpui/input-uia-final.txt`.
+
+The reference exposed and corrected intrinsic OTP sizing, underlined backgrounds
+and padding, fractional-scale borders, large TextArea line-height and the small
+underlined numeric radius rule. Native light and dark/compact/RTL captures were
+inspected in `build/ant-design-gpui/input-native-reference-adjusted*.png`.
+The subsequent `input-native-motion*.png` light and dark/compact/RTL captures
+are pixel-identical (zero changed pixels in both 1620×1260 images), verifying that
+the uniform-color glyph paint path preserves settled native rendering. Offscreen
+tests use mock fonts that do not rasterize glyphs; they verify retained geometry,
+not pixel output.
+
+Release diagnostics run through `scripts/run-input-perf.ps1`, which checks the
+repository's `windows-msvc-performance` preset and rejects non-Release builds.
+The 100,000-byte Unicode note workload records latency percentiles and process-wide
+allocation counts (including reallocation sizes). Representative measured CPU p50/p95:
+
+| Workload | p50 | p95 |
+| --- | ---: | ---: |
+| 100 KB middle edit + undo, editing model | 2.75 ms | 2.85 ms |
+| Large paste + undo + redo | 3.73 ms | 4.05 ms |
+| 52-control mixed form redraw | 1.99 ms | 2.24 ms |
+| 100 KB note warm redraw | 0.076 ms | 0.143 ms |
+| 100 KB note color change + redraw | 0.173 ms | 0.266 ms |
+| 100 KB edit/draw/undo/draw | 5.98 ms | 7.13 ms |
+| One 100 KB paragraph, warm redraw | 0.449 ms | 0.551 ms |
+| One 100 KB paragraph, edit/draw/undo/draw | 27.10 ms | 31.16 ms |
+
+Shared immutable value snapshots and exact geometry capacities reduced allocated
+bytes per warm note redraw from 423,180 to 23,796, and per edit/draw/undo/draw cycle
+from 27,876,013 to 8,553,705. Editing-model navigation/UTF-16 queries allocate
+nothing; a stale visual-navigation query can reshape the changed paragraph. The note
+retains 3,720,016 bytes of caret/cluster payload, plus text, indexes, paragraph
+layout and GPUI storage. Tests assert no scheduled frames for settled controls.
+These are diagnostic offscreen CPU measurements using GPUI's mock text system;
+they include allocator instrumentation and do not measure native font shaping,
+GPU presentation, physical input latency or total process memory. No hard latency
+threshold was agreed. Raw results are in the ignored performance build directory
+(`input-perf-composites-and-navigation.txt` for the final run). The edit workloads assert that insertion
+actually changed the value before drawing, including after disabled-color workloads.
+The single-paragraph case allocates about 50.2 MB per edit/draw/undo/draw pair
+because the entire paragraph is reshaped twice; this remains a performance
+limitation for very long paragraphs, distinct from the cached multi-paragraph case.
+
+`build/ant-design-gpui/input-native-numeric.png` and
+`input-native-numeric-dark-compact.png` were inspected at 150% display scaling
+(1620 by 1170 pixels). They add small standard-number, medium exact-decimal and
+large currency controls to the native surface. These are rendering smoke checks,
+not independent Ant Design browser comparisons. Numeric styles use the upstream
+InputNumber tokens, including filled-handle compositing, focused handle backgrounds,
+borderless separators, and RTL handle placement. Native RangeValue/Value-pattern
+operation is now tested; audible screen-reader text announcements remain unverified.
+
+The initial paragraph renderer used GPUI wrapped-line positioning. A hidden native
+Windows capture at 150% display scaling now renders 1620-by-1020 pixels to
+`build/ant-design-gpui/input-native-initial.png`. It was visually inspected for
+ordinary text, CJK, combining marks, emoji, multiline wrapping, sizes and variants.
+This is an implementation smoke check, not an Ant Design reference comparison.
+The initial 1-by-1 capture was resolved by explicitly resizing the hidden window
+before drawing; Win32 defers its initial placement while hidden.
+
+`build/ant-design-gpui/input-native-controls.png` adds password, joined search,
+clear, prefixes/suffixes and counts at 1620-by-1170 pixels. Comparing the initial
+control capture with the upstream style source identified the multiline clear
+icon's top alignment and count text color; those styles were corrected. These
+captures are still smoke checks, not independent visual comparison fixtures.
+The dark/compact/RTL capture also identified insufficient clear padding with
+compact tokens. The clear size now uses `fontSizeIcon`, and reserved padding is
+at least the icon's full inline extent plus a one-pixel gap. The corresponding
+offscreen test verifies both viewport separation and pointer activation.
+
+### Public GPUI layout follow-up
+
+The renderer now uses the existing `shape_text` / `WrappedLine` path on all
+platforms. Horizontal navigation follows logical grapheme and word boundaries,
+as in GPUI Kit (reference commit `611b55e331170ca375214d580b6c5409db858f83`).
+The Windows DirectWrite paragraph extension, both vendored crates, the vendoring
+script, native-paragraph benchmark and browser-bidi acceptance fixture were removed.
+Cargo resolves the same shared GPUI Git revision without workspace patches.
+
+The retained geometry cache provides wrapping, hit testing, selection, accessibility
+and immediate IME range queries. Wrapped-row affinity remains necessary. Full
+Arabic/Hebrew shaping, mixed-direction selection fragments and ligature caret
+precision are limited by the existing GPUI backend. RTL control alignment remains.
+GPUI Kit uses a different pinned GPUI package; this change follows its public-API
+architecture and logical navigation, not a claim of identical backend rendering.
+
+Current Windows x64 verification on 2026-10-26:
+
+- `cargo test --locked --offline --lib -- input:: input_number::`: **121 passed**,
+  308 unrelated tests filtered out. This includes new logical navigation checks
+  for Hebrew, mixed text, Arabic, CJK, combining marks and emoji in both layout
+  directions, plus the retained IME, wrapping, masking, history and geometry tests.
+- `cargo build --locked --offline --example input` and native
+  `input.exe --verify-navigation`: passed against the unmodified Git dependency.
+- `cargo test --locked --offline --example gallery -- input_gallery
+  catalogue_keeps toolbar_controls`: **5 passed**, 30 unrelated tests filtered out.
+- `scripts/test-input-accessibility.ps1 -SkipBuild -ChineseIme`: passed, including
+  Unicode Text/Value patterns, logical mixed-text navigation/selection, protected
+  passwords, native undo/redo, Chinese preedit/candidate confirmation/cancellation,
+  numeric draft isolation and OTP focus/aggregate history.
+- `cargo clippy --locked --offline --lib --tests --example input --example gallery
+  --bench input -- -D warnings` and `cargo fmt --all --check`: passed.
+- Light and dark/compact/RTL captures at 150% scaling were visually inspected:
+  `build/ant-design-gpui/input-unpatched-{light,rtl}.png`. Ordinary/CJK text,
+  multiline wrapping, passwords and composites render coherently. Mixed
+  Arabic/Hebrew rendering retains the known GPUI limitation; no browser-bidi
+  correctness claim is made.
+- Windows-target Cargo metadata confirms both `gpui` and `gpui_windows` resolve
+  to Git revision `2c0bf70b54c018f99419f386d1cf1105dca57661`, with no path patches.
+  The license collector passed: 486 notices, 256 external runtime Rust packages
+  and 38 repository vcpkg packages. The new bundle is
+  `build/ant-design-gpui/input-unpatched-license-audit/third-party/`.
+
+The existing gallery process holds `debug/examples/gallery.exe` open, preventing
+an in-place relink (LNK1104). It was left running. A native gallery build passed
+with `cargo rustc --locked --offline --example gallery -- -C extra-filename=-unpatched`,
+producing `debug/examples/gallery-unpatched.exe`; the focused integration tests
+also passed. No full test suite or new performance benchmark was run.
+macOS/Linux native behavior remains unverified.
+
+### Requirement coverage and remaining limits
+
+| Requirement | Implementation and verification |
+| --- | --- |
+| Basic editing and Unicode | Grapheme/UTF-16 model, native input handler, selection, clipboard, undo/redo, word/line navigation; deterministic tests and native UIA/Chinese IME |
+| Text variants | Single/multiline, password reveal, Search, auto-height and segmented OTP; retained-state tests, native interactions and reference matrices |
+| Common configuration | Sizes, variants, validation, placeholder, clear, affixes, counts/limits, disabled/read-only; token matrices and rendered layout tests |
+| Numeric values | Finite standard values, exact decimal, empty/intermediate drafts, ranges, precision, parser/formatter and all step sources; model, offscreen and native Spinner tests |
+| Groups | Joined borders/corners, inherited sizing, flex layout and raised focus; offscreen geometry/clipping/Tab tests and reference styles |
+| Application integration | Silent external setters, readable retained values, change/commit events, programmatic focus; deterministic and gallery tests |
+| Accessibility/localization | AccessKit roles, protected values, text selection/actions and numeric ranges; Windows UIA and complete en_US/zh_CN/zh_TW typed catalogs |
+
+Known discrepancies and unverified areas:
+
+- Windows native rendering and accessibility are verified. macOS/Linux retain
+  the public GPUI backend and need native testing, especially mixed bidi text.
+- Left/Right and word movement use logical source order in both layout directions.
+  Browser-equivalent visual navigation and bidi geometry are outside this scope.
+- Search's filled hover treatment follows the Search-specialized CSS order in
+  the fixture; an Ant application registering equal-specificity Button styles
+  later can paint a different hover background.
+- Native UIA verifies accessible semantics, but audible Narrator announcements
+  were not manually verified. Chinese composition/candidate confirmation and
+  native candidate geometry pass; the visible candidate-popup position and other
+  installed IMEs were not visually verified. UIA's managed client reports empty
+  degenerate caret rectangles, so native geometry tests cover caret bounds.
+- Browser measurements and native captures establish style/geometry fidelity for
+  the listed matrices, not pixel-identical glyph rasterization or an exhaustive
+  raster comparison of every state and arbitrary custom token combination.
+- Very long single-paragraph edits still reshape that paragraph. Cached
+  redraws avoid reshaping. GPU presentation and end-to-end physical input latency
+  were not measured; no hard latency threshold was agreed.
+
+The original formatting, Clippy, focused tests and native-example results are
+historical; current verification is recorded in the follow-up above. Only related tests were run for this input implementation;
+the repository-wide and unfiltered crate suites were not run.
+
+## Historical foundation checks
 
 - `cargo fmt --check`: passed.
 - `cargo check --locked --offline --lib --examples --benches`: passed.

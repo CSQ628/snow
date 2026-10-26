@@ -47,6 +47,14 @@ common_messages! {
     sortable => Sortable,
     show => Show,
     hide => Hide,
+    clear_input => ClearInput,
+    search => Search,
+    show_password => ShowPassword,
+    hide_password => HidePassword,
+    increase_value => IncreaseValue,
+    decrease_value => DecreaseValue,
+    verification_code => VerificationCode,
+    code_character => CodeCharacter,
 }
 
 /// Locale identity is metadata, never a translated display label.
@@ -88,6 +96,14 @@ impl Locale {
                     sortable: "sortable".into(),
                     show: "Show".into(),
                     hide: "Hide".into(),
+                    clear_input: "Clear input".into(),
+                    search: "Search".into(),
+                    show_password: "Show password".into(),
+                    hide_password: "Hide password".into(),
+                    increase_value: "Increase value".into(),
+                    decrease_value: "Decrease value".into(),
+                    verification_code: "Verification code".into(),
+                    code_character: "Character {index} of {length}".into(),
                 },
             })
         });
@@ -104,6 +120,14 @@ impl Locale {
                     sortable: "可排序".into(),
                     show: "显示".into(),
                     hide: "隐藏".into(),
+                    clear_input: "清空输入".into(),
+                    search: "搜索".into(),
+                    show_password: "显示密码".into(),
+                    hide_password: "隐藏密码".into(),
+                    increase_value: "增加数值".into(),
+                    decrease_value: "减少数值".into(),
+                    verification_code: "验证码".into(),
+                    code_character: "第 {index} 位，共 {length} 位".into(),
                 },
             })
         });
@@ -120,6 +144,14 @@ impl Locale {
                     sortable: "可排序".into(),
                     show: "顯示".into(),
                     hide: "隱藏".into(),
+                    clear_input: "清空輸入".into(),
+                    search: "搜尋".into(),
+                    show_password: "顯示密碼".into(),
+                    hide_password: "隱藏密碼".into(),
+                    increase_value: "增加數值".into(),
+                    decrease_value: "減少數值".into(),
+                    verification_code: "驗證碼".into(),
+                    code_character: "第 {index} 位，共 {length} 位".into(),
                 },
             })
         });

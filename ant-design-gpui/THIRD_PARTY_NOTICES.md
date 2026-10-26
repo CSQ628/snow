@@ -5,7 +5,7 @@ Adapted algorithms, translations and artwork retain the upstream MIT notices.
 
 ## Ant Design
 
-Theme derivation, token defaults, Button, Checkbox, Radio, Divider and Tag visual rules, gallery examples and descriptions,
+Theme derivation, token defaults, Button, Checkbox, Radio, Divider, Tag and Input visual rules, gallery examples and descriptions,
 and common translations are adapted from
 Ant Design 6.6.7, commit `f8f5595ab5e891fff6a2a06c5b3b98af643d008e`:
 https://github.com/ant-design/ant-design
@@ -92,8 +92,11 @@ The original notice is also preserved in `licenses/ant-design-icons-MIT.txt`.
 
 ## GPUI and resolved Rust dependencies
 
-The runtime dependency is `gpui` 0.2.2 (Apache-2.0) from `mg-chao/gpui`, revision
-`2c0bf70b54c018f99419f386d1cf1105dca57661`. Native platform support, test support,
+The native UI runtime is `gpui` 0.2.2 (Apache-2.0) from `mg-chao/gpui`, revision
+`2c0bf70b54c018f99419f386d1cf1105dca57661`. GPUI and its Windows backend resolve
+directly to that Git revision without local patches. Their Apache-2.0 notices
+are included by the dependency collector in the distributable license bundle.
+Native platform support, test support,
 Serde and JSON are development-only dependencies. Resolved versions and checksums
 are recorded in `Cargo.lock`; transitive dependencies retain their own licenses.
 
@@ -102,8 +105,16 @@ Regenerate distributable notices using the repository's
 target platform. The local bundle is written beneath
 `../build/ant-design-gpui/licenses/third-party/`.
 
-The collector was run on 2026-10-26 against the locked Windows x64 runtime
-dependency graph: 482 notices covering 254 Rust packages and 38 vcpkg packages.
+Input editing also directly uses `unicode-segmentation` 1.13.3 and
+`unicode-bidi` 0.3.18; exact numeric support uses `num-bigint` 0.4.8 and
+`num-traits` 0.2.19. Each is licensed under MIT OR Apache-2.0. Their original
+license files are included in the generated dependency bundle.
+
+The collector passed on 2026-10-26 with 486 notices covering 256 external runtime
+Rust packages and 38 repository vcpkg packages. The input implementation audit is under
+`../build/ant-design-gpui/input-unpatched-license-audit/third-party/` and uses the documented
+fallback license directory below. GPUI Kit was consulted as an architectural
+reference; no source was copied and no GPUI Kit dependency was added.
 
 The shared collector also includes vcpkg and repository attribution records;
 this independent library does not link those Qt/vcpkg packages. Canonical

@@ -170,8 +170,12 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "num-bigint",
+ "num-traits",
  "serde",
  "serde_json",
+ "unicode-bidi",
+ "unicode-segmentation",
 ]
 
 [[package]]
