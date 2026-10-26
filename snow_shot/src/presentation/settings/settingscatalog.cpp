@@ -2082,6 +2082,7 @@ SettingsItemDefinition copyTranslationResultsAsImageItem() {
 
 QVector<SettingsOptionDefinition> trayClickActionOptions() {
     return {
+        {QStringLiteral("none"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "None"))},
         {QStringLiteral("screenshot"),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Screenshot"))},
         {QStringLiteral("show_main_window"),

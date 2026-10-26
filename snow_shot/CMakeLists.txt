@@ -3593,6 +3593,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         NAME snow-shot-system-tray-controller-tests
         COMMAND snow-shot-system-tray-controller-tests
     )
+    add_test(NAME snow-shot-tray-click-action-tests
+        COMMAND snow-shot-system-tray-controller-tests --click-actions-only -platform offscreen)
+    set_tests_properties(snow-shot-tray-click-action-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30 SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-pinned-visibility-tray-tests
         COMMAND snow-shot-system-tray-controller-tests --hide-show-tray-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-visibility-tray-tests PROPERTIES
