@@ -391,10 +391,15 @@ void scrollingExportFileImports(const QString& directory, QSize size = {2048, 32
             check(split.document()->image());
             split.shutdown();
         }
+        // Large imports must also detect content when the suffix names a different codec.
+        const auto mislabeledPath =
+            path +
+            (format == snow::image::Format::png ? QStringLiteral(".bmp") : QStringLiteral(".png"));
+        require(file.rename(mislabeledPath), "rename the large export to a misleading suffix");
         {
             CollageWindow stitch;
             stitch.present();
-            stitch.addFiles({path});
+            stitch.addFiles({mislabeledPath});
             idle(stitch);
             require(stitch.document()->items().size() == 1,
                     "stitching imports the exported scrolling image");

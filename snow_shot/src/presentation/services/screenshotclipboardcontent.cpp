@@ -212,27 +212,6 @@ constexpr EncodedImageFormat kEncodedImageFormats[] = {
 using snow_shot::image::ImageFileFormat;
 using snow_shot::image::kImageFileFormats;
 
-snow::image::Format imageFileCodecFormat(snow_shot::image::ImageFileCodec codec) {
-    using Codec = snow_shot::image::ImageFileCodec;
-    switch (codec) {
-    case Codec::Gif:
-        return snow::image::Format::gif;
-    case Codec::Png:
-        return snow::image::Format::png;
-    case Codec::Jpeg:
-        return snow::image::Format::jpeg;
-    case Codec::WebP:
-        return snow::image::Format::webp;
-    case Codec::Jxl:
-        return snow::image::Format::jxl;
-    case Codec::Avif:
-        return snow::image::Format::avif;
-    case Codec::Bmp:
-        return snow::image::Format::bmp;
-    }
-    return snow::image::Format::unknown;
-}
-
 QImage normalizedImage(QImage image, bool imageImport = false) {
     if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
         return {};
@@ -636,7 +615,9 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
         return ScreenshotClipboardContentReader::decode(std::move(textSnapshot), cancelled,
                                                         textAllocate);
     }
-    const auto codecFormat = imageFileCodecFormat(format->codec);
+    // The suffix routes image/document imports, but only the bytes determine the image codec.
+    // Reuse the decoder's existing probe rather than trying the suffix codec and decoding again.
+    constexpr auto codecFormat = snow::image::Format::unknown;
     if ((allocate || firstFrameOnly) &&
         !admitImage(snow_shot::image_codec::inspectCanvasSize(encoded, codecFormat),
                     retained + encoded.size(), allocate,
@@ -670,8 +651,7 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
     }
     if (!animationError.isEmpty() || cancellationRequested(cancelled))
         return std::nullopt;
-    return imageContent(snow_shot::image_codec::decode(encoded, codecFormat,
-                                                       QByteArray("image/") + format->suffix));
+    return imageContent(snow_shot::image_codec::decode(encoded, codecFormat, nullptr));
 }
 
 } // namespace

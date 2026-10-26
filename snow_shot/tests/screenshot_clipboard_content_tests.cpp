@@ -112,6 +112,100 @@ void clipboardImagesTakePriorityOverAccompanyingFiles() {
             "missing clipboard MIME data must not offer file imports");
 }
 
+void imageFilesDecodeByContent() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "content detection fixture directory must exist");
+    QImage source(32, 24, QImage::Format_RGB888);
+    source.fill(Qt::green);
+    source.setPixelColor(0, 0, Qt::red);
+    source.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+    for (const auto* encoding : {"JPEG", "PNG"}) {
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        require(buffer.open(QIODevice::WriteOnly) && source.save(&buffer, encoding),
+                "encode content detection fixture");
+        const auto format =
+            QByteArray(encoding) == "JPEG" ? snow::image::Format::jpeg : snow::image::Format::png;
+        const auto reference = snow_shot::image_codec::decode(bytes, format, nullptr);
+        require(!reference.isNull(), "correctly identified reference must decode");
+        const auto wrongFormat = format == snow::image::Format::jpeg ? snow::image::Format::png
+                                                                     : snow::image::Format::jpeg;
+        require(snow_shot::image_codec::decode(bytes, wrongFormat, nullptr).isNull() &&
+                    snow_shot::image_codec::inspectSize(bytes, wrongFormat).isEmpty(),
+                "explicit format constraints must continue to reject mismatched payloads");
+        require(snow_shot::image_codec::inspectSize(bytes, snow::image::Format::unknown) ==
+                    reference.size(),
+                "automatic inspection must report the encoded image size");
+        const auto automatic =
+            snow_shot::image_codec::decode(bytes, snow::image::Format::unknown, nullptr);
+        require(automatic == reference, "automatic packed decoding must preserve pixels");
+        for (const auto& suffix :
+             ScreenshotClipboardContentReader::supportedImageFileExtensions()) {
+            const auto path = directory.filePath(QStringLiteral("image.") + suffix);
+            QFile file(path);
+            require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(),
+                    "write image with a potentially misleading extension");
+            file.close();
+            const auto bgra =
+                snow_shot::image_codec::decodeFileBgra(path, snow::image::Format::unknown);
+            require(bgra.convertToFormat(reference.format()) == reference &&
+                        bgra.colorSpace() == reference.colorSpace(),
+                    "automatic BGRA file decoding must preserve pixels and profiles");
+            const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
+            require(files.size() == 1, "supported image suffix must reach content detection");
+            ScreenshotClipboardContentSnapshot snapshot;
+            snapshot.localImage = files.first();
+            for (const bool budgeted : {false, true}) {
+                const auto content = ScreenshotClipboardContentReader::decode(
+                    snapshot, {},
+                    budgeted ? ScreenshotClipboardContentReader::AllocationCheck(
+                                   [](qint64) { return true; })
+                             : ScreenshotClipboardContentReader::AllocationCheck{});
+                require(content && content->image == reference &&
+                            content->image.colorSpace() == reference.colorSpace() &&
+                            content->sourceIdentity == files.first().sourceIdentity &&
+                            content->originalContent.localFilePath == path,
+                        "file content determines decoding and admission regardless of suffix");
+            }
+            const auto preview = ScreenshotClipboardContentReader::decodeImageFile(files.first());
+            require(preview == reference && preview.colorSpace() == reference.colorSpace(),
+                    "first-frame import must also detect the encoded format");
+            require(!ScreenshotClipboardContentReader::decode(snapshot, {},
+                                                              [](qint64) { return false; }) &&
+                        ScreenshotClipboardContentReader::decodeImageFile(files.first(),
+                                                                          [] { return true; })
+                            .isNull(),
+                    "content detection must preserve admission and cancellation checks");
+            require(
+                !ScreenshotClipboardContentReader::decode(
+                    snapshot, {}, [&](qint64 requested) { return requested <= bytes.size() + 1; }),
+                "mislabeled files must pass decoded-size admission before raster allocation");
+        }
+    }
+    for (const auto& fixture : pinned_animation_fixtures::images()) {
+        const auto reference = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+        require(reference && reference->isAnimated(), "animation fixture must decode");
+        const auto path = directory.filePath(QStringLiteral("animation.jpg"));
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "write animation with a still-image suffix");
+        file.close();
+        const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
+        require(files.size() == 1, "snapshot mislabeled animation");
+        ScreenshotClipboardContentSnapshot snapshot;
+        snapshot.localImage = files.first();
+        const auto content =
+            ScreenshotClipboardContentReader::decode(snapshot, {}, [](qint64) { return true; });
+        require(content && content->animationSource &&
+                    content->animationSource->encoded == fixture.bytes &&
+                    content->image == reference->firstFrame &&
+                    ScreenshotClipboardContentReader::decodeImageFile(files.first()) ==
+                        reference->firstFrame,
+                "mislabeled animations must retain playback and composited preview semantics");
+    }
+}
+
 void bmpFilesPreservePixelsAndIdentity() {
     QTemporaryDir directory;
     require(directory.isValid(), "BMP import fixture directory must exist");
@@ -1851,6 +1945,7 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
     if (application.arguments().contains(QStringLiteral("--import-routing-only"))) {
+        imageFilesDecodeByContent();
         clipboardImagesTakePriorityOverAccompanyingFiles();
         return EXIT_SUCCESS;
     }
@@ -1864,6 +1959,7 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
     imageFileExtensionsMatchShellRegistration();
+    imageFilesDecodeByContent();
     clipboardImagesTakePriorityOverAccompanyingFiles();
     embeddedImagesUseManagedCachedPixels();
     if (application.arguments().contains(QStringLiteral("--embedded-images-only"))) {
