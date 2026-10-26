@@ -132,3 +132,111 @@ iteration also asserts that idle controls schedule zero animation frames.
 These measurements vary with host load. The final raw output is in
 `build/ant-design-gpui/button-performance.txt`; no hardware-independent timing
 threshold is imposed by tests.
+
+## Button refinement validation (2026-10-26)
+
+The refined control uses one native GPUI root for parent layout, input, semantics
+and painting. Percentage widths, flex growth, margins, styled borders and custom
+corners therefore share the same focus and hit bounds. Icon/content refinements
+retain independent styling; inherited line heights scale with their font sizes.
+Chinese two-character tracking uses a single native text shape without modifying
+the text system's cached layout. Loader entry/exit scales its atlas artwork and
+keeps the default spinner rotating until it leaves.
+Subtle hover backgrounds interpolate continuous alpha; hyperlink controls do not
+paint a pressed state for Space.
+
+- `cargo test --locked --offline --lib button::`: **59 passed**, 58 filtered out.
+  This includes **2,208 independently captured browser style comparisons** across
+  four themes and three interaction states. Icon font sizes and artwork bounds
+  are now checked as well as the control's complete visual tokens.
+- `cargo test --locked --offline --example gallery`: **7 passed**. The gallery
+  now contains nine complete previews, including interactive Loading and semantic
+  styling. Its loading regression verifies keyboard/pointer activation, retained
+  busy focus, repeated activation suppression and the exact three-second reset.
+- The focused shared focus-outline, traversal/input-modality and monochrome icon
+  atlas-reuse regressions each passed.
+- `cargo check --locked --offline --lib --examples --benches`, strict Clippy for
+  the library/tests/Button and gallery examples/Button benchmark, `cargo fmt
+  --check`, and `git diff --check` passed.
+- `scripts/test-button-accessibility.ps1 -SkipBuild` passed against the rebuilt
+  native example: roles/names, focus, exactly-once Invoke/Enter/Space, availability,
+  delayed loading, theme/density/RTL changes and normal teardown.
+
+Native light and dark/compact/RTL captures were visually inspected. A separate
+24-control native/browser probe at **150%** display scaling compared English and
+Chinese labels in all three sizes, including disabled, loading and automatic
+spacing opt-outs. Every height matched exactly; all widths differed by at most
+one physical pixel. Automatically spaced resting/disabled Chinese labels differed
+by less than **0.063 logical pixels**. Text antialiasing remains renderer-specific.
+Captures, source and measurements are under the ignored
+`build/ant-design-gpui/cjk-parity/` and `button-reference/` directories.
+
+A second native probe verified independently colored 20px icons and 18px English
+and Chinese labels, proportional 24px root typography, explicit icon-only size
+precedence, individual styled corners and exact full-width parent layout. Its
+capture, measurements and source are under `build/ant-design-gpui/semantic-parity/`.
+
+The probe exposed a reference-adapter error: the upstream style hook supplies a
+root class when registering common styles. The adapter now supplies that class,
+so font resets affect the root and large icons correctly inherit 16px (14px in
+compact themes). All browser fixtures and source provenance were regenerated.
+
+The Button-only Release benchmark passed under the verified
+`windows-msvc-performance` preset. A final sample after unrelated compiler
+processes exited gave:
+
+| Workload | Final mean time |
+| --- | ---: |
+| Style from cached component tokens | 16.6 ns |
+| Style including cached theme lookup | 40.3 ns |
+| Builder with label, primary type and icon | 73.6 ns |
+| Warm redraw of 100 buttons | 1.61 ms |
+| Warm redraw of 100 buttons with icons | 2.28 ms |
+| Warm redraw of 100 dashed buttons | 2.18 ms |
+
+Earlier diagnostic samples overlapped unrelated C++ compilation on the shared
+host: plain grids ranged from 1.56–1.73 ms, icon grids 2.31–3.30 ms and dashed grids
+2.33–3.58 ms. These samples do not establish a precise speedup over the earlier
+run. Every redraw iteration still asserted zero scheduled idle frames. Raw
+results are in
+`build/ant-design-gpui/button-refinement-performance.txt` and
+`button-refinement-performance-second-sample.txt`; the final sample is
+`button-refinement-performance-final.txt`. Default and monochrome custom loaders
+reuse GPU atlas transforms. Opt-in colored-icon rotation uses CPU raster variants
+on this pinned GPUI backend; static colored loaders have no frame loop.
+
+No complete library or repository test suite was run. macOS/Linux native rendering
+and accessibility still require validation on their respective platforms.
+
+## Gallery refinement validation (2026-10-26)
+
+The gallery now has persistent theme/density/direction/motion controls, anchored
+example navigation, a reachable Back to top action, a responsive icon rail and
+title-first preview cards. Planned previews state their missing capabilities
+without rendering substitute controls. The reference demo order and all 90 real
+Button controls are retained. Its Color & Variant matrix uses Small below the
+theme's `screen_xxl` breakpoint and Medium at or above it, as upstream does.
+
+- `cargo test --locked --offline --example gallery`: **11 passed**.
+- Strict Clippy for the gallery and `cargo fmt --check`: passed.
+- Native build passed with `cargo rustc --locked --offline --example gallery --
+  -C extra-filename=-refined`. The alternate filename preserved an existing
+  running gallery whose executable was locked by Windows.
+- Native light and dark/compact/RTL captures at 1280×900 and a narrow capture at
+  640×720 were inspected at 150% display scaling. The icon rail, persistent
+  toolbar, controls, descriptions and single-column cards fit the narrow window.
+
+The focused tests cover padded-width breakpoints, sidebar/toolbar independence
+from page scrolling, planned-card status, keyboard toolbar activation/traversal,
+live theme composition, nested anchor jumps after scrolling/resizing, top reset,
+scroll clamping after density changes, retained loading/callback behavior and CLI
+flags including valid/invalid explicit window sizes.
+
+Native screenshots are in `build/ant-design-gpui/gallery-refinement/`:
+`light-final.png`, `dark-compact-rtl-final.png` and `narrow-640-cli.png`. A background
+UI Automation probe could not inspect the hidden window's toolbar; native toolbar
+UI Automation has not been confirmed. Keyboard and activation behavior passed
+through the actual GPUI element path in the offscreen tests.
+
+Only the gallery's focused tests were run for this refinement; no complete
+library or repository test suite was run.

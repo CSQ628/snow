@@ -25,7 +25,7 @@ struct Consumer {
     semantics: Rc<RefCell<accesskit::Node>>,
     disabled: Option<bool>,
     loading: bool,
-    custom_loader: bool,
+    custom_loader: Option<IconName>,
     delay: Duration,
     visible: bool,
     second_visible: bool,
@@ -41,6 +41,11 @@ struct Consumer {
     block: bool,
     auto_space: bool,
     href: bool,
+    wave: bool,
+    spin_loader: Option<bool>,
+    style: StyleRefinement,
+    icon_style: Option<StyleRefinement>,
+    content_style: Option<StyleRefinement>,
 }
 
 impl Consumer {
@@ -53,7 +58,7 @@ impl Consumer {
             semantics: Rc::new(RefCell::new(accesskit::Node::new(Role::Button))),
             disabled: None,
             loading: false,
-            custom_loader: false,
+            custom_loader: None,
             delay: Duration::ZERO,
             visible: true,
             second_visible: true,
@@ -69,6 +74,11 @@ impl Consumer {
             block: false,
             auto_space: true,
             href: false,
+            wave: true,
+            spin_loader: None,
+            style: StyleRefinement::default(),
+            icon_style: None,
+            content_style: None,
         }
     }
 }
@@ -94,9 +104,20 @@ impl Render for Consumer {
                 .shape(self.shape)
                 .block(self.block)
                 .auto_insert_space(self.auto_space)
+                .wave(self.wave)
                 .automation_id("button-test.first")
                 .accessibility_description("Save the current document")
                 .on_click(move |activation, _, _| activations.borrow_mut().push(*activation));
+            button.style().refine(&self.style);
+            if let Some(spin) = self.spin_loader {
+                button = button.loading_icon_spin(spin);
+            }
+            if let Some(style) = &self.icon_style {
+                button = button.icon_style(style.clone());
+            }
+            if let Some(style) = &self.content_style {
+                button = button.content_style(style.clone());
+            }
             if let Some(disabled) = self.disabled {
                 button = button.disabled(disabled);
             }
@@ -119,8 +140,8 @@ impl Render for Consumer {
             if self.href {
                 button = button.href("https://example.invalid/button-test");
             }
-            if self.custom_loader {
-                button = button.loading_icon(IconName::HeartTwoTone);
+            if let Some(icon) = self.custom_loader {
+                button = button.loading_icon(icon);
             }
             // Inspect the very same element that is subsequently laid out and painted.
             let element = button.render(window, cx).into_element();
@@ -971,7 +992,7 @@ fn inserted_loader_expands_and_shrinks_smoothly_then_stops_scheduling_frames() {
 fn replacing_an_existing_icon_preserves_width_and_a_static_loader_has_no_frame_loop() {
     let mut fixture = Fixture::with_motion(true, |consumer| {
         consumer.loading = true;
-        consumer.custom_loader = true;
+        consumer.custom_loader = Some(IconName::HeartTwoTone);
         consumer.icon = true;
         consumer.second_visible = false;
     });
@@ -1143,4 +1164,364 @@ fn two_chinese_character_spacing_changes_visual_width_and_preserves_accessible_n
     let with_icon = fixture.body().0.bounds.size.width;
     fixture.edit(|consumer| consumer.auto_space = false);
     assert_eq!(fixture.body().0.bounds.size.width, with_icon);
+}
+
+#[test]
+fn native_root_refinements_fill_parent_and_keep_focus_and_hit_testing_aligned() {
+    let mut fixture = Fixture::configured(|consumer| {
+        consumer.second_visible = false;
+        consumer.style = StyleRefinement::default().w_full().rounded(px(12.));
+    });
+    let (body, scale) = fixture.body();
+    assert_eq!(body.bounds.size.width.0 / scale, 276.);
+    fixture.key("tab");
+    fixture
+        .cx
+        .update_window(fixture.window.into(), |_, window, cx| {
+            let ring = window
+                .rendered_scene()
+                .quads
+                .iter()
+                .find(|quad| (quad.border_widths.left.0 / scale - 3.).abs() < 0.01)
+                .unwrap();
+            assert_eq!(ring.bounds.size.width.0 / scale, 284.);
+            assert_eq!(ring.corner_radii.top_left.0 / scale, 16.);
+            for down in [true, false] {
+                let position = point(px(270.), px(24.));
+                let event = if down {
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position,
+                        ..Default::default()
+                    })
+                } else {
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Left,
+                        position,
+                        ..Default::default()
+                    })
+                };
+                window.dispatch_event(event, cx);
+            }
+        })
+        .unwrap();
+    assert_eq!(fixture.activations(), [Activation::Pointer]);
+}
+
+#[test]
+fn parent_flex_and_margin_refinements_apply_to_the_interactive_control() {
+    let mut fixture = Fixture::configured(|consumer| {
+        consumer.style = StyleRefinement::default().flex_1().ml(px(8.));
+    });
+    fixture
+        .cx
+        .update_window(fixture.window.into(), |_, window, _| {
+            let scale = window.scale_factor();
+            let mut surfaces: Vec<_> = window
+                .rendered_scene()
+                .quads
+                .iter()
+                .filter(|quad| {
+                    quad.border_widths.left.0 > 0. && quad.bounds.size.height.0 / scale == 32.
+                })
+                .collect();
+            // GPUI may split one stroke into four clipped scene quads.
+            surfaces.dedup_by_key(|quad| quad.bounds);
+            assert_eq!(surfaces.len(), 2);
+            assert_eq!(surfaces[0].bounds.origin.x.0 / scale, 20.);
+            assert!(surfaces[0].bounds.size.width.0 / scale > 150.);
+            assert_eq!(
+                (surfaces[1].bounds.origin.x.0 + surfaces[1].bounds.size.width.0) / scale,
+                288.
+            );
+        })
+        .unwrap();
+}
+
+#[test]
+fn refined_dashed_stroke_and_focus_use_the_painted_border_geometry() {
+    let mut fixture = Fixture::configured(|consumer| {
+        consumer.button_type = ButtonType::Dashed;
+        consumer.second_visible = false;
+        consumer.style = StyleRefinement::default().border(px(3.)).rounded(px(0.));
+    });
+    let (body, scale) = fixture.body();
+    assert_eq!(body.corner_radii.top_left.0, 0.);
+    fixture.key("tab");
+    fixture
+        .cx
+        .update_window(fixture.window.into(), |_, window, _| {
+            let path = &window.rendered_scene().paths[0];
+            assert!((path.bounds.origin.x.0 - body.bounds.origin.x.0).abs() < 0.001);
+            assert!((path.bounds.origin.y.0 - body.bounds.origin.y.0).abs() < 0.001);
+            assert!(
+                path.vertices.iter().any(|vertex| (vertex.xy_position.y.0
+                    - (body.bounds.origin.y.0 + 3. * scale))
+                    .abs()
+                    < 0.001),
+                "the fitted stroke must retain the custom three-pixel width"
+            );
+            let ring = window
+                .rendered_scene()
+                .quads
+                .iter()
+                .find(|quad| {
+                    quad.bounds.origin.x.0 < body.bounds.origin.x.0
+                        && (quad.border_widths.left.0 / scale - 3.).abs() < 0.01
+                })
+                .unwrap();
+            assert_eq!(ring.corner_radii.top_left.0 / scale, 4.);
+        })
+        .unwrap();
+}
+
+#[test]
+fn semantic_icon_and_label_refinements_preserve_control_name_and_activation() {
+    let red: gpui::Hsla = gpui::rgb(0xff0000).into();
+    let green: gpui::Hsla = gpui::rgb(0x008000).into();
+    let mut fixture = Fixture::configured(|consumer| {
+        consumer.icon = true;
+        consumer.second_visible = false;
+        consumer.icon_style = Some(
+            StyleRefinement::default()
+                .text_color(red)
+                .text_size(px(20.)),
+        );
+        consumer.content_style = Some(
+            StyleRefinement::default()
+                .text_color(green)
+                .bg(green)
+                .text_size(px(18.)),
+        );
+    });
+    fixture
+        .cx
+        .update_window(fixture.window.into(), |_, window, _| {
+            let scale = window.scale_factor();
+            let sprites = &window.rendered_scene().monochrome_sprites;
+            let icon = sprites.iter().find(|sprite| sprite.color == red).unwrap();
+            assert_eq!(icon.bounds.size.width.0 / scale, 20.);
+            assert!(
+                window
+                    .rendered_scene()
+                    .quads
+                    .iter()
+                    .any(|quad| quad.background.as_solid() == Some(green))
+                    || sprites.iter().any(|sprite| sprite.color == green)
+                    || window
+                        .rendered_scene()
+                        .subpixel_sprites
+                        .iter()
+                        .any(|sprite| sprite.color == green)
+            );
+        })
+        .unwrap();
+    assert_eq!(fixture.semantics().label(), Some("Save"));
+    fixture.key("tab");
+    fixture.key("enter");
+    assert_eq!(
+        fixture.activations(),
+        [Activation::Keyboard(KeyboardButton::Enter)]
+    );
+}
+
+#[test]
+fn inserted_loader_scales_reuses_its_atlas_tile_and_rotates_through_exit() {
+    let mut fixture = Fixture::with_motion(true, |consumer| consumer.second_visible = false);
+    fixture.edit(|consumer| consumer.loading = true);
+    fixture.frame(150);
+    let sprite = |fixture: &mut Fixture| {
+        fixture
+            .cx
+            .update_window(fixture.window.into(), |_, window, _| {
+                window.rendered_scene().monochrome_sprites[0]
+            })
+            .unwrap()
+    };
+    let entering = sprite(&mut fixture);
+    let transform_scale = |sprite: gpui::MonochromeSprite| {
+        let matrix = sprite.transformation.rotation_scale;
+        matrix[0][0].hypot(matrix[1][0])
+    };
+    assert!(transform_scale(entering) > 0. && transform_scale(entering) < 1.);
+    fixture.frame(150);
+    let expanded = sprite(&mut fixture);
+    assert_eq!(entering.tile.tile_id, expanded.tile.tile_id);
+    assert!((transform_scale(expanded) - 1.).abs() < 1e-6);
+    fixture.edit(|consumer| consumer.loading = false);
+    fixture.frame(100);
+    let departing = sprite(&mut fixture);
+    assert_eq!(departing.tile.tile_id, expanded.tile.tile_id);
+    assert_ne!(departing.transformation, expanded.transformation);
+    assert!(transform_scale(departing) > 0. && transform_scale(departing) < 1.);
+    let angle = departing.transformation.rotation_scale[1][0]
+        .atan2(departing.transformation.rotation_scale[0][0]);
+    assert!((angle - 0.8 * std::f32::consts::PI).abs() < 1e-5);
+    fixture.frame(200);
+    assert_eq!(fixture.frame(16), 0);
+}
+
+#[test]
+fn custom_monochrome_loader_rotation_is_opt_in_and_respects_reduced_motion() {
+    let mut fixture = Fixture::with_motion(true, |consumer| {
+        consumer.loading = true;
+        consumer.custom_loader = Some(IconName::SyncOutlined);
+        consumer.spin_loader = Some(false);
+        consumer.second_visible = false;
+    });
+    assert_eq!(fixture.frame(16), 0);
+    fixture.edit(|consumer| consumer.spin_loader = Some(true));
+    assert_eq!(fixture.frame(125), 1);
+    fixture.cx.update(|cx| cx.set_reduce_motion(true));
+    fixture.draw();
+    fixture.frame(16);
+    assert_eq!(fixture.frame(16), 0);
+}
+
+#[test]
+fn disabling_waves_or_using_href_keeps_clicks_free_of_wave_frames() {
+    for href in [false, true] {
+        let mut fixture = Fixture::with_motion(true, |consumer| {
+            consumer.href = href;
+            consumer.wave = href;
+            consumer.second_visible = false;
+        });
+        fixture.key("tab");
+        fixture.key("enter");
+        assert_eq!(
+            fixture.activations(),
+            [Activation::Keyboard(KeyboardButton::Enter)]
+        );
+        // A key press may have one final color frame pending; waves must not
+        // keep requesting frames after the normal color transition settles.
+        fixture.frame(200);
+        assert_eq!(fixture.frame(16), 0);
+    }
+}
+
+#[test]
+fn custom_font_sizes_inherit_proportional_line_height_and_respect_fixed_icon_tokens() {
+    let mut fixture = Fixture::configured(|consumer| {
+        consumer.icon = true;
+        consumer.second_visible = false;
+        consumer.style = StyleRefinement::default().text_size(px(24.)).h_auto();
+    });
+    let (body, scale) = fixture.body();
+    let expected = fixture.cx.update(|cx| {
+        let line_height = fixture.scope.snapshot(cx).theme.tokens.line_height as f32;
+        ((24. * line_height) * scale).round() / scale + 2.
+    });
+    assert_eq!(body.bounds.size.height.0 / scale, expected);
+    fixture.edit(|consumer| consumer.label = "");
+    let scope = fixture.scope.clone();
+    fixture.cx.update(|cx| {
+        scope
+            .update_patch(cx, |patch| {
+                patch
+                    .theme
+                    .get_or_insert_default()
+                    .components
+                    .set::<ButtonTheme>(ButtonTokenPatch {
+                        only_icon_size: Some(Some(20.)),
+                        ..Default::default()
+                    });
+            })
+            .unwrap();
+    });
+    fixture.draw();
+    fixture
+        .cx
+        .update_window(fixture.window.into(), |_, window, _| {
+            let sprite = &window.rendered_scene().monochrome_sprites[0];
+            assert_eq!(sprite.bounds.size.width.0 / scale, 20.);
+        })
+        .unwrap();
+    fixture
+        .edit(|consumer| consumer.icon_style = Some(StyleRefinement::default().text_size(px(18.))));
+    fixture
+        .cx
+        .update_window(fixture.window.into(), |_, window, _| {
+            let sprite = &window.rendered_scene().monochrome_sprites[0];
+            assert_eq!(sprite.bounds.size.width.0 / scale, 18.);
+        })
+        .unwrap();
+}
+
+#[test]
+fn focus_and_waves_follow_individual_corners_and_custom_surface_colors() {
+    let mut fixture = Fixture::with_motion(true, |consumer| {
+        consumer.second_visible = false;
+        consumer.style = StyleRefinement::default()
+            .rounded_tl(px(0.))
+            .rounded_tr(px(4.))
+            .rounded_br(px(10.))
+            .rounded_bl(px(14.))
+            .border_color(gpui::rgb(0xff0000));
+    });
+    fixture.key("tab");
+    fixture
+        .cx
+        .update_window(fixture.window.into(), |_, window, _| {
+            let scale = window.scale_factor();
+            let ring = window
+                .rendered_scene()
+                .quads
+                .iter()
+                .find(|quad| (quad.border_widths.left.0 / scale - 3.).abs() < 0.01)
+                .unwrap();
+            assert_eq!(ring.corner_radii.top_left.0 / scale, 4.);
+            assert_eq!(ring.corner_radii.top_right.0 / scale, 8.);
+            assert_eq!(ring.corner_radii.bottom_right.0 / scale, 14.);
+            assert_eq!(ring.corner_radii.bottom_left.0 / scale, 18.);
+        })
+        .unwrap();
+    fixture.key("enter");
+    fixture.frame(100);
+    fixture
+        .cx
+        .update_window(fixture.window.into(), |_, window, _| {
+            let wave = window
+                .rendered_scene()
+                .quads
+                .iter()
+                .find(|quad| {
+                    quad.border_color.h == 0.
+                        && quad.border_color.s == 1.
+                        && quad.border_color.a > 0.
+                        && quad.border_color.a < 0.2
+                })
+                .unwrap();
+            assert!(wave.corner_radii.top_left < wave.corner_radii.bottom_left);
+        })
+        .unwrap();
+}
+
+#[test]
+fn subtle_text_button_hover_opacity_interpolates_without_palette_quantization() {
+    let mut fixture = Fixture::with_motion(true, |consumer| {
+        consumer.button_type = ButtonType::Text;
+        consumer.second_visible = false;
+    });
+    fixture.hover(true);
+    fixture.frame(30);
+    let first = fixture.body().0.background.as_solid().unwrap().a;
+    fixture.frame(10);
+    let second = fixture.body().0.background.as_solid().unwrap().a;
+    assert!(
+        first > 0. && first < second && second < 0.01,
+        "{first} -> {second}"
+    );
+}
+
+#[test]
+fn space_does_not_press_a_control_with_link_semantics() {
+    let mut fixture = Fixture::configured(|consumer| consumer.href = true);
+    fixture.key("tab");
+    let rest = fixture.body().0.border_color;
+    fixture.key_event("space", true, false);
+    fixture.draw();
+    assert_eq!(fixture.body().0.border_color, rest);
+    fixture.key_event("space", false, false);
+    fixture.draw();
+    assert!(fixture.activations().is_empty());
 }

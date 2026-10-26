@@ -13,8 +13,8 @@ use ant_design_gpui::{
 };
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, Focusable, FontWeight, IntoElement, Render, Role,
-    SharedString, Subscription, Task, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    size,
+    SharedString, StyleRefinement, Subscription, Task, Window, WindowBounds, WindowOptions, div,
+    prelude::*, px, size,
 };
 
 #[derive(Default)]
@@ -394,21 +394,47 @@ impl Render for Gallery {
         );
         let sizes = self.panel(
             "Sizes",
-            self.row(
-                [
-                    ("large", "Large", Size::Large),
-                    ("medium", "Default", Size::Medium),
-                    ("small", "Small", Size::Small),
-                ]
-                .map(|(id, label, size)| {
-                    self.demo(id, label, cx)
-                        .button_type(ButtonType::Primary)
-                        .size(size)
-                        .icon(IconName::DownloadOutlined)
-                        .into_any_element()
-                }),
-                cx,
-            ),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .children(
+                    [
+                        ("large", "Large", Size::Large),
+                        ("medium", "Default", Size::Medium),
+                        ("small", "Small", Size::Small),
+                    ]
+                    .map(|(id, label, size)| {
+                        self.row(
+                            [
+                                self.demo(id, label, cx)
+                                    .primary()
+                                    .size(size)
+                                    .icon(IconName::DownloadOutlined),
+                                self.demo(format!("{id}-icon"), "", cx)
+                                    .primary()
+                                    .size(size)
+                                    .icon(IconName::DownloadOutlined)
+                                    .accessibility_label("Download"),
+                                self.demo(format!("{id}-round"), "", cx)
+                                    .primary()
+                                    .size(size)
+                                    .shape(ButtonShape::Round)
+                                    .icon(IconName::DownloadOutlined)
+                                    .accessibility_label("Download"),
+                                self.demo(format!("{id}-circle"), "", cx)
+                                    .primary()
+                                    .size(size)
+                                    .shape(ButtonShape::Circle)
+                                    .icon(IconName::DownloadOutlined)
+                                    .accessibility_label("Download"),
+                            ]
+                            .map(IntoElement::into_any_element),
+                            cx,
+                        )
+                    }),
+                )
+                .into_any_element(),
             cx,
         );
         let shapes = self.panel(
@@ -472,17 +498,49 @@ impl Render for Gallery {
             });
         let loading = self.panel(
             "Loading",
-            self.row(
-                [
-                    self.demo("loading", "Loading", cx)
-                        .button_type(ButtonType::Primary)
-                        .loading(true),
-                    start_loading,
-                    delayed_loading,
-                ]
-                .map(IntoElement::into_any_element),
-                cx,
-            ),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(
+                    self.row(
+                        [
+                            self.demo("loading", "Loading", cx)
+                                .button_type(ButtonType::Primary)
+                                .loading(true),
+                            start_loading,
+                            delayed_loading,
+                        ]
+                        .map(IntoElement::into_any_element),
+                        cx,
+                    ),
+                )
+                .child(
+                    self.row(
+                        [
+                            self.demo("loading-end", "Loading", cx)
+                                .icon_placement(IconPlacement::End)
+                                .loading(true),
+                            self.demo("loading-replace", "Loading", cx)
+                                .icon(IconName::PoweroffOutlined)
+                                .loading(true),
+                            self.demo("loading-custom", "Loading", cx)
+                                .loading_icon(IconName::SmileOutlined)
+                                .loading(true),
+                            self.demo("loading-custom-spin", "Syncing", cx)
+                                .loading_icon(IconName::SyncOutlined)
+                                .loading_icon_spin(true)
+                                .loading(true),
+                            self.demo("loading-icon-only", "", cx)
+                                .shape(ButtonShape::Circle)
+                                .loading(true)
+                                .accessibility_label("Loading results"),
+                        ]
+                        .map(IntoElement::into_any_element),
+                        cx,
+                    ),
+                )
+                .into_any_element(),
             cx,
         );
         let disabled = self.panel(
@@ -567,6 +625,73 @@ impl Render for Gallery {
                 .into_any_element(),
             cx,
         );
+        let labels = self.panel(
+            "Label spacing",
+            self.row(
+                [
+                    self.demo("label-spaced", "按钮", cx),
+                    self.demo("label-unspaced", "按钮", cx)
+                        .auto_insert_space(false),
+                    self.demo("label-icon", "按钮", cx)
+                        .icon(IconName::SearchOutlined),
+                    self.demo("label-text", "按钮", cx)
+                        .button_type(ButtonType::Text),
+                    self.demo("label-loading", "按钮", cx).loading(true),
+                ]
+                .map(IntoElement::into_any_element),
+                cx,
+            ),
+            cx,
+        );
+        let custom_layout = self.panel(
+            "Custom height and padding",
+            self.row(
+                [
+                    self.demo("layout-tall", "Text", cx).h(px(60.)),
+                    self.demo("layout-tall-icon", "Search", cx)
+                        .h(px(60.))
+                        .icon(IconName::SearchOutlined),
+                    self.demo("layout-wide", "Wide", cx).px(px(32.)),
+                ]
+                .map(IntoElement::into_any_element),
+                cx,
+            ),
+            cx,
+        );
+        let semantic_styles = self.panel(
+            "Content and icon styles",
+            self.row(
+                [
+                    self.demo("semantic-icon", "Accent icon", cx)
+                        .icon(IconName::StarFilled)
+                        .icon_style(StyleRefinement::default().text_color(gpui::rgb(0xfaad14))),
+                    self.demo("semantic-content", "Accent label", cx)
+                        .icon(IconName::CheckOutlined)
+                        .content_style(
+                            StyleRefinement::default()
+                                .text_color(gpui::rgb(0x722ed1))
+                                .font_weight(FontWeight::SEMIBOLD),
+                        ),
+                ]
+                .map(IntoElement::into_any_element),
+                cx,
+            ),
+            cx,
+        );
+        let waves = self.panel(
+            "Click wave",
+            self.row(
+                [
+                    self.demo("wave-default", "Default wave", cx).primary(),
+                    self.demo("wave-disabled", "Wave disabled", cx)
+                        .primary()
+                        .wave(false),
+                ]
+                .map(IntoElement::into_any_element),
+                cx,
+            ),
+            cx,
+        );
         div()
             .id("button-gallery-scroll")
             .size_full()
@@ -612,6 +737,8 @@ impl Render for Gallery {
                         self.panels([icons, loading], cx),
                         self.panels([disabled, ghost], cx),
                         self.panels([colors, block], cx),
+                        self.panels([labels, custom_layout], cx),
+                        self.panels([semantic_styles, waves], cx),
                     ]),
             )
     }

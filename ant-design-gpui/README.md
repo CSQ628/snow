@@ -8,6 +8,31 @@ The reference is Ant Design **6.6.7**, revision
 `f8f5595ab5e891fff6a2a06c5b3b98af643d008e`. Windows native behavior is verified;
 macOS/Linux APIs remain portable but require validation on those platforms.
 
+## Component gallery
+
+```powershell
+cd ant-design-gpui
+cargo run --locked --offline --example gallery
+# Optional: -- --dark --compact --rtl --reduced-motion
+# Reproduce a narrow layout: -- --window-size 640x720 --capture C:/temp/gallery.png
+```
+
+The native gallery has a fixed component sidebar, direct example links and a
+separately scrolling page. A persistent toolbar switches light/dark themes,
+comfortable/compact density, preview direction and motion; its arrow returns to
+the top. Display changes preserve active loading requests and scroll position
+within the new page bounds. The sidebar becomes an icon rail in narrow windows.
+
+Button's 15 public examples retain the reference checkout's order, labels and
+descriptions. Nine previews are complete; six compact Planned cards explain the
+capabilities needed for their full reference examples. Titles precede previews,
+and cards use two columns only when the padded content has sufficient room.
+The Color & Variant matrix follows the reference's responsive component sizing.
+Tab/Shift+Tab navigate; Enter/Space activate controls.
+
+Run only this example's offscreen regression tests with
+`cargo test --locked --offline --example gallery`.
+
 ## Native example and integration
 
 ```powershell
@@ -79,9 +104,13 @@ accessible descriptions through their own catalogs.
 order; `.loading(true)` blocks activation but retains focus. `.loading_delay(...)`
 keeps the control ready until the delay expires, cancels when cleared or unmounted,
 and does not restart on unrelated rerenders. `.loading_icon(...)` overrides the
-default rotating loader. Static custom loaders do not schedule continuous frames.
+default rotating loader. `.loading_icon_spin(true)` opts a custom icon into rotation;
+`false` stops the default spinner. Static custom loaders do not schedule continuous frames.
+Monochrome loaders rotate through the GPU atlas; colored icon rotation uses CPU
+raster variants on the pinned GPUI backend.
 Color transitions, loader expansion/collapse and click waves respect scoped and
-application reduced motion. Idle controls schedule no animation frames.
+application reduced motion. `.wave(false)` disables the click wave. Link controls
+have no wave. Idle controls schedule no animation frames.
 
 Pointer, Enter, Space and accessible invocation share availability guards. For
 programmatic focus, pass a retained `behavior::focus_handle(cx)` using
@@ -91,8 +120,10 @@ activation. `.automation_id(...)` supplies a stable native accessibility identif
 
 Customize component tokens with `ComponentThemes::set::<ButtonTheme>(ButtonTokenPatch
 { ... })`. Component-local global overrides and algorithms affect the complete
-control, including fonts, focus and motion. GPUI `Styled` refinements customize the
-decorative surface without replacing its stable focus/activation owner.
+control, including fonts, focus and motion. GPUI `Styled` refinements apply directly
+to the native root, so relative widths, flex, margins and focus bounds agree.
+`.icon_style(StyleRefinement)` and `.content_style(StyleRefinement)` customize the
+icon slot and label independently while preserving the control's accessible name.
 
 ```powershell
 cd ant-design-gpui
@@ -105,7 +136,7 @@ cargo test --locked --offline --lib button::
 The gallery contains interactive loading, theme, density, RTL, availability and
 motion controls, all six variants and all 13 preset colors. The performance script
 requires the repository's configured `windows-msvc-performance` Release build.
-Independent [browser fixtures](fixtures/button/README.md) check 780 original
+Independent [browser fixtures](fixtures/button/README.md) check 2,208 original
 Ant Design computed styles across four themes and three interaction states.
 `scripts/test-button-accessibility.ps1` provides opt-in Windows UI Automation checks.
 

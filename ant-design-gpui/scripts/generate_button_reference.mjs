@@ -170,6 +170,10 @@ function themeInternal() {
 }
 const { parseStyle, normalizeStyle } = loadPackage('@ant-design/cssinjs/lib/hooks/useStyleRegister');
 const calculator = loadPackage('@ant-design/cssinjs-utils/lib/util/calc').default('num');
+// Retain provenance for the real registration contract mirrored by the adapter:
+// rootCls defaults to prefixCls and is passed to getCommonStyle as argument three.
+read(packageFile('@ant-design/cssinjs-utils', 'lib/util/genStyleUtils.js'),
+  '@ant-design/cssinjs-utils@2.1.2/lib/util/genStyleUtils.js');
 const buttonStyles = evaluateSource(path.join(upstream, 'components/button/style/index.ts')).default;
 const commonStyles = evaluateSource(path.join(upstream, 'components/style/index.tsx'));
 const presets = evaluateSource(path.join(upstream, 'components/theme/interface/presetColors.ts')).PresetColors;
@@ -210,7 +214,7 @@ function button(label, { type = 'default', variant, color, danger, shape, size, 
   if (shape) classes.push(`ant-btn-${shape}`);
   if (size) classes.push(`ant-btn-${size}`);
   if (loading) classes.push('ant-btn-loading');
-  if (ghost) classes.push('ant-btn-background-ghost');
+  if (ghost && !['text', 'link'].includes(variant)) classes.push('ant-btn-background-ghost');
   if (block) classes.push('ant-btn-block');
   if (end) classes.push('ant-btn-icon-end');
   if (!label && (glyph || loading)) classes.push('ant-btn-icon-only');
@@ -218,6 +222,28 @@ function button(label, { type = 'default', variant, color, danger, shape, size, 
 }
 const row = children => `<div class="demo-row">${children.join('')}</div>`;
 const panel = (title, children) => `<section><h2>${escape(title)}</h2>${children}</section>`;
+// Keep the public comparison gallery compact, then exercise the state combinations
+// that cannot be represented by its representative examples. Appearance classes
+// are direct inputs to the original style generators, independent of Rust rules.
+function parityMatrix() {
+  const variants = ['outlined', 'dashed', 'solid', 'filled', 'text', 'link'];
+  const neutral = row(variants.map(variant => button(variant, { color: 'default', variant })));
+  const colors = presets.map(color => row(variants.filter(variant => variant !== 'solid')
+    .map(variant => button(variant, { color, variant })))).join('');
+  const disabled = row(variants.map(variant => button(variant, {
+    color: 'purple', variant, disabled: true,
+  })));
+  const ghosts = ['default', 'primary', 'dangerous'].flatMap(color => [false, true]
+    .map(disabled => row(['outlined', 'dashed', 'filled'].map(variant => button(variant, {
+      color, variant, ghost: true, disabled,
+    }))))).join('');
+  const geometry = [undefined, 'lg', 'sm'].flatMap(size => [undefined, 'square', 'circle', 'round']
+    .map(shape => row([
+      button('Shape', { size, shape }),
+      button('', { size, shape, glyph: 'search' }),
+    ]))).join('');
+  return panel('Visual parity matrix', neutral + colors + disabled + ghosts + geometry);
+}
 function gallery(name) {
   const types = ['primary', 'default', 'dashed', 'text', 'link'];
   const labels = ['Primary', 'Default', 'Dashed', 'Text', 'Link'];
@@ -238,7 +264,8 @@ function gallery(name) {
     <div class="panels">${panel('Disabled', row(types.map((type, index) => button(labels[index], { type, disabled: true }))))}
     ${panel('Ghost', `<div class="ghost">${row([button('Primary', { type: 'primary', ghost: true }), button('Default', { ghost: true }), button('Dashed', { type: 'dashed', ghost: true }), button('Danger', { danger: true, ghost: true })])}</div>`)}</div>
     <div class="panels">${panel('Preset colors', row([...presets.filter(color => color !== 'gold' && color !== 'lime'), 'gold', 'lime'].map(color => button(color, { color, variant: 'solid' }))))}
-    ${panel('Block', button('Primary', { type: 'primary', block: true }) + button('Default', { block: true }))}</div>`;
+    ${panel('Block', button('Primary', { type: 'primary', block: true }) + button('Default', { block: true }))}</div>
+    <div class="panels">${parityMatrix()}</div>`;
 }
 fs.mkdirSync(output, { recursive: true });
 for (const name of ['default', 'dark', 'compact', 'dark-compact']) {
@@ -250,7 +277,7 @@ for (const name of ['default', 'dark', 'compact', 'dark-compact']) {
     componentCls: '.ant-btn', antCls: '.ant', iconCls: '.anticon', calc: calculator,
   };
   const css = serialize([
-    commonStyles.genCommonStyle(tokens, 'ant-btn'),
+    commonStyles.genCommonStyle(tokens, 'ant-btn', 'ant-btn'),
     commonStyles.genIconStyle('anticon'),
     { '.ant-btn': commonStyles.resetComponent(tokens) },
     buttonStyles.generate(tokens),
@@ -281,6 +308,8 @@ for (const name of ['default', 'dark', 'compact', 'dark-compact']) {
     metrics.textContent = JSON.stringify([...document.querySelectorAll('button')].map((button, index) => {
       const bounds = button.getBoundingClientRect();
       const styles = getComputedStyle(button);
+      const icon = button.querySelector('.anticon');
+      const iconBounds = icon?.getBoundingClientRect();
       return {
         index, id: button.id, label: button.textContent.trim(), classes: button.className,
         disabled: button.disabled,
@@ -290,6 +319,8 @@ for (const name of ['default', 'dark', 'compact', 'dark-compact']) {
         padding: styles.padding, font: styles.fontFamily, fontSize: styles.fontSize,
         fontWeight: styles.fontWeight, lineHeight: styles.lineHeight, opacity: styles.opacity,
         shadow: styles.boxShadow,
+        iconFontSize: icon ? getComputedStyle(icon).fontSize : null,
+        iconWidth: iconBounds?.width ?? null, iconHeight: iconBounds?.height ?? null,
       };
     }));
     document.body.append(metrics);

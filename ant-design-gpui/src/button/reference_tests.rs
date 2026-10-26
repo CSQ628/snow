@@ -42,6 +42,9 @@ struct BrowserButton {
     line_height: String,
     opacity: String,
     shadow: String,
+    icon_font_size: Option<String>,
+    icon_width: Option<f64>,
+    icon_height: Option<f64>,
 }
 
 impl BrowserButton {
@@ -232,7 +235,7 @@ fn button_visual_tokens_match_all_original_browser_computed_styles() {
             ..Default::default()
         }
         .resolve();
-        assert_eq!(case.buttons.len(), 65);
+        assert_eq!(case.buttons.len(), 184);
         for button in case.buttons {
             compared += 1;
             let options = button.options();
@@ -304,6 +307,26 @@ fn button_visual_tokens_match_all_original_browser_computed_styles() {
                     button.width,
                 );
             }
+            if let Some(icon_font_size) = &button.icon_font_size {
+                for (property, browser) in [
+                    ("icon font size", css_pixels(icon_font_size)),
+                    ("icon width", button.icon_width.expect("browser icon width")),
+                    (
+                        "icon height",
+                        button.icon_height.expect("browser icon height"),
+                    ),
+                ] {
+                    compare_number(
+                        &mut failures,
+                        &context,
+                        property,
+                        style.metrics.icon_size,
+                        browser,
+                    );
+                }
+            } else {
+                assert!(button.icon_width.is_none() && button.icon_height.is_none());
+            }
             for (property, native, browser) in [
                 (
                     "background",
@@ -368,7 +391,7 @@ fn button_visual_tokens_match_all_original_browser_computed_styles() {
             }
         }
     }
-    assert_eq!(compared, 780);
+    assert_eq!(compared, 2208);
     assert!(
         failures.is_empty(),
         "{} upstream browser mismatches:\n{}",

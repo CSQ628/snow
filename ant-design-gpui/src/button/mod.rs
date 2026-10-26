@@ -8,6 +8,7 @@
 //! mounted. Labels are application-localized; icon-only controls need an explicit
 //! accessible label. Use a scope to inherit a window's configuration.
 
+mod label;
 mod paint;
 mod style;
 
@@ -54,16 +55,20 @@ pub struct Button {
     loading_delay: Duration,
     icon: Option<IconRef>,
     loading_icon: Option<IconRef>,
+    loading_icon_spin: Option<bool>,
     icon_placement: IconPlacement,
     ghost: bool,
     danger: bool,
     block: bool,
+    wave: bool,
     auto_insert_space: bool,
     focus: Option<FocusHandle>,
     accessibility: Accessibility,
     href: Option<SharedString>,
     on_click: Option<ClickHandler>,
     style: StyleRefinement,
+    icon_style: Option<Box<StyleRefinement>>,
+    content_style: Option<Box<StyleRefinement>>,
 }
 
 impl Button {
@@ -82,16 +87,20 @@ impl Button {
             loading_delay: Duration::ZERO,
             icon: None,
             loading_icon: None,
+            loading_icon_spin: None,
             icon_placement: IconPlacement::Start,
             ghost: false,
             danger: false,
             block: false,
+            wave: true,
             auto_insert_space: true,
             focus: None,
             accessibility: Accessibility::new(Role::Button),
             href: None,
             on_click: None,
             style: StyleRefinement::default(),
+            icon_style: None,
+            content_style: None,
         }
     }
 
@@ -163,6 +172,26 @@ impl Button {
         self
     }
 
+    /// Opt a custom loading icon into rotation, or stop the default spinner.
+    /// Rotation and frame scheduling respect the effective motion preference.
+    /// Monochrome icons reuse a GPU atlas tile; colored rotations use raster variants.
+    pub fn loading_icon_spin(mut self, spin: bool) -> Self {
+        self.loading_icon_spin = Some(spin);
+        self
+    }
+
+    /// Refine the icon slot independently of the control and its label.
+    pub fn icon_style(mut self, style: StyleRefinement) -> Self {
+        self.icon_style = Some(Box::new(style));
+        self
+    }
+
+    /// Refine the label independently of the control and its icon.
+    pub fn content_style(mut self, style: StyleRefinement) -> Self {
+        self.content_style = Some(Box::new(style));
+        self
+    }
+
     pub fn icon_placement(mut self, placement: IconPlacement) -> Self {
         self.icon_placement = placement;
         self
@@ -180,6 +209,12 @@ impl Button {
 
     pub fn block(mut self, block: bool) -> Self {
         self.block = block;
+        self
+    }
+
+    /// Enable the standard click wave. Unbordered and link controls have no wave.
+    pub fn wave(mut self, enabled: bool) -> Self {
+        self.wave = enabled;
         self
     }
 
@@ -244,8 +279,8 @@ impl Button {
     }
 }
 
-/// Styled refinements customize the decorative surface, including its dimensions.
-/// Focus, semantics and input always remain on the stable outer control.
+/// Styled refinements apply to the native control, including its parent layout.
+/// Focus, semantics and activation retain their stable identity across refinements.
 impl Styled for Button {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
@@ -508,10 +543,13 @@ impl RenderOnce for Button {
         } else {
             style.rest
         };
-        let spinner = loading
-            && self.loading_icon.as_ref().is_none_or(|reference| {
+        let spin_loader = self.loading_icon_spin.unwrap_or_else(|| {
+            self.loading_icon.as_ref().is_none_or(|reference| {
                 reference.key() == IconName::LoadingOutlined.descriptor().key
-            });
+            })
+        });
+        let inserted_loader = !has_explicit_icon && !self.label.is_empty();
+        let custom_loader = self.loading_icon.is_some();
         let (current, loader_progress, wave_progress, spin_phase) =
             state.update(cx, |state, cx| {
                 let now = (state.clock)(cx);
@@ -528,19 +566,21 @@ impl RenderOnce for Button {
                 });
                 loader.retarget(loader_target, now, global.motion_duration_slow, motion);
                 let loader = loader.sample(now);
+                let show_loader =
+                    loading || (inserted_loader && !custom_loader && loader.value > 0.);
                 let wave = state.wave_started.and_then(|started| {
                     let progress = now.saturating_sub(started).as_secs_f64() / 2.;
-                    (motion.allows_motion() && progress < 1.).then_some(progress)
+                    (self.wave && self.href.is_none() && motion.allows_motion() && progress < 1.)
+                        .then_some(progress)
                 });
                 if wave.is_none() {
                     state.wave_started = None;
                 }
-                let loader_animating =
-                    !loader.finished && !has_explicit_icon && !self.label.is_empty();
+                let loader_animating = !loader.finished && inserted_loader && !custom_loader;
                 if color_animating
                     || loader_animating
                     || wave.is_some()
-                    || (spinner && motion.allows_motion())
+                    || (show_loader && spin_loader && motion.allows_motion())
                 {
                     state.request_frame(window, cx);
                 }
@@ -564,7 +604,9 @@ impl RenderOnce for Button {
             .border(px(style.line_width as f32))
             .rounded(px(metrics.radius as f32))
             .text_size(px(metrics.font_size as f32))
-            .line_height(px(metrics.line_height as f32))
+            .line_height(gpui::relative(
+                (metrics.line_height / metrics.font_size) as f32,
+            ))
             .font(tokens.font().clone())
             .font_weight(FontWeight(metrics.font_weight as f32))
             .when(self.block, |content| content.w_full())
@@ -590,13 +632,9 @@ impl RenderOnce for Button {
                     .collect::<Vec<_>>(),
             );
         }
-        let label = spaced_label(
-            &self.label,
-            self.auto_insert_space && !has_explicit_icon && !variant.is_unbordered(),
-        );
-        let has_label = !label.is_empty();
+        let has_label = !self.label.is_empty();
         // A departing inserted loader remains decorative while the control is ready.
-        let show_loader = loading || (!has_explicit_icon && loader_progress > 0.);
+        let show_loader = loading || (inserted_loader && !custom_loader && loader_progress > 0.);
         let reference = if show_loader {
             Some(
                 self.loading_icon
@@ -609,20 +647,65 @@ impl RenderOnce for Button {
         let reverse =
             (config.direction == Direction::Rtl) ^ (self.icon_placement == IconPlacement::End);
         content = content.when(reverse, |content| content.flex_row_reverse());
+        let font_size = self
+            .style
+            .text
+            .font_size
+            .map_or(px(metrics.font_size as f32), |size| {
+                size.to_pixels(window.rem_size())
+            });
         if let Some(reference) = reference {
+            let fixed_icon_size = icon_only
+                .then(|| match self.size.unwrap_or(config.size) {
+                    Size::Small => tokens.only_icon_size_sm,
+                    Size::Medium => tokens.only_icon_size,
+                    Size::Large => tokens.only_icon_size_lg,
+                })
+                .flatten();
+            let icon_size = self
+                .icon_style
+                .as_ref()
+                .and_then(|style| style.text.font_size)
+                .map_or_else(
+                    || {
+                        fixed_icon_size.map_or_else(
+                            || {
+                                self.style
+                                    .text
+                                    .font_size
+                                    .map_or(px(metrics.icon_size as f32), |_| font_size)
+                            },
+                            |size| px(size as f32),
+                        )
+                    },
+                    |size| size.to_pixels(window.rem_size()),
+                );
+            let expanding = show_loader && inserted_loader && !custom_loader;
             let options = IconRenderOptions {
-                size: size(px(metrics.icon_size as f32), px(metrics.icon_size as f32)),
+                size: size(icon_size, icon_size),
                 colors: config.icon_palette,
-                rotation: radians(if spinner && motion.allows_motion() {
+                rotation: radians(if show_loader && spin_loader && motion.allows_motion() {
                     spin_phase * std::f32::consts::TAU
                 } else {
                     0.
                 }),
                 ..Default::default()
             };
-            let icon = foreground_icon(reference, options);
-            let mut slot = div().flex().items_center().flex_shrink_0().child(icon);
-            if show_loader && !has_explicit_icon && has_label {
+            let icon = foreground_icon(
+                reference,
+                options,
+                if expanding { loader_progress } else { 1. },
+            );
+            let mut slot = div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .flex_shrink_0()
+                .child(icon);
+            if let Some(style) = &self.icon_style {
+                slot.style().refine(style);
+            }
+            if expanding {
                 let gap = metrics.icon_gap as f32 * loader_progress;
                 let (left, right) = config.direction.horizontal(
                     if self.icon_placement == IconPlacement::End {
@@ -637,7 +720,7 @@ impl RenderOnce for Button {
                     },
                 );
                 slot = slot
-                    .w(px(metrics.icon_size as f32 * loader_progress))
+                    .w(icon_size * loader_progress)
                     .opacity(loader_progress)
                     .overflow_hidden()
                     .ml(px(left))
@@ -648,52 +731,89 @@ impl RenderOnce for Button {
             content = content.child(slot);
         }
         if has_label {
-            content = content.child(div().flex_shrink_0().whitespace_nowrap().child(label));
+            let label_font_size = self
+                .content_style
+                .as_ref()
+                .and_then(|style| style.text.font_size)
+                .map_or(font_size, |size| size.to_pixels(window.rem_size()));
+            let mut label = label::button_label(
+                self.label.clone(),
+                self.auto_insert_space && !has_explicit_icon && !variant.is_unbordered(),
+                loading,
+                f32::from(label_font_size),
+            );
+            if let Some(style) = &self.content_style {
+                label.style().refine(style);
+            }
+            content = content.child(label);
         }
         let mut surface = apply_colors(content, current);
         surface.style().refine(&self.style);
-        let dashed = style.line_type == LineType::Dashed
-            && self
-                .style
-                .border_style
-                .is_none_or(|style| style == gpui::BorderStyle::Dashed);
+        let effective = surface.style();
+        let radii = gpui::Corners {
+            top_left: effective.corner_radii.top_left.unwrap_or_default(),
+            top_right: effective.corner_radii.top_right.unwrap_or_default(),
+            bottom_left: effective.corner_radii.bottom_left.unwrap_or_default(),
+            bottom_right: effective.corner_radii.bottom_right.unwrap_or_default(),
+        }
+        .to_pixels(window.rem_size());
+        let widths = gpui::Edges {
+            top: effective.border_widths.top.unwrap_or_default(),
+            bottom: effective.border_widths.bottom.unwrap_or_default(),
+            left: effective.border_widths.left.unwrap_or_default(),
+            right: effective.border_widths.right.unwrap_or_default(),
+        }
+        .to_pixels(window.rem_size());
+        let opacity = effective.opacity.unwrap_or(1.);
+        // The fitted path covers uniform borders. GPUI handles deliberately
+        // asymmetric refinements using the same geometry as its own surface.
+        let dashed = effective.border_style == Some(gpui::BorderStyle::Dashed)
+            && radii.top_left == radii.top_right
+            && radii.top_left == radii.bottom_left
+            && radii.top_left == radii.bottom_right
+            && widths.top == widths.bottom
+            && widths.top == widths.left
+            && widths.top == widths.right;
         if dashed {
-            // Keep the border's layout inset; its Ant dash geometry is painted
-            // over the borderless outer control to preserve the exact bounds.
+            // Keep the border's layout inset; paint the fitted dash geometry
+            // over its transparent stroke without changing the control's bounds.
             surface.style().border_style = Some(gpui::BorderStyle::Solid);
             surface = surface.border_color(Color::TRANSPARENT);
         }
-        let mut element = div()
+        let mut element = surface
             .id(self.id)
-            .relative()
-            .flex()
-            .flex_shrink_0()
-            .when(self.block, |element| element.w_full())
             .when(availability.can_focus(), |element| {
                 element.track_focus(&focus)
             })
-            .when(availability.disabled, |element| {
-                element.cursor_not_allowed()
-            })
-            .when(!availability.disabled && loading, |element| {
-                element.cursor_default()
-            })
-            .when(availability.can_activate(), |element| {
-                element.cursor_pointer()
-            })
-            .child(surface);
+            .when(
+                availability.disabled && self.style.mouse_cursor.is_none(),
+                |element| element.cursor_not_allowed(),
+            )
+            .when(
+                !availability.disabled && loading && self.style.mouse_cursor.is_none(),
+                |element| element.cursor_default(),
+            )
+            .when(
+                availability.can_activate() && self.style.mouse_cursor.is_none(),
+                |element| element.cursor_pointer(),
+            );
+        // GPUI resolves absolute children against the padding box. These paint
+        // and pointer overlays cover the same outer border box as the control.
+        let overlay = || {
+            div()
+                .absolute()
+                .top(-widths.top)
+                .bottom(-widths.bottom)
+                .left(-widths.left)
+                .right(-widths.right)
+        };
         if dashed {
             let color = self.style.border_color.unwrap_or(current.border.to_hsla());
-            let radius = px(metrics.radius as f32);
-            let width = px(style.line_width as f32);
-            let opacity = self.style.opacity.unwrap_or(if loading {
-                style.loading_opacity as f32
-            } else {
-                1.
-            });
+            let radius = radii.top_left;
+            let width = widths.top;
             let weak = state.downgrade();
             element = element.child(
-                div().absolute().inset_0().opacity(opacity).child(
+                overlay().child(
                     canvas(
                         |_, _, _| (),
                         move |bounds, (), window, cx| {
@@ -738,10 +858,12 @@ impl RenderOnce for Button {
             set_pressed(&weak, false, false, cx)
         });
         let weak = state.downgrade();
+        let is_link = self.href.is_some();
         element = element.capture_key_down(move |event, _, cx| {
             if !event.is_held
                 && !event.keystroke.modifiers.modified()
                 && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                && !(is_link && event.keystroke.key == "space")
             {
                 set_pressed(&weak, true, true, cx);
             }
@@ -761,7 +883,7 @@ impl RenderOnce for Button {
         if tracking_pointer {
             let weak = state.downgrade();
             element = element.child(
-                div().absolute().inset_0().child(
+                overlay().child(
                     canvas(
                         |_, _, _| (),
                         move |bounds, (), window, cx| {
@@ -796,15 +918,23 @@ impl RenderOnce for Button {
             );
         }
         if let Some(progress) = wave_progress {
-            let color = wave_color(target, global.color_primary);
-            let radius = metrics.radius as f32;
+            let color = wave_color(
+                self.style.border_color.unwrap_or(current.border.to_hsla()),
+                self.style
+                    .background
+                    .as_ref()
+                    .and_then(gpui::Fill::color)
+                    .and_then(|background| background.as_solid())
+                    .unwrap_or(current.background.to_hsla()),
+                global.color_primary.to_hsla(),
+            );
             let curve = global.motion_ease_out_circ;
             let fade = crate::behavior::evaluate_cubic_bezier(curve, progress);
             let spread =
                 6. * crate::behavior::evaluate_cubic_bezier(curve, (progress * 5.).min(1.)) as f32;
-            let color = color.with_alpha(color.a * 0.2 * (1. - fade));
+            let color = color.opacity(0.2 * (1. - fade as f32));
             element = element.child(
-                div().absolute().inset_0().child(
+                overlay().child(
                     canvas(
                         |_, _, _| (),
                         move |bounds, (), window, _| {
@@ -812,11 +942,15 @@ impl RenderOnce for Button {
                                 window.paint_quad(
                                     gpui::outline(
                                         bounds.dilate(px(spread)),
-                                        color.to_hsla(),
+                                        color,
                                         Default::default(),
                                     )
                                     .border_widths(px(spread))
-                                    .corner_radii(px(radius + spread)),
+                                    .corner_radii(
+                                        radii
+                                            .clamp_radii_for_quad_size(bounds.size)
+                                            .map(|radius| *radius + px(spread)),
+                                    ),
                                 );
                             }
                         },
@@ -837,7 +971,7 @@ impl RenderOnce for Button {
             if href.is_some() && activation == Activation::Keyboard(gpui::KeyboardButton::Space) {
                 return;
             }
-            if !variant.is_unbordered() && motion.allows_motion() {
+            if self.wave && href.is_none() && !variant.is_unbordered() && motion.allows_motion() {
                 let _ = weak.update(cx, |state, cx| {
                     state.wave_started = Some((state.clock)(cx));
                     cx.notify();
@@ -860,15 +994,14 @@ impl RenderOnce for Button {
             FocusRing::new(
                 style
                     .focus_color
-                    .with_alpha(
-                        style.focus_color.a * if loading { style.loading_opacity } else { 1. },
-                    )
+                    .with_alpha(style.focus_color.a * f64::from(opacity))
                     .to_hsla(),
                 px(style.focus_width as f32),
             )
             .with_offset(px(style.focus_offset as f32))
-            .radius(px(metrics.radius as f32))
-            .apply(element, &focus),
+            .radius(radii.top_left)
+            .apply(element, &focus)
+            .corners(radii),
         )
     }
 }
@@ -892,20 +1025,6 @@ fn set_pressed(state: &gpui::WeakEntity<ButtonState>, pressed: bool, keyboard: b
     });
 }
 
-fn spaced_label(label: &SharedString, enabled: bool) -> SharedString {
-    if enabled {
-        let mut characters = label.chars();
-        if let (Some(first), Some(second), None) =
-            (characters.next(), characters.next(), characters.next())
-            && ('\u{4e00}'..='\u{9fa5}').contains(&first)
-            && ('\u{4e00}'..='\u{9fa5}').contains(&second)
-        {
-            return format!("{first} {second}").into();
-        }
-    }
-    label.clone()
-}
-
 fn apply_colors<E: Styled>(element: E, state: ButtonStateStyle) -> E {
     element
         .bg(state.background)
@@ -919,7 +1038,13 @@ fn interpolate_style(
     progress: f32,
 ) -> ButtonStateStyle {
     fn color(from: Color, to: Color, progress: f64) -> Color {
-        from.mix(to, progress.clamp(0., 1.))
+        let progress = progress.clamp(0., 1.);
+        // Token color mixing quantizes alpha for palette derivation. Rendering
+        // retains continuous opacity, including subtle text-button backgrounds.
+        Color {
+            a: from.a + (to.a - from.a) * progress,
+            ..from.mix(to, progress)
+        }
     }
     let progress = f64::from(progress);
     ButtonStateStyle {
@@ -929,14 +1054,14 @@ fn interpolate_style(
     }
 }
 
-fn wave_color(state: ButtonStateStyle, fallback: Color) -> Color {
-    [state.border, state.background]
+fn wave_color(border: gpui::Hsla, background: gpui::Hsla, fallback: gpui::Hsla) -> gpui::Hsla {
+    [border, background]
         .into_iter()
-        .find(|color| color.a > 0. && (color.r != 255 || color.g != 255 || color.b != 255))
+        .find(|color| color.a > 0. && !(color.l == 1. && color.a == 1.))
         .unwrap_or(fallback)
 }
 
-fn foreground_icon(reference: IconRef, options: IconRenderOptions) -> gpui::Canvas<()> {
+fn foreground_icon(reference: IconRef, options: IconRenderOptions, scale: f32) -> gpui::Canvas<()> {
     canvas(
         |_, _, _| (),
         move |bounds, (), window, cx| {
@@ -949,7 +1074,7 @@ fn foreground_icon(reference: IconRef, options: IconRenderOptions) -> gpui::Canv
                 ..options.colors
             };
             cx.update_global::<IconRenderer, _>(|renderer, cx| {
-                let _ = renderer.paint(bounds, &reference, &options, window, cx);
+                let _ = renderer.paint_with_scale(bounds, &reference, &options, scale, window, cx);
             });
         },
     )

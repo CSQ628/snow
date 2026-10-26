@@ -1,0 +1,651 @@
+// Copyright (C) 2026 mg-chao
+// SPDX-License-Identifier: Apache-2.0
+
+use std::time::Duration;
+
+use ant_design_gpui::{
+    ConfigScope, Direction, UiRoot,
+    button::{ButtonColor, ButtonStyle, ButtonStyleOptions, ButtonVariant},
+    theme::Color,
+};
+use gpui::{
+    AppContext, Bounds, Entity, FocusHandle, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    Pixels, PlatformInput, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext,
+    WindowHandle, point, px, size,
+};
+
+use super::{
+    Options,
+    button::{ButtonPage, DEMOS, Preview, tests_support::Observations},
+    catalog::{COMPONENTS, ComponentId},
+    shell::Gallery,
+};
+
+struct Fixture {
+    cx: VisualTestContext,
+    gallery: Entity<Gallery>,
+    page: Entity<ButtonPage>,
+    observations: Observations,
+    _window: WindowHandle<UiRoot>,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let mut cx = TestAppContext::single();
+        let mut gallery = None;
+        let window = cx.add_window(|window, cx| {
+            let scope = ConfigScope::new_window(cx);
+            scope
+                .update_patch(cx, |patch| patch.motion = Some(false))
+                .unwrap();
+            let content = cx.new(|cx| Gallery::new(scope.clone(), cx));
+            gallery = Some(content.clone());
+            UiRoot::new(scope, content, window, cx)
+        });
+        let gallery = gallery.unwrap();
+        let page = gallery.read_with(&cx, |gallery, _| gallery.button.clone());
+        let observations = page.read_with(&cx, |page, _| page.observations.clone());
+        let mut fixture = Self {
+            cx: VisualTestContext::from_window(window.into(), &cx),
+            gallery,
+            page,
+            observations,
+            _window: window,
+        };
+        fixture.resize(1280.);
+        fixture
+    }
+
+    fn draw(&mut self) {
+        self.cx.run_until_parked();
+        self.cx.update(|window, cx| window.draw(cx).clear(cx));
+        self.cx.run_until_parked();
+    }
+
+    fn resize(&mut self, width: f32) {
+        self.cx.simulate_resize(size(px(width), px(900.)));
+        self.draw();
+    }
+
+    fn next_frame(&mut self) {
+        self.cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        self.draw();
+    }
+
+    fn click(&mut self, selector: &'static str) {
+        let bounds = self.bounds(selector);
+        self.cx.simulate_click(bounds.center(), Modifiers::none());
+        self.draw();
+    }
+
+    fn scope(&self) -> ConfigScope {
+        self.gallery
+            .read_with(&self.cx, |gallery, _| gallery.scope.clone())
+    }
+
+    fn bounds(&mut self, selector: &'static str) -> Bounds<Pixels> {
+        self.cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing element: {selector}"))
+    }
+
+    fn focused(&mut self, id: &str) -> bool {
+        let focus = self
+            .observations
+            .borrow()
+            .focus
+            .get(id)
+            .expect("rendered control")
+            .clone();
+        self.cx.update(|window, _| focus.is_focused(window))
+    }
+
+    fn focus(&mut self, id: &str) -> FocusHandle {
+        let focus = self
+            .observations
+            .borrow()
+            .focus
+            .get(id)
+            .expect("rendered control")
+            .clone();
+        self.cx.update(|window, cx| window.focus(&focus, cx));
+        self.draw();
+        focus
+    }
+
+    fn scroll(&mut self, position: gpui::Point<Pixels>, delta: f32) {
+        self.cx.simulate_event(ScrollEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
+            ..Default::default()
+        });
+        self.draw();
+    }
+
+    fn key(&mut self, stroke: &'static str) {
+        // GPUI's simulate_keystrokes sends only KeyDown; Button also needs KeyUp.
+        let keystroke = Keystroke::parse(stroke).unwrap();
+        self.cx.update(|window, cx| {
+            window.dispatch_event(
+                PlatformInput::KeyDown(KeyDownEvent {
+                    keystroke: keystroke.clone(),
+                    is_held: false,
+                    prefer_character_input: false,
+                }),
+                cx,
+            );
+            window.dispatch_event(PlatformInput::KeyUp(KeyUpEvent { keystroke }), cx);
+        });
+        self.draw();
+    }
+
+    fn reveal(&mut self, selector: &'static str) {
+        let bounds = self.bounds(selector);
+        let scroll = self
+            .gallery
+            .read_with(&self.cx, |gallery, _| gallery.scroll.clone());
+        let offset = scroll.offset();
+        scroll.set_offset(point(px(0.), offset.y - bounds.top() + px(180.)));
+        self.gallery.update(&mut self.cx, |_, cx| cx.notify());
+        self.draw();
+    }
+}
+
+#[test]
+fn catalogue_keeps_reference_order_and_pending_cards_explain_their_status_without_fake_controls() {
+    assert_eq!(COMPONENTS.len(), 1);
+    assert_eq!(COMPONENTS[0].group, "General");
+    assert_eq!(
+        DEMOS.iter().map(|demo| demo.id).collect::<Vec<_>>(),
+        [
+            "basic",
+            "color-variant",
+            "icon",
+            "icon-placement",
+            "size",
+            "disabled",
+            "loading",
+            "multiple",
+            "ghost",
+            "danger",
+            "block",
+            "linear-gradient",
+            "wave",
+            "custom-disabled-bg",
+            "style-class",
+        ]
+    );
+    assert_eq!(
+        DEMOS
+            .iter()
+            .filter(|demo| matches!(demo.preview, Preview::Pending(_)))
+            .count(),
+        6
+    );
+
+    let mut fixture = Fixture::new();
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Button
+    );
+    assert_eq!(fixture.observations.borrow().semantics.len(), 90);
+    assert!(
+        fixture
+            .observations
+            .borrow()
+            .semantics
+            .contains_key("style-class.Object")
+    );
+    assert!(
+        fixture
+            .observations
+            .borrow()
+            .semantics
+            .contains_key("style-class.Function")
+    );
+    for demo in DEMOS {
+        assert!(!demo.description.is_empty());
+        if let Preview::Pending(missing) = demo.preview {
+            assert!(!missing.is_empty());
+            let prefix = format!("{}.", demo.id);
+            assert!(
+                !fixture
+                    .observations
+                    .borrow()
+                    .semantics
+                    .keys()
+                    .any(|id| id.starts_with(&prefix))
+            );
+        }
+    }
+    for selector in ["gallery.preview.loading", "gallery.preview.style-class"] {
+        assert!(fixture.bounds(selector).size.height >= px(120.));
+    }
+    for selector in [
+        "gallery.preview.icon",
+        "gallery.preview.size",
+        "gallery.preview.wave",
+    ] {
+        let height = fixture.bounds(selector).size.height;
+        assert!(height >= px(64.) && height < px(120.));
+    }
+
+    let selectors = [
+        "gallery.card.basic",
+        "gallery.card.color-variant",
+        "gallery.card.icon",
+        "gallery.card.icon-placement",
+        "gallery.card.size",
+        "gallery.card.disabled",
+        "gallery.card.loading",
+        "gallery.card.multiple",
+        "gallery.card.ghost",
+        "gallery.card.danger",
+        "gallery.card.block",
+        "gallery.card.linear-gradient",
+        "gallery.card.wave",
+        "gallery.card.custom-disabled-bg",
+        "gallery.card.style-class",
+    ];
+    let bounds: Vec<_> = selectors
+        .into_iter()
+        .map(|selector| fixture.bounds(selector))
+        .collect();
+    for (index, card) in bounds.iter().enumerate().skip(1) {
+        if index % 2 == 0 {
+            assert!(card.top() >= bounds[index - 2].bottom());
+        } else {
+            assert_eq!(card.top(), bounds[index - 1].top());
+            assert!(card.left() > bounds[index - 1].left());
+        }
+    }
+    assert_eq!(
+        bounds.first().unwrap().size.width,
+        bounds.last().unwrap().size.width
+    );
+}
+
+#[test]
+fn columns_follow_the_content_width_and_cards_stay_inside_the_pane() {
+    let mut fixture = Fixture::new();
+    for width in [1440., 1280., 1136., 1135., 1040., 1039., 800., 640.] {
+        fixture.resize(width);
+        let first = fixture.bounds("gallery.card.basic");
+        let second = fixture.bounds("gallery.card.color-variant");
+        let content = fixture.bounds("gallery.content");
+        assert_eq!(
+            fixture.bounds("gallery.sidebar").size.width,
+            px(if width >= 1040. { 232. } else { 72. })
+        );
+        assert!(first.left() >= content.left());
+        assert!(second.right() <= content.right());
+        let padding = if width < 800. { 24. } else { 32. };
+        if content.size.width - px(padding * 2.) >= px(840.) {
+            assert_eq!(first.top(), second.top());
+            assert!(second.left() > first.right());
+        } else {
+            assert_eq!(first.left(), second.left());
+            assert!(second.top() >= first.bottom());
+        }
+        let toolbar = fixture.bounds("gallery.toolbar");
+        assert!(toolbar.bottom() <= content.top());
+        assert!(toolbar.right() <= px(width));
+        assert!(content.size.height > px(300.));
+    }
+}
+
+#[test]
+fn scrolling_moves_only_the_content_and_reselecting_button_preserves_position() {
+    let mut fixture = Fixture::new();
+    let sidebar = fixture.bounds("gallery.sidebar");
+    let navigation = fixture.bounds("gallery.navigation.button");
+    let toolbar = fixture.bounds("gallery.toolbar");
+    let first = fixture.bounds("gallery.card.basic");
+    fixture.scroll(point(px(1000.), px(700.)), -360.);
+    assert_eq!(fixture.bounds("gallery.sidebar"), sidebar);
+    assert_eq!(fixture.bounds("gallery.navigation.button"), navigation);
+    assert_eq!(fixture.bounds("gallery.toolbar"), toolbar);
+    assert!(fixture.bounds("gallery.card.basic").top() < first.top());
+    let scroll = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
+    let offset = scroll.offset();
+    fixture
+        .cx
+        .simulate_click(navigation.center(), Modifiers::none());
+    fixture.draw();
+    assert_eq!(scroll.offset(), offset);
+    fixture.scroll(sidebar.center(), -360.);
+    assert_eq!(scroll.offset(), offset);
+}
+
+#[test]
+fn enabled_controls_support_keyboard_and_pointer_activation_and_disabled_controls_do_not() {
+    let mut fixture = Fixture::new();
+    fixture.focus("basic.Primary");
+    assert!(fixture.focused("basic.Primary"));
+    fixture.key("enter");
+    fixture.key("space");
+    assert_eq!(fixture.observations.borrow().activations.len(), 2);
+    let primary = fixture.bounds("basic.Primary");
+    fixture
+        .cx
+        .simulate_click(primary.center(), Modifiers::none());
+    fixture.draw();
+    assert_eq!(fixture.observations.borrow().activations.len(), 3);
+
+    fixture.reveal("disabled.0.false");
+    fixture.focus("disabled.0.false");
+    fixture.cx.simulate_keystrokes("tab");
+    fixture.draw();
+    assert!(fixture.focused("disabled.1.false"));
+    assert!(fixture.observations.borrow().semantics["disabled.0.true"].is_disabled());
+    let count = fixture.observations.borrow().activations.len();
+    let disabled = fixture.bounds("disabled.0.true");
+    fixture
+        .cx
+        .simulate_click(disabled.center(), Modifiers::none());
+    fixture.draw();
+    assert_eq!(fixture.observations.borrow().activations.len(), count);
+    assert!(!fixture.focused("disabled.0.true"));
+
+    fixture.reveal("disabled.5.true");
+    let disabled_link = fixture.bounds("disabled.5.true");
+    fixture
+        .cx
+        .simulate_click(disabled_link.center(), Modifiers::none());
+    fixture.draw();
+    assert!(fixture.cx.opened_url().is_none());
+    assert_eq!(fixture.observations.borrow().activations.len(), count);
+    let enabled_link = fixture.bounds("disabled.5.false");
+    fixture
+        .cx
+        .simulate_click(enabled_link.center(), Modifiers::none());
+    fixture.draw();
+    assert_eq!(
+        fixture.cx.opened_url().as_deref(),
+        Some("https://ant.design/index-cn")
+    );
+}
+
+#[test]
+fn custom_disabled_backgrounds_are_local_and_block_buttons_fill_the_preview() {
+    let mut fixture = Fixture::new();
+    fixture.page.read_with(&fixture.cx, |page, cx| {
+        let normal = page.scope.snapshot(cx);
+        let custom = page.disabled_scope.snapshot(cx);
+        for (variant, alpha) in [(ButtonVariant::Outlined, 0.1), (ButtonVariant::Dashed, 0.4)] {
+            let options = ButtonStyleOptions {
+                color: ButtonColor::Default,
+                variant,
+                disabled: true,
+                ..Default::default()
+            };
+            let customized = ButtonStyle::resolve(&custom.theme, options).rest.background;
+            assert_eq!(customized, Color::BLACK.with_alpha(alpha));
+            assert_ne!(
+                ButtonStyle::resolve(&normal.theme, options).rest.background,
+                customized
+            );
+        }
+        assert_eq!(
+            page.scope.snapshot(cx).theme.tokens.color_primary,
+            normal.theme.tokens.color_primary
+        );
+    });
+    let preview = fixture.bounds("gallery.preview.block");
+    let primary = fixture.bounds("block.Primary");
+    let default = fixture.bounds("block.Default");
+    assert_eq!(primary.size.width, preview.size.width - px(48.));
+    assert_eq!(primary.size.width, default.size.width);
+}
+
+#[test]
+fn loading_demo_preserves_handlers_blocks_repeat_activation_and_resets_after_three_seconds() {
+    let mut fixture = Fixture::new();
+    fixture.reveal("loading.start");
+    let initial = fixture.observations.borrow().activations.len();
+    for (id, key) in [
+        ("loading.start", "enter"),
+        ("loading.end", "space"),
+        ("loading.replace", "enter"),
+        ("loading.only", "space"),
+    ] {
+        fixture.focus(id);
+        fixture.key(key);
+        assert!(fixture.focused(id));
+        assert!(fixture.observations.borrow().semantics[id].is_busy());
+        assert!(
+            fixture.observations.borrow().semantics[id]
+                .label()
+                .is_some()
+        );
+        fixture.key("enter");
+        fixture.key("space");
+    }
+    assert_eq!(fixture.observations.borrow().activations.len(), initial + 4);
+    assert_eq!(
+        fixture.page.read_with(&fixture.cx, |page, _| page.loading),
+        [true; 4]
+    );
+    // The last two controls intentionally share the fourth request in the reference demo.
+    assert!(fixture.observations.borrow().semantics["loading.custom-action"].is_busy());
+
+    fixture
+        .cx
+        .executor()
+        .advance_clock(Duration::from_millis(2999));
+    fixture.draw();
+    assert_eq!(
+        fixture.page.read_with(&fixture.cx, |page, _| page.loading),
+        [true; 4]
+    );
+    fixture
+        .cx
+        .executor()
+        .advance_clock(Duration::from_millis(1));
+    fixture.draw();
+    assert_eq!(
+        fixture.page.read_with(&fixture.cx, |page, _| page.loading),
+        [false; 4]
+    );
+    for id in [
+        "loading.start",
+        "loading.end",
+        "loading.replace",
+        "loading.only",
+        "loading.custom-action",
+    ] {
+        assert!(!fixture.observations.borrow().semantics[id].is_busy());
+    }
+    assert!(fixture.observations.borrow().semantics["loading.always"].is_busy());
+
+    fixture.reveal("loading.custom-action");
+    let button = fixture.bounds("loading.custom-action");
+    fixture
+        .cx
+        .simulate_click(button.center(), Modifiers::none());
+    fixture.draw();
+    assert_eq!(fixture.observations.borrow().activations.len(), initial + 5);
+    assert!(fixture.observations.borrow().semantics["loading.only"].is_busy());
+    assert!(fixture.observations.borrow().semantics["loading.custom-action"].is_busy());
+}
+
+#[test]
+fn toolbar_controls_support_keyboard_activation_and_update_the_live_scope() {
+    let mut fixture = Fixture::new();
+    let scope = fixture.scope();
+    let initial = fixture.cx.update(|_, cx| scope.snapshot(cx));
+    fixture.click("gallery.control.theme");
+    let dark = fixture.cx.update(|_, cx| scope.snapshot(cx));
+    assert_ne!(
+        dark.theme.tokens.color_bg_layout,
+        initial.theme.tokens.color_bg_layout
+    );
+    fixture.key("space");
+    assert_eq!(
+        fixture
+            .cx
+            .update(|_, cx| scope.snapshot(cx).theme.tokens.color_bg_layout),
+        initial.theme.tokens.color_bg_layout
+    );
+    fixture.key("tab");
+    fixture.key("space");
+    let compact = fixture.cx.update(|_, cx| scope.snapshot(cx));
+    assert!(compact.theme.tokens.control_height < initial.theme.tokens.control_height);
+    fixture.key("shift-tab");
+    fixture.key("enter");
+    let dark_compact = fixture.cx.update(|_, cx| scope.snapshot(cx));
+    assert_ne!(
+        dark_compact.theme.tokens.color_bg_layout,
+        compact.theme.tokens.color_bg_layout
+    );
+    assert_eq!(
+        dark_compact.theme.tokens.control_height,
+        compact.theme.tokens.control_height
+    );
+    fixture.click("gallery.control.direction");
+    assert_eq!(
+        fixture.cx.update(|_, cx| scope.snapshot(cx).direction),
+        Direction::Rtl
+    );
+    fixture.click("gallery.control.motion");
+    assert!(fixture.cx.update(|_, cx| scope.snapshot(cx).motion));
+    fixture.click("gallery.control.motion");
+    assert!(!fixture.cx.update(|_, cx| scope.snapshot(cx).motion));
+}
+
+#[test]
+fn demo_jumps_follow_current_layout_and_top_control_restores_the_start() {
+    let mut fixture = Fixture::new();
+    fixture.resize(1440.);
+    fixture.scroll(point(px(1000.), px(700.)), -250.);
+    fixture.click("gallery.jump.loading");
+    fixture.next_frame();
+    let content = fixture.bounds("gallery.content");
+    let loading = fixture.bounds("gallery.card.loading");
+    assert!((loading.top() - content.top()).abs() <= px(1.));
+    fixture.resize(1100.);
+    fixture.click("gallery.jump.ghost");
+    fixture.next_frame();
+    let content = fixture.bounds("gallery.content");
+    let ghost = fixture.bounds("gallery.card.ghost");
+    assert!((ghost.top() - content.top()).abs() <= px(1.));
+    fixture.click("gallery.control.top");
+    fixture.next_frame();
+    let scroll = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
+    assert_eq!(scroll.offset().y, px(0.));
+    assert!(fixture.bounds("gallery.card.basic").top() >= fixture.bounds("gallery.content").top());
+}
+
+#[test]
+fn presentation_changes_keep_scroll_position_and_live_loading_requests() {
+    let mut fixture = Fixture::new();
+    fixture.reveal("loading.start");
+    fixture.focus("loading.start");
+    fixture.key("enter");
+    assert!(
+        fixture
+            .page
+            .read_with(&fixture.cx, |page, _| page.loading[0])
+    );
+    let scroll = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
+    for selector in [
+        "gallery.control.theme",
+        "gallery.control.density",
+        "gallery.control.direction",
+    ] {
+        let offset = scroll.offset();
+        fixture.click(selector);
+        // Compact density can shorten the document below the previous offset.
+        // Preserve position within the new native scroll range instead of
+        // demanding an out-of-range offset or resetting to the top.
+        assert_eq!(scroll.offset().x, offset.x);
+        assert_eq!(scroll.offset().y, offset.y.max(-scroll.max_offset().y));
+        assert!(
+            fixture
+                .page
+                .read_with(&fixture.cx, |page, _| page.loading[0])
+        );
+        assert!(fixture.observations.borrow().semantics["loading.start"].is_busy());
+    }
+    fixture.focus("loading.start");
+    let count = fixture.observations.borrow().activations.len();
+    fixture.key("enter");
+    fixture.key("space");
+    assert_eq!(fixture.observations.borrow().activations.len(), count);
+    fixture.cx.executor().advance_clock(Duration::from_secs(3));
+    fixture.draw();
+    assert!(
+        !fixture
+            .page
+            .read_with(&fixture.cx, |page, _| page.loading[0])
+    );
+    assert!(!fixture.observations.borrow().semantics["loading.start"].is_busy());
+}
+
+#[test]
+fn gallery_options_accept_presentation_flags_and_capture_and_reject_invalid_arguments() {
+    let options = Options::parse(
+        [
+            "--capture",
+            "C:/temp/gallery.png",
+            "--reduced-motion",
+            "--dark",
+            "--compact",
+            "--rtl",
+        ]
+        .map(String::from),
+    )
+    .unwrap();
+    assert!(options.reduced_motion);
+    assert!(options.dark && options.compact && options.rtl);
+    let defaults = Options::parse([]).unwrap();
+    assert!(!defaults.dark && !defaults.compact && !defaults.rtl && !defaults.reduced_motion);
+    assert_eq!(
+        options.capture.unwrap(),
+        std::path::PathBuf::from("C:/temp/gallery.png")
+    );
+    assert!(Options::parse(["--capture".into()]).is_err());
+    assert!(Options::parse(["--capture".into(), "--reduced-motion".into()]).is_err());
+    assert!(Options::parse(["--unknown".into()]).is_err());
+    assert_eq!(
+        Options::parse(["--window-size".into(), "640x720".into()])
+            .unwrap()
+            .window_size,
+        Some((640, 720))
+    );
+    for value in ["small", "640xNaN", "639x720", "640x479"] {
+        assert!(Options::parse(["--window-size".into(), value.into()]).is_err());
+    }
+    assert!(Options::parse(["--window-size".into()]).is_err());
+}
+
+#[test]
+fn color_matrix_uses_the_references_responsive_component_size() {
+    let mut fixture = Fixture::new();
+    let scope = fixture.scope();
+    for width in [1280., 1599., 1600., 1920.] {
+        fixture.resize(width);
+        let expected = fixture.cx.update(|_, cx| {
+            let config = scope.snapshot(cx);
+            if width < config.theme.tokens.screen_xxl as f32 {
+                px(config.theme.tokens.control_height_sm as f32)
+            } else {
+                px(config.theme.tokens.control_height as f32)
+            }
+        });
+        assert_eq!(
+            fixture.bounds("color-variant.0.Solid").size.height,
+            expected
+        );
+    }
+}

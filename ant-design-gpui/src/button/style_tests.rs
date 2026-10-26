@@ -322,3 +322,32 @@ fn button_style_legacy_link_uses_link_palette_and_explicit_default_stays_neutral
     );
     assert_eq!(neutral.rest.text, theme.tokens.color_text);
 }
+
+#[test]
+fn button_style_solid_contrast_rounds_translucent_composites_at_half_alpha() {
+    // Independently executed upstream isBright/AggregationColor yields black
+    // for rgba(0, 0, 0, 0.5): its white composite rounds 127.5 to byte 128.
+    // Preserve that boundary while retaining the opaque luminance decision.
+    for (background, expected) in [
+        (Color::BLACK.with_alpha(0.), Color::BLACK),
+        (Color::BLACK.with_alpha(0.499), Color::BLACK),
+        (Color::BLACK.with_alpha(0.5), Color::BLACK),
+        (Color::BLACK.with_alpha(0.501), Color::WHITE),
+        (Color::rgb(0xc0c0c0), Color::WHITE),
+        (Color::rgb(0xc1c1c1), Color::BLACK),
+        (Color::WHITE, Color::BLACK),
+    ] {
+        let mut config = ThemeConfig::default();
+        config.tokens.color_bg_solid = Some(background);
+        let style = ButtonStyle::resolve(
+            &config.resolve(),
+            ButtonStyleOptions {
+                variant: ButtonVariant::Solid,
+                ..Default::default()
+            },
+        );
+        for state in [style.rest, style.hover, style.active] {
+            assert_eq!(state.text, expected, "solid background {background:?}");
+        }
+    }
+}

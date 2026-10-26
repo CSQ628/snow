@@ -87,6 +87,7 @@ impl FocusRing {
             element: element.into_element(),
             focus: focus.clone(),
             ring: self,
+            corners: None,
         }
     }
 }
@@ -99,6 +100,15 @@ pub struct FocusRingElement<E> {
     element: E,
     focus: FocusHandle,
     ring: FocusRing,
+    corners: Option<gpui::Corners<Pixels>>,
+}
+
+impl<E> FocusRingElement<E> {
+    /// Follow a styled control's individual corners without changing its layout.
+    pub fn corners(mut self, corners: gpui::Corners<Pixels>) -> Self {
+        self.corners = Some(corners);
+        self
+    }
 }
 
 impl<E: Element> IntoElement for FocusRingElement<E> {
@@ -182,13 +192,16 @@ impl<E: Element> Element for FocusRingElement<E> {
             // CSS resolves oversized radii against the painted box. GPUI's
             // quad shader accepts raw radii, so clamp before expanding an outline
             // (notably pill buttons and controls narrower than their height).
-            let radius = finite_nonnegative(self.ring.radius)
-                .min(bounds.size.width.min(bounds.size.height).max(px(0.)) / 2.)
-                + extent;
+            let corners = self
+                .corners
+                .unwrap_or_else(|| gpui::Corners::all(self.ring.radius))
+                .map(|radius| finite_nonnegative(*radius))
+                .clamp_radii_for_quad_size(bounds.size)
+                .map(|radius| *radius + extent);
             window.paint_quad(
                 gpui::outline(bounds.dilate(extent), self.ring.color, Default::default())
                     .border_widths(self.ring.width)
-                    .corner_radii(radius),
+                    .corner_radii(corners),
             );
         }
     }

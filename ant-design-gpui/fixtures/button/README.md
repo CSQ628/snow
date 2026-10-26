@@ -3,21 +3,27 @@
 `reference.json` records independently computed browser styles from Ant Design
 **6.6.7**, revision `f8f5595ab5e891fff6a2a06c5b3b98af643d008e`.
 It contains 12 cases: default, dark, compact, and dark compact themes, each in
-rest, hover, and active states. Each case contains 65 controls covering legacy
+rest, hover, and active states. Each case contains 184 controls covering legacy
 types, all six variants, danger, sizes, shapes, icons, loading, disabled, ghost,
-block, and all thirteen preset colors.
+block, and all thirteen preset colors. The extended parity matrix exercises
+every preset variant, all neutral variants, disabled preset variants, ghost and
+disabled ghost combinations, and every size and shape with and without icons.
+Together these compare 2,208 independently computed interaction states.
 
 The generator executes the original Button token and style TypeScript and the
 original `@ant-design/cssinjs` 2.1.2 serializer. Its adapters replace React hook
 registration with style capture and supply concrete theme aliases from the
 independent [theme fixtures](../theme/README.md). Button CSS is never read from
-the Rust implementation. Static DOM uses the source Button classes and pinned
+the Rust implementation. The adapter follows the real style hook's `rootCls`
+default, applying common font resets to the Button root while nested icon slots
+inherit its effective font size. Static DOM uses the source Button classes and pinned
 Ant icon artwork. Decorative motion is disabled for capture. Hover and active
 states substitute attributes for the original CSS pseudo-class selectors;
 their declarations and disabled guards are unchanged.
 
 Headless Microsoft Edge runs each generated page and records `getComputedStyle`
-and layout bounds. The fixture includes the renderer version, viewport, device
+and layout bounds, including icon font size and artwork width/height. The fixture
+includes the renderer version, viewport, device
 scale, upstream revision, exact package versions, generator hashes, source
 hashes, and theme fixture hash. The checked-in data was captured with Edge
 156.0.4314.42 on Windows. Colors and token dimensions are the primary portable

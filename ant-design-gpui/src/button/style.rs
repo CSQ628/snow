@@ -200,7 +200,9 @@ fn no_shadow() -> ShadowList {
 fn is_bright(color: Color) -> bool {
     if color.a <= 0.5 {
         let max = color.r.max(color.g).max(color.b);
-        (f64::from(max) * color.a + 255. * (1. - color.a)) / 255. > 0.5
+        // The reference evaluates HSV after compositing to byte RGB on white.
+        // Rounding matters at exactly half alpha: black becomes 128, not 127.5.
+        (f64::from(max) * color.a + 255. * (1. - color.a)).round() / 255. > 0.5
     } else {
         f64::from(color.r) * 0.299 + f64::from(color.g) * 0.587 + f64::from(color.b) * 0.114 > 192.
     }

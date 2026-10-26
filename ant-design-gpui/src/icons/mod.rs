@@ -515,6 +515,23 @@ impl IconRenderer {
         window: &mut Window,
         cx: &mut App,
     ) -> Result<(), IconError> {
+        self.paint_with_scale(bounds, icon, options, 1., window, cx)
+    }
+
+    /// Scale artwork around its center without changing its raster/atlas identity.
+    /// Used by controls whose icon slot animates independently of the artwork.
+    pub(crate) fn paint_with_scale(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        icon: &IconRef,
+        options: &IconRenderOptions,
+        scale: f32,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<(), IconError> {
+        if !scale.is_finite() || scale <= 0. {
+            return Ok(());
+        }
         let mut options = *options;
         options.size = bounds.size;
         options.scale_factor = window.scale_factor();
@@ -525,7 +542,7 @@ impl IconRenderer {
             let transform = TransformationMatrix::unit()
                 .translate(center)
                 .rotate(options.rotation)
-                .scale(size(if options.mirror { -1. } else { 1. }, 1.))
+                .scale(size(if options.mirror { -scale } else { scale }, scale))
                 .translate(center * -1.);
             let (path, data) = match &icon.source {
                 IconSource::Embedded {
@@ -542,10 +559,14 @@ impl IconRenderer {
         let assets = cx.asset_source().clone();
         let raster = self.rasterize_inner(&renderer, &*assets, icon, &options)?;
         lease_image(&raster.resource, window, cx);
+        let painted = Bounds::centered_at(
+            bounds.center(),
+            bounds.size.map(|dimension| dimension * scale),
+        );
         let result = window
             .paint_image(
-                bounds,
-                bounds,
+                painted,
+                painted,
                 gpui::Corners::default(),
                 raster.resource.image.clone(),
                 0,
