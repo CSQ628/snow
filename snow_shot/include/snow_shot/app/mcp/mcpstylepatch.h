@@ -128,10 +128,11 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
           QStringLiteral("diamond_outline"), QStringLiteral("crowfoot_one"),
           QStringLiteral("crowfoot_many"), QStringLiteral("crowfoot_one_or_many"),
           QStringLiteral("indented_triangle")}}};
-    const QStringList colors{QStringLiteral("stroke"), QStringLiteral("fill"),
-                             QStringLiteral("color")};
+    const QStringList colors{QStringLiteral("arrow_outline_color"), QStringLiteral("stroke"),
+                             QStringLiteral("fill"), QStringLiteral("color")};
     const QStringList textFields{QStringLiteral("text"), QStringLiteral("font_family")};
-    const QStringList numbers{QStringLiteral("stroke_width"),
+    const QStringList numbers{QStringLiteral("arrow_outline_width"),
+                              QStringLiteral("stroke_width"),
                               QStringLiteral("font_size"),
                               QStringLiteral("opacity"),
                               QStringLiteral("corner_radius"),
@@ -201,10 +202,16 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
                    QStringLiteral("corner_radius"),
                    QStringLiteral("corner_radii")};
     else if (target == QStringLiteral("arrow"))
-        allowed = {QStringLiteral("stroke"),           QStringLiteral("stroke_width"),
-                   QStringLiteral("stroke_style"),     QStringLiteral("start_arrowhead"),
-                   QStringLiteral("end_arrowhead"),    QStringLiteral("arrow_type"),
-                   QStringLiteral("arrow_shaft_type"), QStringLiteral("arrow_ratio")};
+        allowed = {QStringLiteral("stroke"),
+                   QStringLiteral("stroke_width"),
+                   QStringLiteral("stroke_style"),
+                   QStringLiteral("start_arrowhead"),
+                   QStringLiteral("end_arrowhead"),
+                   QStringLiteral("arrow_type"),
+                   QStringLiteral("arrow_shaft_type"),
+                   QStringLiteral("arrow_ratio"),
+                   QStringLiteral("arrow_outline_color"),
+                   QStringLiteral("arrow_outline_width")};
     else if (target == QStringLiteral("line") || target == QStringLiteral("freehand")) {
         allowed = {QStringLiteral("fill"),         QStringLiteral("stroke"),
                    QStringLiteral("stroke_width"), QStringLiteral("fill_style"),
@@ -258,6 +265,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
                                                        : 8192;
             if (!it->isDouble() || !std::isfinite(value) || value > maximum ||
                 value < (it.key() == QStringLiteral("angle") ? -360 : 0))
+                return false;
+            if (it.key() == QStringLiteral("arrow_outline_width") && value > 72)
                 return false;
             if (it.key() == QStringLiteral("number") && std::floor(value) != value)
                 return false;
@@ -575,6 +584,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             enumeration("arrow_type", static_cast<int>(style.arrowType)));
         style.arrowShaftType = static_cast<SnowCanvasArrowShaftType>(
             enumeration("arrow_shaft_type", static_cast<int>(style.arrowShaftType)));
+        style.arrowOutlineColor = color("arrow_outline_color", style.arrowOutlineColor);
+        style.arrowOutlineWidth = number("arrow_outline_width", style.arrowOutlineWidth);
         style.arrowRatio = number("arrow_ratio", style.arrowRatio);
         style.cornerRadii = cornerRadii(style.cornerRadii);
         const QHash<QString, quint32> properties{
@@ -593,6 +604,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             {QStringLiteral("end_arrowhead"), SnowCanvasShapeStylePropertyEndArrowhead},
             {QStringLiteral("arrow_type"), SnowCanvasShapeStylePropertyArrowType},
             {QStringLiteral("arrow_shaft_type"), SnowCanvasShapeStylePropertyArrowShaftType},
+            {QStringLiteral("arrow_outline_color"), SnowCanvasShapeStylePropertyArrowOutlineColor},
+            {QStringLiteral("arrow_outline_width"), SnowCanvasShapeStylePropertyArrowOutlineWidth},
             {QStringLiteral("arrow_ratio"), SnowCanvasShapeStylePropertyArrowRatio}};
         quint32 flags = 0;
         for (auto it = patch.begin(); it != patch.end(); ++it)

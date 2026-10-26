@@ -529,6 +529,7 @@ fn local_item(
         {
             let mut local = local.clone();
             local.stroke = arrow.stroke;
+            local.arrow_outline_color = arrow.arrow_outline_color;
             local.fill = arrow.fill;
             local.opacity = arrow.opacity;
             local.blend_mode = arrow.blend_mode;
@@ -695,6 +696,7 @@ fn rigid_arrow_transform(a: &ArrowDisplayItem, b: &ArrowDisplayItem) -> Option<S
         || a.bound_text_overlay != b.bound_text_overlay
         || a.arrow_type != b.arrow_type
         || a.arrow_shaft_type != b.arrow_shaft_type
+        || a.arrow_outline_width != b.arrow_outline_width
         || a.arrow_ratio != b.arrow_ratio
         || a.start_arrowhead != b.start_arrowhead
         || a.end_arrowhead != b.end_arrowhead
@@ -784,6 +786,7 @@ fn separated(item: &SceneDisplayItem) -> (SceneDisplayItem, Vec<u64>) {
         v.blend_mode = Default::default();
     }
     fn arrow(v: &mut ArrowDisplayItem, out: &mut Vec<u64>) {
+        color(&mut v.arrow_outline_color, out);
         color(&mut v.fill, out);
         color(&mut v.stroke, out);
         alpha(&mut v.opacity, out);

@@ -25,7 +25,8 @@ constexpr quint32 kArrowShapeProperties =
     SnowCanvasShapeStylePropertyStartArrowhead | SnowCanvasShapeStylePropertyEndArrowhead |
     SnowCanvasShapeStylePropertyStrokeStyle | SnowCanvasShapeStylePropertyArrowType |
     SnowCanvasShapeStylePropertyStrokeRenderingStyle | SnowCanvasShapeStylePropertyArrowShaftType |
-    SnowCanvasShapeStylePropertyArrowRatio;
+    SnowCanvasShapeStylePropertyArrowRatio | SnowCanvasShapeStylePropertyArrowOutlineColor |
+    SnowCanvasShapeStylePropertyArrowOutlineWidth;
 constexpr quint32 kLineShapeProperties =
     SnowCanvasShapeStylePropertyFillColor | SnowCanvasShapeStylePropertyFillStyle |
     SnowCanvasShapeStylePropertyStrokeColor | SnowCanvasShapeStylePropertyStrokeWidth |
@@ -165,6 +166,8 @@ void readCornerRadii(const QJsonObject& object, SnowCanvasCornerRadii* radii) {
 
 QJsonObject shapeValue(const SnowCanvasShapeStyle& style) {
     QJsonObject value;
+    value.insert(QStringLiteral("arrow_outline_color"), colorValue(style.arrowOutlineColor));
+    putDouble(&value, QStringLiteral("arrow_outline_width"), style.arrowOutlineWidth);
     value.insert(QStringLiteral("fill"), colorValue(style.fill));
     putEnum(&value, QStringLiteral("fill_style"), style.fillStyle);
     value.insert(QStringLiteral("stroke"), colorValue(style.stroke));
@@ -323,6 +326,11 @@ void readShapeValue(const QJsonObject& object, SnowCanvasShapeStyle* style,
     style->arrowRatio = 1.0;
     readDouble(object, QStringLiteral("arrow_ratio"), &style->arrowRatio);
     style->arrowRatio = snowCanvasNormalizeArrowRatio(style->arrowRatio);
+    style->arrowOutlineColor = QColor(0xff, 0xcc, 0xc7);
+    colorValue(object.value(QStringLiteral("arrow_outline_color")), &style->arrowOutlineColor);
+    style->arrowOutlineWidth = 0.0;
+    readDouble(object, QStringLiteral("arrow_outline_width"), &style->arrowOutlineWidth);
+    style->arrowOutlineWidth = bounded(style->arrowOutlineWidth, 0.0, 72.0);
     readEnum(object, QStringLiteral("fill_style"), static_cast<int>(SnowCanvasFillStyle::Border),
              &style->fillStyle);
     readEnum(object, QStringLiteral("start_arrowhead"),

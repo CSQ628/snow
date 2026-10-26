@@ -6511,6 +6511,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-scrolling-toolbar-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --scrolling-only -platform offscreen)
+    add_test(NAME snow-shot-arrow-outline-toolbar-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --arrow-outline-only -platform offscreen)
+    set_tests_properties(snow-shot-arrow-outline-toolbar-tests PROPERTIES LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     add_test(NAME snow-shot-text-style-toolbar-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --text-style-only -platform offscreen)
     set_tests_properties(snow-shot-text-style-toolbar-tests PROPERTIES LABELS "unit" TIMEOUT 60)

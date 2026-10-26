@@ -72,6 +72,39 @@ fn setup(tool: ActiveTool, enabled: bool) -> (Engine, ViewportId) {
     (engine, viewport)
 }
 
+#[test]
+fn clear_selection_updates_viewports_without_changing_tool_or_history() {
+    let (mut engine, viewport) = setup(ActiveTool::Arrow, true);
+    let second = engine.create_viewport(ViewportConfig::default()).unwrap();
+    engine.set_viewport_surface_size(second, 800, 600).unwrap();
+    drag(&mut engine, viewport);
+    assert_eq!(engine.selected_ids().len(), 1);
+    let revision = engine.model.document_revision();
+    let history = engine.history_state();
+
+    let result = engine
+        .clear_selection_with_viewport_changes(viewport)
+        .unwrap();
+    assert!(engine.selected_ids().is_empty());
+    assert!(result.changed_viewports.contains(&viewport));
+    assert!(result.changed_viewports.contains(&second));
+    assert_eq!(
+        engine.viewport_active_tool(viewport).unwrap(),
+        ActiveTool::Arrow
+    );
+    assert_eq!(engine.model.document_revision(), revision);
+    assert_eq!(engine.history_state(), history);
+    assert!(
+        engine
+            .clear_selection_with_viewport_changes(viewport)
+            .unwrap()
+            .changed_viewports
+            .is_empty()
+    );
+    assert!(engine.undo().unwrap());
+    assert!(engine.model.paint_order().is_empty());
+}
+
 fn pointer(engine: &mut Engine, viewport: ViewportId, kind: PointerEventType, x: f64, y: f64) {
     engine
         .process_input(

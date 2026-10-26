@@ -49,6 +49,17 @@ impl Engine {
         self.refresh_after_session_mutation(before)
     }
 
+    pub fn clear_selection_with_viewport_changes(
+        &mut self,
+        source_viewport_id: ViewportId,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(source_viewport_id)?;
+        let before = self.editor.snapshot();
+        self.editor.clear_selection();
+        self.history.break_angle_wheel_coalescing();
+        self.refresh_after_session_mutation(before)
+    }
+
     pub fn selected_ids(&self) -> Vec<ElementId> {
         self.editor.selected_ids()
     }

@@ -304,7 +304,8 @@ std::uint64_t geometryKey(const Item& item, bool rectangle, SnowStrokeStyle patt
     hash = append(hash, static_cast<std::uint64_t>(shape));
     hash = append(hash, rectangle);
     if (!rectangle) {
-        for (double value : {item.center_x, item.center_y, item.rotation, item.arrow_ratio})
+        for (double value : {item.center_x, item.center_y, item.rotation, item.arrow_ratio,
+                             item.arrow_outline_width})
             hash = appendDouble(hash, value);
         hash = append(hash, revision);
         hash = append(hash, pathRevision);
@@ -656,7 +657,15 @@ const Cache& prepare(const Item& item, bool rectangle, SnowStrokeStyle pattern,
     } else {
         buildArrow(cache, item, buildPath(item));
     }
-    for (const QPainterPath* path : {&cache.originalFill, &cache.backgroundHeads, &cache.ink}) {
+    if (!rectangle && item.arrow_outline_width > 0.0 && !cache.ink.isEmpty()) {
+        QPainterPathStroker stroker;
+        stroker.setWidth(item.arrow_outline_width);
+        stroker.setCapStyle(Qt::RoundCap);
+        stroker.setJoinStyle(Qt::RoundJoin);
+        cache.arrowOutline = stroker.createStroke(cache.ink);
+    }
+    for (const QPainterPath* path :
+         {&cache.originalFill, &cache.backgroundHeads, &cache.ink, &cache.arrowOutline}) {
         if (!path->isEmpty())
             cache.paintBounds = cache.paintBounds.isEmpty()
                                     ? path->boundingRect()

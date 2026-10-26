@@ -97,6 +97,8 @@ constexpr char kRoleArrowType[] = "arrow-type";
 constexpr char kRoleLineType[] = "line-type";
 constexpr char kRoleBrushMode[] = "brush-mode";
 constexpr char kSignatureBrushMode[] = "icon-options:brush-mode";
+constexpr char kRoleArrowOutline[] = "arrow-outline";
+constexpr char kSignatureArrowOutline[] = "width-color:arrow-outline";
 constexpr char kRoleArrowRatio[] = "arrow-ratio";
 constexpr char kSignatureArrowRatio[] = "numeric:arrow-ratio";
 constexpr char kRoleArrowShaft[] = "arrow-shaft-type";
@@ -529,6 +531,10 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text alignment"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke width"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke width %1px"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow outline width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow outline width %1px"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow outline color transparent"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow outline color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke color transparent"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text stroke color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Text fill color"),
@@ -685,6 +691,8 @@ SnowCanvasShapeStyle shapeStyleFromArrowStyle(const SnowCanvasArrowStyle& arrowS
     style.arrowType = arrowStyle.arrowType;
     style.arrowShaftType = arrowStyle.arrowShaftType;
     style.arrowRatio = arrowStyle.arrowRatio;
+    style.arrowOutlineColor = arrowStyle.arrowOutlineColor;
+    style.arrowOutlineWidth = arrowStyle.arrowOutlineWidth;
     return style;
 }
 
@@ -699,6 +707,8 @@ SnowCanvasArrowStyle arrowStyleFromShapeStyle(const SnowCanvasShapeStyle& shapeS
     style.arrowType = shapeStyle.arrowType;
     style.arrowShaftType = shapeStyle.arrowShaftType;
     style.arrowRatio = shapeStyle.arrowRatio;
+    style.arrowOutlineColor = shapeStyle.arrowOutlineColor;
+    style.arrowOutlineWidth = shapeStyle.arrowOutlineWidth;
     return style;
 }
 
@@ -942,6 +952,7 @@ void ScreenshotToolPaletteStyleControls::rebuildRegisteredComponents() {
     append(m_angleWidthEditor);
     append(m_arrowStrokeWidthEditor);
     append(m_arrowStrokeEditor);
+    append(m_arrowOutlineEditor);
     append(m_startArrowheadEditor);
     append(m_arrowShaftEditor);
     append(m_endArrowheadEditor);
@@ -1002,6 +1013,7 @@ void ScreenshotToolPaletteStyleControls::parkStyleEditors(int tool, QWidget* con
     case Tool::Arrow:
         park(kRoleOutlineStroke, kSignatureStroke, m_arrowStrokeEditor);
         park(kRoleOutlineWidth, kSignatureStrokeWidth, m_arrowStrokeWidthEditor);
+        park(kRoleArrowOutline, kSignatureArrowOutline, m_arrowOutlineEditor);
         park(kRoleStartArrowhead, kSignatureArrowhead, m_startArrowheadEditor);
         park(kRoleArrowShaft, kSignatureArrowShaft, m_arrowShaftEditor);
         park(kRoleEndArrowhead, kSignatureArrowhead, m_endArrowheadEditor);
@@ -1091,6 +1103,7 @@ void ScreenshotToolPaletteStyleControls::restoreStyleEditors(int tool, QWidget* 
     case Tool::Arrow:
         restore(kRoleOutlineStroke, m_arrowStrokeEditor);
         restore(kRoleOutlineWidth, m_arrowStrokeWidthEditor);
+        restore(kRoleArrowOutline, m_arrowOutlineEditor);
         restore(kRoleStartArrowhead, m_startArrowheadEditor);
         restore(kRoleArrowShaft, m_arrowShaftEditor);
         restore(kRoleEndArrowhead, m_endArrowheadEditor);
@@ -1423,6 +1436,7 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
     case Tool::Arrow:
         stageComponent(kRoleOutlineStroke, kSignatureStroke, m_arrowStrokeEditor);
         stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_arrowStrokeWidthEditor);
+        stageComponent(kRoleArrowOutline, kSignatureArrowOutline, m_arrowOutlineEditor);
         stageWidget(kRoleArrowType);
         stageWidget(kRoleArrowRatio);
         stageComponent(kRoleStartArrowhead, kSignatureArrowhead, m_startArrowheadEditor);
@@ -1981,6 +1995,47 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
     if (host.addGroupSeparator) {
         host.addGroupSeparator(layout);
     }
+    ScreenshotToolPaletteWidthColorEditorConfig arrowOutlineConfig;
+    arrowOutlineConfig.accessibleName = QStringLiteral("Arrow outline width");
+    arrowOutlineConfig.triggerTooltip = QStringLiteral("Arrow outline width");
+    arrowOutlineConfig.popupObjectName = QStringLiteral("screenshotArrowOutlineWidthOptions");
+    arrowOutlineConfig.widthRowObjectName = QStringLiteral("screenshotArrowOutlineWidthPresets");
+    arrowOutlineConfig.colorRowObjectName = QStringLiteral("screenshotArrowOutlineColorPresets");
+    arrowOutlineConfig.widthValues = style_presets::strokePresetWidths();
+    arrowOutlineConfig.colorValues = style_presets::textFillColors();
+    arrowOutlineConfig.presetSource =
+        snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Fill;
+    arrowOutlineConfig.observePopup = true;
+    arrowOutlineConfig.widthTooltip = [](double width) {
+        return ScreenshotToolPaletteTranslationText("Arrow outline width %1px")
+            .arg(width, 0, 'g', 3);
+    };
+    arrowOutlineConfig.colorTooltip = [](const QColor& color) {
+        return color.alpha() == 0
+                   ? ScreenshotToolPaletteTranslationText("Arrow outline color transparent")
+                   : ScreenshotToolPaletteTranslationText("Arrow outline color %1")
+                         .arg(color.name());
+    };
+    if (auto reused =
+            takeReusableEditor(kRoleArrowOutline, kSignatureArrowOutline, layout, controls)) {
+        m_arrowOutlineEditor.reset(
+            static_cast<ScreenshotToolPaletteWidthColorEditor*>(reused.release()));
+        m_arrowOutlineEditor->rebind(
+            arrowOutlineConfig, [this](double width) { setArrowOutlineWidth(width); },
+            [this](const QColor& color) { setArrowOutlineColor(color); });
+    } else {
+        m_arrowOutlineEditor = std::make_unique<ScreenshotToolPaletteWidthColorEditor>();
+        m_arrowOutlineEditor->build(
+            layout, controls, controls, arrowOutlineConfig, m_state.m_arrowStyle.arrowOutlineWidth,
+            m_state.m_arrowStyle.arrowOutlineColor,
+            [this](double width) { setArrowOutlineWidth(width); },
+            [this](const QColor& color) { setArrowOutlineColor(color); }, editorServices(),
+            metrics);
+    }
+    registerEditor(m_arrowOutlineEditor.get());
+    tagEditor(m_arrowOutlineEditor.get(), kRoleArrowOutline, kSignatureArrowOutline);
+    addToolbarSpacing(layout, kTextStrokeColorTrailingSpacing, metrics);
+
     m_arrowRatioEditor = dynamic_cast<IconNumericValuePreviewButton*>(
         takeReusableWidget(kRoleArrowRatio, kSignatureArrowRatio, layout, controls));
     if (m_arrowRatioEditor == nullptr) {
@@ -4665,6 +4720,15 @@ void ScreenshotToolPaletteStyleControls::registerArrowEntries() {
                  : m_state.m_arrowStyle.arrowType == SnowCanvasArrowType::Elbow ? 2
                                                                                 : 0);
          }},
+        {ShapeArrowOutlineRefresh,
+         [this, mixed]() {
+             if (m_arrowOutlineEditor != nullptr) {
+                 m_arrowOutlineEditor->update(m_state.m_arrowStyle.arrowOutlineWidth,
+                                              m_state.m_arrowStyle.arrowOutlineColor,
+                                              mixed(SnowCanvasShapeStylePropertyArrowOutlineWidth),
+                                              mixed(SnowCanvasShapeStylePropertyArrowOutlineColor));
+             }
+         }},
         {ShapeArrowheadsRefresh,
          [this, mixed]() {
              SNOW_SHOT_TOOLBAR_PERF_COUNTER("style.arrow.arrowheads_refresh");
@@ -5054,6 +5118,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_angleDecimalsEditor = {};
     m_arrowStrokeWidthEditor.reset();
     m_arrowStrokeEditor.reset();
+    m_arrowOutlineEditor.reset();
     m_arrowTypeButtonGroup = nullptr;
     m_brushModeButtonGroup = nullptr;
     m_arrowRatioEditor = nullptr;
@@ -5156,6 +5221,7 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     resetUnless(keepAngle, m_angleWidthEditor);
     resetUnless(keepArrow, m_arrowStrokeWidthEditor);
     resetUnless(keepArrow, m_arrowStrokeEditor);
+    resetUnless(keepArrow, m_arrowOutlineEditor);
     resetUnless(keepArrow, m_startArrowheadEditor);
     resetUnless(keepArrow, m_arrowShaftEditor);
     resetUnless(keepArrow, m_endArrowheadEditor);
@@ -5496,6 +5562,20 @@ bool ScreenshotToolPaletteStyleControls::handleCornerRadiusWheel(const QPoint& g
     return true;
 }
 
+bool ScreenshotToolPaletteStyleControls::handleArrowOutlineWidthWheel(const QPoint& globalPosition,
+                                                                      int direction) {
+    const bool hasPicker = m_arrowOutlineEditor != nullptr &&
+                           m_arrowOutlineEditor->picker() != nullptr &&
+                           m_arrowOutlineEditor->picker()->isVisible() &&
+                           m_arrowOutlineEditor->picker()->rect().contains(
+                               m_arrowOutlineEditor->picker()->mapFromGlobal(globalPosition));
+    if (direction == 0 || !hasPicker) {
+        return false;
+    }
+    setArrowOutlineWidth(m_state.m_arrowStyle.arrowOutlineWidth + (direction > 0 ? 1.0 : -1.0));
+    return true;
+}
+
 bool ScreenshotToolPaletteStyleControls::handleTextStrokeWidthWheel(const QPoint& globalPosition,
                                                                     int direction) {
     const bool hasPicker = m_textStrokeEditor != nullptr &&
@@ -5660,6 +5740,8 @@ SnowCanvasStyleDefaults ScreenshotToolPaletteStyleControls::creationStyleDefault
     defaults.arrow.arrowType = m_state.m_creationArrowStyle.arrowType;
     defaults.arrow.arrowShaftType = m_state.m_creationArrowStyle.arrowShaftType;
     defaults.arrow.arrowRatio = m_state.m_creationArrowStyle.arrowRatio;
+    defaults.arrow.arrowOutlineColor = m_state.m_creationArrowStyle.arrowOutlineColor;
+    defaults.arrow.arrowOutlineWidth = m_state.m_creationArrowStyle.arrowOutlineWidth;
     defaults.distance = m_state.creationDistanceStyle;
     defaults.angle = m_state.creationAngleStyle;
     defaults.magnifier = m_state.creationMagnifierStyle;
@@ -6241,6 +6323,27 @@ void ScreenshotToolPaletteStyleControls::setArrowStrokeRenderingStyle(
                                 return false;
                             }
                             arrow.strokeRenderingStyle = style;
+                            return true;
+                        });
+}
+
+void ScreenshotToolPaletteStyleControls::setArrowOutlineWidth(double width) {
+    width = std::isfinite(width) ? std::clamp(width, 0.0, 72.0) : 0.0;
+    commitArrowProperty(SnowCanvasShapeStylePropertyArrowOutlineWidth,
+                        [width](SnowCanvasArrowStyle& style) {
+                            if (style.arrowOutlineWidth == width)
+                                return false;
+                            style.arrowOutlineWidth = width;
+                            return true;
+                        });
+}
+
+void ScreenshotToolPaletteStyleControls::setArrowOutlineColor(const QColor& color) {
+    commitArrowProperty(SnowCanvasShapeStylePropertyArrowOutlineColor,
+                        [color](SnowCanvasArrowStyle& style) {
+                            if (!color.isValid() || style.arrowOutlineColor == color)
+                                return false;
+                            style.arrowOutlineColor = color;
                             return true;
                         });
 }
@@ -7201,6 +7304,9 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
     if (arrowStyleSource) {
         const bool selectedArrow = state.source == SnowCanvasStyleToolbarSource::SelectedArrow;
         SnowCanvasArrowStyle displayedStyle = arrowStyleFromShapeStyle(state.shapeStyle);
+        if (editorInteracting(m_arrowOutlineEditor)) {
+            displayedStyle.arrowOutlineColor = m_state.m_arrowStyle.arrowOutlineColor;
+        }
         if (editorInteracting(m_arrowStrokeEditor)) {
             displayedStyle.stroke = m_state.m_arrowStyle.stroke;
         }
@@ -7228,6 +7334,11 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
                  (SnowCanvasShapeStyleMixedStroke | SnowCanvasShapeStyleMixedStrokeStyle |
                   SnowCanvasShapeStyleMixedStrokeRenderingStyle)) != 0)
                 groups |= ShapeStrokeRefresh;
+            if (m_state.m_arrowStyle.arrowOutlineWidth != displayedStyle.arrowOutlineWidth ||
+                m_state.m_arrowStyle.arrowOutlineColor != displayedStyle.arrowOutlineColor ||
+                (mixedChanged & (SnowCanvasShapeStyleMixedArrowOutlineWidth |
+                                 SnowCanvasShapeStyleMixedArrowOutlineColor)) != 0)
+                groups |= ShapeArrowOutlineRefresh;
             if (m_state.m_arrowStyle.arrowRatio != displayedStyle.arrowRatio ||
                 (mixedChanged & SnowCanvasShapeStyleMixedArrowRatio) != 0)
                 groups |= ShapeArrowheadsRefresh;
