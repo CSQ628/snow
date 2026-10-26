@@ -197,3 +197,45 @@ fn segmented_style_component_algorithms_control_geometry_and_state_palette() {
     assert_eq!(style.rest.text, Color::BLACK.with_alpha(0.65));
     assert_eq!(theme.tokens.control_height, 32.);
 }
+
+#[test]
+fn segmented_style_caches_paint_resources_from_component_effective_aliases() {
+    use crate::theme::Shadow;
+
+    let primary = Color::rgb(0x722ed1);
+    let shadow = Shadow {
+        x: -1.,
+        y: 3.,
+        blur: 5.,
+        spread: -2.,
+        color: primary.with_alpha(0.2),
+        inset: true,
+    };
+    let mut config = ThemeConfig::default();
+    config.components.set_theme(
+        ComponentThemeConfig::<SegmentedTheme>::default().with_tokens(TokenPatch {
+            color_primary: Some(primary),
+            box_shadow_tertiary: Some(vec![shadow].into()),
+            ..Default::default()
+        }),
+    );
+    let theme = config.resolve();
+    let tokens = theme.component::<SegmentedTheme>();
+    let cached = theme.component::<SegmentedTheme>();
+    assert!(Arc::ptr_eq(tokens.shadows(), cached.shadows()));
+    assert_eq!(tokens.icon_palette().primary, primary.to_rgba());
+    assert_eq!(
+        tokens.icon_palette().secondary,
+        crate::theme::generate_palette(primary, false)[0].to_rgba()
+    );
+    let native_shadow = &tokens.shadows()[0];
+    assert_eq!(native_shadow.inset, shadow.inset);
+    assert_eq!(native_shadow.color, shadow.color.to_hsla());
+    assert_eq!(
+        native_shadow.offset,
+        gpui::point(gpui::px(-1.), gpui::px(3.))
+    );
+    assert_eq!(native_shadow.blur_radius, gpui::px(5.));
+    assert_eq!(native_shadow.spread_radius, gpui::px(-2.));
+    assert_ne!(theme.tokens.color_primary, primary);
+}

@@ -29,6 +29,143 @@ struct Fixture {
     _window: WindowHandle<UiRoot>,
 }
 
+#[test]
+fn switch_gallery_keeps_reference_order_and_supports_native_capture_selection() {
+    assert_eq!(
+        super::switch::DEMOS
+            .iter()
+            .map(|demo| demo.id)
+            .collect::<Vec<_>>(),
+        [
+            "basic",
+            "disabled",
+            "text",
+            "size",
+            "loading",
+            "component-token",
+            "style-class"
+        ],
+    );
+    let component = COMPONENTS
+        .iter()
+        .find(|component| component.id == ComponentId::Switch)
+        .expect("registered Switch page");
+    assert_eq!(component.title, "Switch");
+    assert_eq!(component.group, "Data Entry");
+    assert_eq!(
+        Options::parse(["--component".into(), "switch".into()])
+            .unwrap()
+            .component,
+        ComponentId::Switch,
+    );
+}
+
+#[test]
+fn switch_gallery_layout_and_navigation_follow_window_width() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.switch");
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Switch,
+    );
+    for width in [1280., 1100., 640.] {
+        fixture.resize(width);
+        let first = fixture.bounds("gallery.switch.card.basic");
+        let second = fixture.bounds("gallery.switch.card.disabled");
+        let content = fixture.bounds("gallery.content");
+        assert!(first.left() >= content.left());
+        assert!(second.right() <= content.right());
+        if width == 1280. {
+            assert_eq!(first.top(), second.top());
+        } else {
+            assert!(second.top() >= first.bottom());
+        }
+    }
+    fixture.resize(1280.);
+    fixture.click("gallery.jump.text");
+    fixture.next_frame();
+    let content = fixture.bounds("gallery.content");
+    let text = fixture.bounds("gallery.switch.card.text");
+    assert!((text.top() - content.top()).abs() <= px(1.));
+    fixture.click("gallery.control.top");
+    fixture.next_frame();
+    let scroll = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
+    assert_eq!(scroll.offset().y, px(0.));
+}
+
+#[test]
+fn switch_gallery_pointer_keyboard_and_availability_examples_are_interactive() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.switch");
+    let page = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.switch.clone());
+    assert!(page.read_with(&fixture.cx, |page, _| page.checked));
+    fixture.click("switch.basic");
+    assert!(!page.read_with(&fixture.cx, |page, _| page.checked));
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.changes), 1);
+    fixture.key("space");
+    assert!(page.read_with(&fixture.cx, |page, _| page.checked));
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.changes), 2);
+    fixture.click("switch.disabled");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.changes), 2);
+    fixture.click("switch.disabled.toggle");
+    assert!(!page.read_with(&fixture.cx, |page, _| page.disabled));
+    fixture.click("switch.disabled");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.changes), 3);
+    fixture.reveal("switch.loading.normal");
+    fixture.click("switch.loading.normal");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.changes), 3);
+    fixture.click("switch.loading.toggle");
+    assert!(!page.read_with(&fixture.cx, |page, _| page.loading));
+    fixture.click("switch.loading.normal");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.changes), 4);
+}
+
+#[test]
+fn switch_gallery_sizes_tokens_and_state_survive_display_changes() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.switch");
+    let page = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.switch.clone());
+    assert_eq!(
+        fixture.bounds("switch.size.normal").size,
+        size(px(44.), px(22.))
+    );
+    assert_eq!(
+        fixture.bounds("switch.size.small").size,
+        size(px(28.), px(16.))
+    );
+    assert_eq!(
+        fixture.bounds("switch.component-token").size,
+        // The default 9px + 24px content margins exceed this theme's 32px minimum.
+        size(px(33.), px(14.))
+    );
+    fixture.click("switch.basic");
+    for selector in [
+        "gallery.control.theme",
+        "gallery.control.density",
+        "gallery.control.direction",
+    ] {
+        fixture.click(selector);
+        assert!(!page.read_with(&fixture.cx, |page, _| page.checked));
+        assert_eq!(page.read_with(&fixture.cx, |page, _| page.changes), 1);
+    }
+    let scope = fixture.scope();
+    assert_eq!(
+        fixture.cx.update(|_, cx| scope.snapshot(cx).direction),
+        Direction::Rtl
+    );
+    fixture.click("gallery.navigation.button");
+    fixture.click("gallery.navigation.switch");
+    assert!(!page.read_with(&fixture.cx, |page, _| page.checked));
+}
+
 impl Fixture {
     fn new() -> Self {
         let mut cx = TestAppContext::single();
@@ -165,12 +302,20 @@ impl Fixture {
 
 #[test]
 fn catalogue_keeps_reference_order_and_pending_cards_explain_their_status_without_fake_controls() {
-    assert_eq!(COMPONENTS.len(), 3);
+    assert!(COMPONENTS.len() >= 4);
     assert_eq!(COMPONENTS[0].group, "General");
     assert_eq!(COMPONENTS[1].id, ComponentId::Divider);
     assert_eq!(COMPONENTS[1].group, "Layout");
     assert_eq!(COMPONENTS[2].id, ComponentId::Checkbox);
     assert_eq!(COMPONENTS[2].group, "Data Entry");
+    assert_eq!(
+        COMPONENTS
+            .iter()
+            .find(|component| component.id == ComponentId::Segmented)
+            .unwrap()
+            .group,
+        "Data Entry"
+    );
     assert_eq!(
         DEMOS.iter().map(|demo| demo.id).collect::<Vec<_>>(),
         [
@@ -538,6 +683,14 @@ fn demo_jumps_follow_current_layout_and_top_control_restores_the_start() {
     let mut fixture = Fixture::new();
     fixture.resize(1440.);
     fixture.scroll(point(px(1000.), px(700.)), -250.);
+    let loading_before_sidebar_scroll = fixture.bounds("gallery.card.loading");
+    // The growing component catalogue puts later jump links below the sidebar
+    // viewport. Reveal them through its own scroll area before pointer input.
+    fixture.scroll(point(px(100.), px(700.)), -250.);
+    assert_eq!(
+        fixture.bounds("gallery.card.loading"),
+        loading_before_sidebar_scroll
+    );
     fixture.click("gallery.jump.loading");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");
@@ -830,4 +983,358 @@ fn divider_gallery_can_be_selected_for_native_capture() {
             .component,
         ComponentId::Divider,
     );
+}
+
+#[test]
+fn tag_gallery_follows_reference_order_and_keeps_its_own_navigation_and_layout() {
+    assert_eq!(
+        super::tag::DEMOS
+            .iter()
+            .map(|demo| demo.id)
+            .collect::<Vec<_>>(),
+        [
+            "tag-basic",
+            "tag-colorful",
+            "tag-control",
+            "tag-checkable",
+            "tag-animation",
+            "tag-icon",
+            "tag-status",
+            "tag-customize",
+            "tag-draggable",
+            "tag-component-token",
+            "tag-disabled",
+            "tag-style-class"
+        ],
+    );
+    assert_eq!(
+        Options::parse(["--component".into(), "tag".into()])
+            .unwrap()
+            .component,
+        ComponentId::Tag
+    );
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.tag");
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Tag
+    );
+    for width in [1280., 1100., 640.] {
+        fixture.resize(width);
+        let first = fixture.bounds("gallery.card.tag-basic");
+        let second = fixture.bounds("gallery.card.tag-colorful");
+        let content = fixture.bounds("gallery.content");
+        assert!(first.left() >= content.left());
+        assert!(second.right() <= content.right());
+        if width == 1280. {
+            assert_eq!(first.top(), second.top());
+        } else {
+            assert!(second.top() >= first.bottom());
+        }
+    }
+    fixture.resize(1280.);
+    fixture.click("gallery.jump.tag-checkable");
+    fixture.next_frame();
+    let content = fixture.bounds("gallery.content");
+    let checkable = fixture.bounds("gallery.card.tag-checkable");
+    assert!((checkable.top() - content.top()).abs() <= px(1.));
+    fixture.click("gallery.control.top");
+    fixture.next_frame();
+    let scroll = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
+    assert_eq!(scroll.offset().y, px(0.));
+}
+
+#[test]
+fn tag_gallery_dynamic_and_checkable_examples_update_retained_application_state() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.tag");
+    let page = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.tag.clone());
+    fixture.reveal("tag.dynamic.add");
+    fixture.click("tag.dynamic.add");
+    assert_eq!(
+        page.read_with(&fixture.cx, |page, _| page.dynamic.clone()),
+        [1, 2, 3, 4]
+    );
+    let item = fixture.bounds("tag.dynamic.item.4");
+    fixture.cx.simulate_click(
+        point(item.right() - px(10.), item.center().y),
+        Modifiers::none(),
+    );
+    fixture.draw();
+    assert_eq!(
+        page.read_with(&fixture.cx, |page, _| page.dynamic.clone()),
+        [1, 2, 3]
+    );
+    fixture.reveal("tag.checkable.yes");
+    fixture.click("tag.checkable.yes");
+    assert!(!page.read_with(&fixture.cx, |page, _| page.checked));
+    fixture.key("space");
+    assert!(page.read_with(&fixture.cx, |page, _| page.checked));
+    for control in [
+        "gallery.control.theme",
+        "gallery.control.density",
+        "gallery.control.direction",
+    ] {
+        fixture.click(control);
+        assert_eq!(
+            page.read_with(&fixture.cx, |page, _| page.dynamic.clone()),
+            [1, 2, 3]
+        );
+        assert!(page.read_with(&fixture.cx, |page, _| page.checked));
+    }
+    fixture.reveal("tag.animated.add");
+    fixture.click("tag.animated.add");
+    assert_eq!(
+        page.read_with(&fixture.cx, |page, _| page.animated.clone()),
+        [1, 2, 3, 4]
+    );
+}
+
+#[test]
+fn tag_gallery_drag_reorders_stable_tag_identities() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.tag");
+    fixture.reveal("tag.drag.1");
+    let source = fixture.bounds("tag.drag.1").center();
+    let target = fixture.bounds("tag.drag.3").center();
+    fixture
+        .cx
+        .simulate_mouse_down(source, gpui::MouseButton::Left, Modifiers::none());
+    fixture
+        .cx
+        .simulate_mouse_move(target, gpui::MouseButton::Left, Modifiers::none());
+    fixture.draw();
+    fixture
+        .cx
+        .simulate_mouse_up(target, gpui::MouseButton::Left, Modifiers::none());
+    fixture.draw();
+    let page = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.tag.clone());
+    assert_eq!(
+        page.read_with(&fixture.cx, |page, _| page.order.clone()),
+        [2, 3, 1]
+    );
+}
+
+#[test]
+fn radio_gallery_preserves_reference_order_and_responsive_navigation() {
+    assert_eq!(
+        COMPONENTS
+            .iter()
+            .find(|component| component.id == ComponentId::Radio)
+            .unwrap()
+            .group,
+        "Data Entry",
+    );
+    assert_eq!(
+        super::radio::DEMOS
+            .iter()
+            .map(|demo| demo.id)
+            .collect::<Vec<_>>(),
+        [
+            "radio-basic",
+            "radio-disabled",
+            "radio-group",
+            "radio-vertical",
+            "radio-block",
+            "radio-options",
+            "radio-button",
+            "radio-keyboard",
+            "radio-size",
+            "radio-solid",
+            "radio-style-class",
+            "radio-component-token",
+        ],
+    );
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.radio");
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Radio,
+    );
+    for width in [1280., 1100., 640.] {
+        fixture.resize(width);
+        let first = fixture.bounds("gallery.radio.card.radio-basic");
+        let second = fixture.bounds("gallery.radio.card.radio-disabled");
+        let content = fixture.bounds("gallery.content");
+        assert!(first.left() >= content.left());
+        assert!(second.right() <= content.right());
+        if width == 1280. {
+            assert_eq!(first.top(), second.top());
+        } else {
+            assert!(second.top() >= first.bottom());
+        }
+    }
+    fixture.resize(1280.);
+    fixture.click("gallery.jump.radio-vertical");
+    fixture.next_frame();
+    let content = fixture.bounds("gallery.content");
+    let vertical = fixture.bounds("gallery.radio.card.radio-vertical");
+    assert!((vertical.top() - content.top()).abs() <= px(1.));
+    fixture.click("gallery.control.top");
+    fixture.next_frame();
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.scroll.offset().y),
+        px(0.),
+    );
+}
+
+#[test]
+fn radio_gallery_controlled_selection_and_availability_survive_appearance_changes() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.radio");
+    let page = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.radio.clone());
+    assert!(page.read_with(&fixture.cx, |page, _| page.disabled));
+    fixture.click("radio.disabled.toggle");
+    assert!(!page.read_with(&fixture.cx, |page, _| page.disabled));
+
+    fixture.reveal("radio.controlled");
+    fixture.click_checkbox("radio.controlled");
+    fixture.key("right");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.value), 2);
+    fixture.key("right");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.value), 3);
+    fixture.key("space");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.value), 3);
+    fixture.click("gallery.control.theme");
+    fixture.click("gallery.control.density");
+    fixture.click("gallery.control.direction");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.value), 3);
+    assert!(!page.read_with(&fixture.cx, |page, _| page.disabled));
+}
+
+#[test]
+fn radio_gallery_can_be_selected_for_native_capture() {
+    assert_eq!(
+        Options::parse(["--component".into(), "radio".into()])
+            .unwrap()
+            .component,
+        ComponentId::Radio,
+    );
+}
+
+#[test]
+fn segmented_gallery_keeps_reference_order_and_supports_capture_selection() {
+    assert_eq!(
+        super::segmented::DEMOS
+            .iter()
+            .map(|demo| demo.id)
+            .collect::<Vec<_>>(),
+        [
+            "segmented-basic",
+            "segmented-vertical",
+            "segmented-block",
+            "segmented-shape",
+            "segmented-disabled",
+            "segmented-controlled",
+            "segmented-custom",
+            "segmented-dynamic",
+            "segmented-size",
+            "segmented-with-icon",
+            "segmented-icon-only",
+            "segmented-with-name",
+            "segmented-style-class",
+        ],
+    );
+    assert_eq!(
+        Options::parse(["--component".into(), "segmented".into()])
+            .unwrap()
+            .component,
+        ComponentId::Segmented,
+    );
+}
+
+#[test]
+fn segmented_gallery_navigation_is_responsive_and_has_independent_anchors() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.segmented");
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Segmented
+    );
+    for width in [1280., 1100., 640.] {
+        fixture.resize(width);
+        let first = fixture.bounds("gallery.segmented.card.segmented-basic");
+        let second = fixture.bounds("gallery.segmented.card.segmented-vertical");
+        let content = fixture.bounds("gallery.content");
+        assert!(first.left() >= content.left());
+        assert!(second.right() <= content.right());
+        if width == 1280. {
+            assert_eq!(first.top(), second.top());
+        } else {
+            assert!(second.top() >= first.bottom());
+        }
+    }
+    fixture.resize(1280.);
+    // The growing component catalog places later example links below the
+    // navigation viewport. Scroll the sidebar before clicking the actual link.
+    let jump = fixture.bounds("gallery.jump.segmented-custom");
+    let sidebar = fixture.bounds("gallery.sidebar");
+    fixture.scroll(
+        sidebar.center(),
+        -f32::from(jump.center().y - sidebar.center().y),
+    );
+    fixture.click("gallery.jump.segmented-custom");
+    fixture.next_frame();
+    let content = fixture.bounds("gallery.content");
+    let custom = fixture.bounds("gallery.segmented.card.segmented-custom");
+    assert!((custom.top() - content.top()).abs() <= px(1.));
+    fixture.click("gallery.control.top");
+    fixture.next_frame();
+    let scroll = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
+    assert_eq!(scroll.offset().y, px(0.));
+}
+
+#[test]
+fn segmented_gallery_controlled_and_dynamic_examples_keep_state_across_display_changes() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.segmented");
+    fixture.reveal("segmented.controlled");
+    let page = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.segmented.clone());
+    let control = fixture.bounds("segmented.controlled");
+    fixture.cx.simulate_click(
+        point(control.left() + px(8.), control.center().y),
+        Modifiers::none(),
+    );
+    fixture.draw();
+    fixture.key("right");
+    assert_eq!(page.read_with(&fixture.cx, |page, _| page.value), "Transit");
+    fixture.key("right");
+    assert_eq!(
+        page.read_with(&fixture.cx, |page, _| page.value),
+        "Satellite"
+    );
+    fixture.reveal("segmented.dynamic.load");
+    fixture.click("segmented.dynamic.load");
+    assert!(page.read_with(&fixture.cx, |page, _| page.more_loaded));
+    fixture.click("gallery.control.theme");
+    fixture.click("gallery.control.density");
+    fixture.click("gallery.control.direction");
+    assert_eq!(
+        page.read_with(&fixture.cx, |page, _| page.value),
+        "Satellite"
+    );
+    assert!(page.read_with(&fixture.cx, |page, _| page.more_loaded));
+    fixture.click("gallery.navigation.button");
+    fixture.click("gallery.navigation.segmented");
+    assert!(page.read_with(&fixture.cx, |page, _| page.more_loaded));
 }

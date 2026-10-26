@@ -31,6 +31,8 @@ impl Availability {
 pub enum Activation {
     Pointer,
     Keyboard(KeyboardButton),
+    /// Selection changed by a navigation key, such as an arrow in a radio group.
+    KeyboardNavigation,
     Accessibility,
 }
 

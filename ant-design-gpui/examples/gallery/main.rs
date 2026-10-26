@@ -7,7 +7,11 @@ mod button;
 mod catalog;
 mod checkbox;
 mod divider;
+mod radio;
+mod segmented;
 mod shell;
+mod switch;
+mod tag;
 
 #[cfg(test)]
 mod tests;
@@ -35,12 +39,20 @@ impl Options {
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
                 "--component" => {
-                    options.component = match arguments.next().as_deref() {
-                        Some("button") => catalog::ComponentId::Button,
-                        Some("divider") => catalog::ComponentId::Divider,
-                        Some("checkbox") => catalog::ComponentId::Checkbox,
-                        _ => return Err("--component requires button, divider, or checkbox".into()),
-                    };
+                    options.component =
+                        match arguments.next().as_deref() {
+                            Some("button") => catalog::ComponentId::Button,
+                            Some("divider") => catalog::ComponentId::Divider,
+                            Some("checkbox") => catalog::ComponentId::Checkbox,
+                            Some("radio") => catalog::ComponentId::Radio,
+                            Some("segmented") => catalog::ComponentId::Segmented,
+                            Some("switch") => catalog::ComponentId::Switch,
+                            Some("tag") => catalog::ComponentId::Tag,
+                            _ => return Err(
+                                "--component requires button, divider, checkbox, radio, segmented, switch, or tag"
+                                    .into(),
+                            ),
+                        };
                 }
                 "--capture" => {
                     options.capture = Some(
@@ -80,7 +92,7 @@ impl Options {
 
 fn main() {
     let options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
-        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
+        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox|radio|segmented|switch|tag] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
         std::process::exit(2);
     });
     gpui_platform::application().run(move |cx: &mut App| {

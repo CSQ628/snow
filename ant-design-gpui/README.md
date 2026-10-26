@@ -1,6 +1,6 @@
 # Ant Design GPUI
 
-Apache-2.0 Ant Design controls built with GPUI. Button, Checkbox and Divider use
+Apache-2.0 Ant Design controls built with GPUI. Button, Checkbox, Radio, Divider, Segmented and Tag use
 native layout, focus, accessibility and motion, with retained configuration,
 localization, complete themes and all 829 pinned icons.
 
@@ -17,6 +17,8 @@ cargo run --locked --offline --example gallery
 # Reproduce a narrow layout: -- --window-size 640x720 --capture C:/temp/gallery.png
 # Open Checkbox directly: -- --component checkbox
 # Open Divider directly: -- --component divider
+# Open Segmented directly: -- --component segmented
+# Open Tag directly: -- --component tag
 ```
 
 The native gallery has a fixed component sidebar, direct example links and a
@@ -40,6 +42,17 @@ grid layout and semantic styling. Select Checkbox in the sidebar or use
 Divider's nine examples cover horizontal and vertical separators, title placement,
 spacing, plain text, solid/dashed/dotted lines, component tokens and semantic styling.
 Select Divider in the sidebar or use `--component divider`.
+
+Segmented's 13 public examples follow the reference order, with horizontal and
+vertical groups, equal-width block layout, rounded shapes, disabled items,
+controlled selection, custom content, dynamic options, sizes, icons and semantic
+styling. Select Segmented in the sidebar or use `--component segmented`.
+
+Tag's 12 examples follow the reference order, including preset and custom colors,
+all three variants, cancelable closing, controlled checkable tags, single/multiple
+groups, dynamic additions, entrance animation, native drag reordering, component
+tokens, disabled controls and semantic styling. Select Tag or use `--component tag`.
+The dynamic examples add sequential labels; text editing belongs to the host app.
 
 Run only this example's offscreen regression tests with
 `cargo test --locked --offline --example gallery`.
@@ -227,6 +240,81 @@ Ant Design states across four themes, both directions, hover and keyboard focus.
 `scripts/test-checkbox-accessibility.ps1` checks native Windows checkbox roles,
 mixed state, toggling and keyboard interaction.
 
+## Radio
+
+```rust
+use ant_design_gpui::{RadioGroup, RadioOption, ConfigScope};
+use ant_design_gpui::radio::{RadioButtonStyle, RadioOptionType};
+
+# fn choices(scope: ConfigScope) -> impl gpui::IntoElement {
+RadioGroup::new("delivery")
+    .scope(scope)
+    .accessibility_label("Delivery method")
+    .options([
+        RadioOption::new("standard", "standard", "Standard"),
+        RadioOption::new("express", "express", "Express"),
+        RadioOption::new("pickup", "pickup", "Pickup").disabled(true),
+    ])
+    .default_value("standard")
+    .option_type(RadioOptionType::Button)
+    .button_style(RadioButtonStyle::Solid)
+    .on_change(|value, window, cx| {
+        // value is the requested selection; controlled owners apply it here.
+    })
+# }
+```
+
+`Radio::new(id).label("Radio")` creates a standalone circular control. Selecting
+it sets its checked value to true; selecting it again never clears it or emits
+another change. `.checked(bool)` controls it; `.default_checked(bool)` initializes
+retained state once per mount. Enter does not select; Space, pointer clicks on
+the complete label, and native accessibility actions use the same availability guard.
+
+Groups accept typed `Clone + PartialEq` values and stable option IDs. `.value(T)`
+controls selection; `.default_value(T)` initializes retained selection. The callback
+receives `&T`. An option's `.on_change` runs before the group callback. Values
+remain selected when temporarily removed from the options. No selection is valid;
+use an `Option<T>` application value when a controlled group must explicitly clear it.
+
+Tab enters the selected enabled option, or the first enabled option when there is
+none, and the next Tab exits the group. Arrow keys wrap and skip disabled choices;
+Left/Right mirror in RTL. Home/End select the first/last enabled option. Navigation
+changes report `Activation::KeyboardNavigation` to option callbacks. Explicit
+`.disabled(false)` on an option overrides group and provider disability, consistent
+with this library's native option composition. Disabled controls relinquish focus.
+
+`.vertical(true)` stacks options with token spacing; button groups join their
+borders and stretch to equal widths. `.block(true)` fills available width and
+shares it equally between horizontal options. Button sizes inherit `Size` from
+the provider; circular radios retain their own token-defined dimensions.
+
+Radio follows scoped theme, direction, fonts and motion. Register `RadioTokenPatch`
+with `RadioTheme` for all upstream component tokens, including circle/dot dimensions,
+button palette/padding and wrapper spacing. `Styled` refines the native root;
+`.icon_style(...)` and `.label_style(...)` refine a standalone circle and label.
+Use `.accessibility_label(...)` for unlabeled controls and `.automation_id(...)`
+for native automation. Supply a retained `.focus_handle(...)` for programmatic focus.
+
+Circular controls use GPU quads; their dots use centered vector paths so they stay
+aligned at fractional display scales. Neither requires image assets.
+Connected button borders and keyboard outlines paint after their siblings within
+the group's normal clipped pass. The ring and dot use their separate Ant Design
+transition timings; live dot-size changes animate with the dot. Animations respect
+reduced motion and schedule no frames while idle; `.wave(false)` disables click waves.
+
+```powershell
+cargo run --locked --offline --example gallery -- --component radio
+cargo test --locked --offline --lib radio::
+cargo test --locked --offline --example gallery radio_gallery
+./scripts/run-radio-perf.ps1
+./scripts/test-radio-accessibility.ps1
+```
+
+The gallery includes the eleven public Ant Design Radio examples and a component
+token example. Independent [browser fixtures](fixtures/radio/README.md) compare
+3,200 original controls across themes, interaction states, RTL, custom tokens,
+wireframe, all button sizes, and connected layouts.
+
 ## Divider
 
 ```rust
@@ -280,6 +368,128 @@ Independent browser references and regeneration instructions are in
 [`fixtures/divider/README.md`](fixtures/divider/README.md).
 Run `scripts/run-divider-perf.ps1` for optimized Release measurements under
 `windows-msvc-performance`.
+
+## Segmented
+
+```rust
+use ant_design_gpui::{ConfigScope, Segmented, SegmentedOption};
+
+# fn period_picker(scope: ConfigScope) -> impl gpui::IntoElement {
+Segmented::new("period")
+    .scope(scope)
+    .accessibility_label("Period")
+    .options([
+        SegmentedOption::new("daily", "daily", "Daily"),
+        SegmentedOption::new("weekly", "weekly", "Weekly"),
+        SegmentedOption::new("monthly", "monthly", "Monthly"),
+    ])
+    .default_value("weekly")
+    .on_change(|value, window, cx| {
+        // `value` is the requested selection.
+    })
+# }
+```
+
+Build controls during render with stable group and option IDs. Option values can
+be any supported cloneable, comparable type; IDs keep focus stable when options
+reorder. An uncontrolled Segmented initially selects its first option, or the
+explicit `.default_value(...)`. Use `.value(...)` with `.on_change(cx.listener(...))`
+to keep selection in the containing view. Removed values are retained, so restoring
+an option restores its selection. Mounting with no options starts without a selection.
+
+Tab enters a radio group at its selected enabled option. Arrow keys select and
+focus adjacent enabled options, wrapping inside the group; horizontal navigation
+follows RTL. Space selects the focused option. Pointer, keyboard and native
+accessibility activation use the same selection callback. A disabled group or
+option cannot be selected; `.disabled(false)` on the group overrides a disabled
+provider.
+
+`.size(Size::Small | Medium | Large)` overrides the scope's size.
+`.vertical(true)` lays out options in a column; `.block(true)` fills the available
+width with equal-width horizontal options. `.shape(SegmentedShape::Round)` uses
+rounded tracks and items. Explicit `.orientation(SegmentedOrientation::Horizontal | Vertical)`
+takes priority over `.vertical(...)`. Labels truncate to fit narrow horizontal layouts.
+
+Options accept `.icon(...)`, `.child(...)` for custom native content,
+`.tooltip(...)`, `.accessibility_label(...)` and `.automation_id(...)`.
+The label passed to `SegmentedOption::new` remains the accessible fallback when
+custom content replaces the visible label. Give icon-only options explicit names.
+GPUI `Styled` refinements customize the root; `.item_style(...)`, `.label_style(...)`
+and `.icon_style(...)` customize semantic slots. Component token overrides use
+`SegmentedTheme` and `SegmentedTokenPatch`.
+
+```powershell
+cargo run --locked --offline --example gallery -- --component segmented
+cargo test --locked --offline --lib segmented::
+cargo test --locked --offline --example gallery segmented_
+./scripts/run-segmented-perf.ps1
+./scripts/test-segmented-accessibility.ps1
+```
+
+The gallery includes all 13 public reference examples. Independent
+[browser fixtures](fixtures/segmented/README.md) compare 576 original states
+across four themes, both directions, sizes, shapes and interaction states.
+Selection motion follows actual native item bounds, including custom content and
+unequal widths, and remains continuous when interrupted. Reduced motion snaps
+directly to the final surface. Idle controls schedule no animation frames.
+Fonts, icon palettes and shadows are cached with component tokens; mounted option
+reconciliation is linear in the number of options.
+
+## Tag
+
+```rust
+use ant_design_gpui::{ConfigScope, Tag};
+use ant_design_gpui::tag::{TagColor, TagVariant};
+use ant_design_gpui::icons::IconName;
+
+# fn status_tag(scope: ConfigScope) -> impl gpui::IntoElement {
+Tag::new("status")
+    .scope(scope)
+    .label("Ready")
+    .color(TagColor::Success)
+    .variant(TagVariant::Outlined)
+    .icon(IconName::CheckCircleOutlined)
+    .closable(true)
+    .on_close(|event, window, cx| {
+        // event.prevent_default() keeps the tag visible.
+    })
+# }
+```
+
+Build tags with stable, locally unique IDs. Closing hides a retained tag until it
+unmounts; `.on_close(...)` runs before hiding and can cancel with
+`event.prevent_default()`. The close control has its own tab stop and localized
+accessible label, and supports pointer, Enter, Space and native accessible actions.
+Closing a link tag does not follow the link or activate its outer click handler.
+Use `.href(...)` for link semantics or `.on_click(...)` for an action.
+
+`TagColor` covers all `PresetColor` families, Success, Processing, Warning, Error,
+Default and custom `Color` values. `TagVariant::{Filled, Solid, Outlined}` follows
+Ant Design 6, including HSL tints for custom filled/outlined colors. Explicit
+`.disabled(false)` overrides a disabled provider. Disabled tags block all actions.
+Tag geometry follows its component tokens independently of provider input size.
+
+`CheckableTag::new(id).checked(value)` is controlled: accept the proposed
+`TagChange.checked` in `.on_change(...)` and rerender. Space, pointer and accessible
+actions propose the inverse of the current value. `CheckableTagGroup` accepts
+typed `TagOption::new(id, value, label)` entries, single selection by default and
+`.multiple(true)` for multiple choices. `.value(...)` controls a group;
+`.default_value(...)` initializes retained selection. Change callbacks receive
+the selected values as a slice; a single group contains zero or one value.
+
+Use native `Styled` refinements on the root, and `.icon_style(...)`,
+`.content_style(...)`, and `.close_style(...)` for semantic slots. A scoped
+`TagTheme`/`TagTokenPatch` customizes `default_bg`, `default_color` and
+`solid_text_color`. Colors, fonts and motion follow the effective component theme;
+idle tags request no animation frames.
+
+```powershell
+cargo run --locked --offline --example gallery -- --component tag
+cargo test --locked --offline --lib tag::
+cargo test --locked --offline --example gallery tag_
+./scripts/run-tag-perf.ps1
+./scripts/test-tag-accessibility.ps1
+```
 
 ## Retained configuration
 
@@ -439,3 +649,62 @@ See [LICENSE](LICENSE), [COPYRIGHT](COPYRIGHT) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), plus the recorded
 [validation results](VALIDATION.md). Generated builds, measurements
 and license bundles stay under the repository's ignored `build/` directory.
+
+## Switch
+
+```rust
+use ant_design_gpui::{ConfigScope, Switch};
+
+# fn notification_switch(scope: ConfigScope) -> impl gpui::IntoElement {
+Switch::new("notifications")
+    .scope(scope)
+    .accessibility_label("Notifications")
+    .default_checked(true)
+    .checked_label("On")
+    .unchecked_label("Off")
+    .on_change(|change, window, cx| {
+        // change.checked is the requested value; change.activation identifies the input.
+    })
+# }
+```
+
+Build switches with stable, locally unique IDs during render. Uncontrolled switches
+retain their value; `.default_checked(...)` initializes it once. `.checked(value)`
+is controlled: accept `SwitchChange.checked` in `.on_change(cx.listener(...))` by
+updating application state and notifying the view. `.on_click(...)` runs after
+the change callback for pointer, Space, Enter and accessible invocation. Left and
+Right request off and on respectively, including in RTL, and emit only a change
+when the requested value differs.
+
+`.checked_label(...)` and `.unchecked_label(...)` supply text; `.checked_content(...)`
+and `.unchecked_content(...)` accept decorative native elements such as icons.
+Both slots are measured to keep width stable when toggling. Keep custom content
+noninteractive and give every switch a stable `.accessibility_label(...)` that
+describes the setting. The root exposes native switch and checked semantics;
+`.automation_id(...)`, `.accessibility_description(...)` and `.focus_handle(...)`
+support automation, context and programmatic focus. Localize labels in the host app.
+
+Sizes inherit the scope: `Size::Small` selects the small track, while Medium and
+Large use the normal track. `.disabled(false)` overrides a disabled provider.
+`.loading(true)` shows the spinner and disables activation, focus and traversal,
+matching Ant Design. Handle motion, track colors, loading rotation and waves
+respect scoped and application reduced motion; `.wave(false)` disables the wave.
+Idle switches request no animation frames.
+
+Native `Styled` refinements apply to the root; `.content_style(StyleRefinement)`
+and `.indicator_style(StyleRefinement)` customize the semantic slots. Register
+`SwitchTokenPatch` with `ComponentThemes::set::<SwitchTheme>(...)` to customize
+track height/minimum width/padding, handle size/background/shadow and content
+margins, including small-size values. Component-local aliases and algorithms
+also control colors, fonts, focus and motion.
+
+```powershell
+cargo run --locked --offline --example gallery -- --component switch
+cargo test --locked --offline --lib switch::
+cargo test --locked --offline --example gallery switch_
+./scripts/run-switch-perf.ps1
+```
+
+The focused Release benchmark measures cached styles, builders and warm drawing
+or rerendering of 100 plain, text-labeled and icon switches. Each draw verifies
+that resting switches schedule no animation frames with motion enabled.

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::{
     Size,
+    icons::IconPalette,
     theme::{AliasTokens, Color, ComponentTheme, ResolvedTheme, ShadowList},
 };
 
@@ -31,6 +32,8 @@ macro_rules! segmented_tokens {
             // algorithms without resolving fonts or theme data during rendering.
             globals: Arc<AliasTokens>,
             font: gpui::Font,
+            icon_palette: IconPalette,
+            shadows: Arc<[gpui::BoxShadow]>,
         }
 
         #[derive(Clone, Debug, Default, PartialEq)]
@@ -45,6 +48,14 @@ macro_rules! segmented_tokens {
                     $($field: ($value)(global),)+
                     globals: Arc::new(global.clone()),
                     font: global.font_family.to_gpui_font(),
+                    icon_palette: IconPalette::from_theme(global),
+                    shadows: global.box_shadow_tertiary.iter().map(|shadow| gpui::BoxShadow {
+                        inset: shadow.inset,
+                        color: shadow.color.to_hsla(),
+                        offset: gpui::point(gpui::px(shadow.x as f32), gpui::px(shadow.y as f32)),
+                        blur_radius: gpui::px(shadow.blur as f32),
+                        spread_radius: gpui::px(shadow.spread as f32),
+                    }).collect(),
                 }
             }
 
@@ -77,6 +88,14 @@ impl SegmentedTokens {
 
     pub(crate) fn font(&self) -> &gpui::Font {
         &self.font
+    }
+
+    pub(crate) fn icon_palette(&self) -> IconPalette {
+        self.icon_palette
+    }
+
+    pub(crate) fn shadows(&self) -> &Arc<[gpui::BoxShadow]> {
+        &self.shadows
     }
 }
 

@@ -5,7 +5,7 @@ Adapted algorithms, translations and artwork retain the upstream MIT notices.
 
 ## Ant Design
 
-Theme derivation, token defaults, Button, Checkbox and Divider visual rules, gallery examples and descriptions,
+Theme derivation, token defaults, Button, Checkbox, Radio, Divider and Tag visual rules, gallery examples and descriptions,
 and common translations are adapted from
 Ant Design 6.6.7, commit `f8f5595ab5e891fff6a2a06c5b3b98af643d008e`:
 https://github.com/ant-design/ant-design
@@ -39,6 +39,11 @@ Divider's independent browser measurements and provenance are under
 `fixtures/divider/`; its generator likewise executes the original styles.
 Checkbox's independent browser states and tick geometry measurements are under
 `fixtures/checkbox/`; its generator executes the original Checkbox styles.
+Tag's independent browser measurements and provenance are under
+`fixtures/tag/`; its generator executes the original styles and color resolution.
+
+Radio's independent browser measurements and input provenance are under
+`fixtures/radio/`; its generator executes the original token defaults and styles.
 
 ## Ant Design colors and fast-color
 

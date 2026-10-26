@@ -10,7 +10,11 @@ pub mod config;
 pub mod divider;
 pub mod icons;
 pub mod locale;
+pub mod radio;
 pub mod root;
+pub mod segmented;
+pub mod switch;
+pub mod tag;
 pub mod theme;
 
 pub use button::Button;
@@ -19,7 +23,11 @@ pub use config::{
     ConfigPatch, ConfigScope, Direction, ResolvedConfig, Size, ValidationStatus, Variant,
 };
 pub use divider::Divider;
+pub use radio::{Radio, RadioChange, RadioGroup, RadioOption};
 pub use root::UiRoot;
+pub use segmented::{Segmented, SegmentedOption};
+pub use switch::{Switch, SwitchChange};
+pub use tag::{CheckableTag, CheckableTagGroup, Tag, TagChange, TagClose, TagOption};
 
 /// Install application defaults and namespaced keyboard bindings once per GPUI app.
 ///

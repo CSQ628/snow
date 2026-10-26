@@ -19,6 +19,10 @@ use super::{
     catalog::{COMPONENTS, ComponentId},
     checkbox::{self, CheckboxPage},
     divider::{self, DividerPage},
+    radio::{self, RadioPage},
+    segmented::{self, SegmentedPage},
+    switch::{self, SwitchPage},
+    tag::{self, TagPage},
 };
 
 pub(super) fn sidebar_width(viewport_width: Pixels) -> Pixels {
@@ -59,10 +63,18 @@ pub(super) struct Gallery {
     pub button: Entity<ButtonPage>,
     pub checkbox: Entity<CheckboxPage>,
     pub divider: Entity<DividerPage>,
+    pub radio: Entity<RadioPage>,
+    pub segmented: Entity<SegmentedPage>,
+    pub switch: Entity<SwitchPage>,
+    pub tag: Entity<TagPage>,
     pub scroll: ScrollHandle,
     anchors: Vec<ScrollAnchor>,
     checkbox_anchors: Vec<ScrollAnchor>,
     divider_anchors: Vec<ScrollAnchor>,
+    radio_anchors: Vec<ScrollAnchor>,
+    segmented_anchors: Vec<ScrollAnchor>,
+    switch_anchors: Vec<ScrollAnchor>,
+    tag_anchors: Vec<ScrollAnchor>,
     _config: Subscription,
 }
 
@@ -81,10 +93,31 @@ impl Gallery {
             .iter()
             .map(|_| ScrollAnchor::for_handle(scroll.clone()))
             .collect();
+        let segmented_anchors: Vec<_> = segmented::DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
+        let switch_anchors: Vec<_> = switch::DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
+        let tag_anchors: Vec<_> = tag::DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
+        let radio_anchors: Vec<_> = radio::DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
         Self {
             button: cx.new(|cx| ButtonPage::new(scope.clone(), anchors.clone(), cx)),
             checkbox: cx.new(|cx| CheckboxPage::new(scope.clone(), checkbox_anchors.clone(), cx)),
             divider: cx.new(|cx| DividerPage::new(scope.clone(), divider_anchors.clone(), cx)),
+            radio: cx.new(|cx| RadioPage::new(scope.clone(), radio_anchors.clone(), cx)),
+            segmented: cx
+                .new(|cx| SegmentedPage::new(scope.clone(), segmented_anchors.clone(), cx)),
+            switch: cx.new(|cx| SwitchPage::new(scope.clone(), switch_anchors.clone(), cx)),
+            tag: cx.new(|cx| TagPage::new(scope.clone(), tag_anchors.clone(), cx)),
             _config: scope.observe(cx),
             scope,
             selected: ComponentId::Button,
@@ -92,6 +125,10 @@ impl Gallery {
             anchors,
             checkbox_anchors,
             divider_anchors,
+            radio_anchors,
+            segmented_anchors,
+            switch_anchors,
+            tag_anchors,
         }
     }
 
@@ -219,6 +256,10 @@ impl Gallery {
                         ComponentId::Button => "General / Button",
                         ComponentId::Divider => "Layout / Divider",
                         ComponentId::Checkbox => "Data Entry / Checkbox",
+                        ComponentId::Radio => "Data Entry / Radio",
+                        ComponentId::Segmented => "Data Entry / Segmented",
+                        ComponentId::Switch => "Data Entry / Switch",
+                        ComponentId::Tag => "Data Display / Tag",
                     },
                 ))
             })
@@ -314,6 +355,9 @@ impl Gallery {
                             .label(if expanded { component.title } else { "" })
                             .icon(match id {
                                 ComponentId::Divider => IconName::BorderHorizontalOutlined,
+                                ComponentId::Segmented => IconName::SwitcherOutlined,
+                                ComponentId::Switch => IconName::SwapOutlined,
+                                ComponentId::Tag => IconName::TagsOutlined,
                                 _ => IconName::AppstoreOutlined,
                             })
                             .accessibility_label(component.title)
@@ -377,6 +421,34 @@ impl Gallery {
                         .zip(&self.divider_anchors)
                         .filter(|_| self.selected == ComponentId::Divider)
                         .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                )
+                .chain(
+                    segmented::DEMOS
+                        .iter()
+                        .zip(&self.segmented_anchors)
+                        .filter(|_| self.selected == ComponentId::Segmented)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                )
+                .chain(
+                    switch::DEMOS
+                        .iter()
+                        .zip(&self.switch_anchors)
+                        .filter(|_| self.selected == ComponentId::Switch)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                )
+                .chain(
+                    tag::DEMOS
+                        .iter()
+                        .zip(&self.tag_anchors)
+                        .filter(|_| self.selected == ComponentId::Tag)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                )
+                .chain(
+                    radio::DEMOS
+                        .iter()
+                        .zip(&self.radio_anchors)
+                        .filter(|_| self.selected == ComponentId::Radio)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
                 );
             for (id, title, pending, anchor) in links {
                 let anchor = anchor.clone();
@@ -395,6 +467,11 @@ impl Gallery {
                                 "style-class" => "Semantic styling",
                                 "divider-size" => "Spacing size",
                                 "divider-style-class" => "Semantic styling",
+                                "radio-style-class" => "Semantic styling",
+                                "radio-options" => "Options",
+                                "radio-keyboard" => "Keyboard navigation",
+                                "segmented-style-class" => "Semantic styling",
+                                "tag-style-class" => "Semantic styling",
                                 _ => title,
                             })
                             .text_size(px(12.))
@@ -510,11 +587,19 @@ impl Gallery {
                                 ComponentId::Button => "Open Ant Design Button reference",
                                 ComponentId::Divider => "Open Ant Design Divider reference",
                                 ComponentId::Checkbox => "Open Ant Design Checkbox reference",
+                                ComponentId::Radio => "Open Ant Design Radio reference",
+                                ComponentId::Segmented => "Open Ant Design Segmented reference",
+                                ComponentId::Switch => "Open Ant Design Switch reference",
+                                ComponentId::Tag => "Open Ant Design Tag reference",
                             })
                             .href(match self.selected {
                                 ComponentId::Button => "https://ant.design/components/button",
                                 ComponentId::Divider => "https://ant.design/components/divider",
                                 ComponentId::Checkbox => "https://ant.design/components/checkbox",
+                                ComponentId::Radio => "https://ant.design/components/radio",
+                                ComponentId::Segmented => "https://ant.design/components/segmented",
+                                ComponentId::Switch => "https://ant.design/components/switch",
+                                ComponentId::Tag => "https://ant.design/components/tag",
                             }),
                     )
                     .when(expanded, |footer| {
@@ -546,6 +631,10 @@ impl Render for Gallery {
                 .count(),
             ComponentId::Checkbox => checkbox::DEMOS.len(),
             ComponentId::Divider => divider::DEMOS.len(),
+            ComponentId::Radio => radio::DEMOS.len(),
+            ComponentId::Segmented => segmented::DEMOS.len(),
+            ComponentId::Switch => switch::DEMOS.len(),
+            ComponentId::Tag => tag::DEMOS.len(),
         };
         div()
             .id("gallery")
@@ -631,6 +720,18 @@ impl Render for Gallery {
                                         ComponentId::Divider => {
                                             self.divider.clone().into_any_element()
                                         }
+                                        ComponentId::Radio => {
+                                            self.radio.clone().into_any_element()
+                                        }
+                                        ComponentId::Segmented => {
+                                            self.segmented.clone().into_any_element()
+                                        }
+                                        ComponentId::Switch => {
+                                            self.switch.clone().into_any_element()
+                                        }
+                                        ComponentId::Tag => {
+                                            self.tag.clone().into_any_element()
+                                        }
                                     })
                                     .child(
                                         div()
@@ -650,6 +751,18 @@ impl Render for Gallery {
                                                 }
                                                 ComponentId::Divider => {
                                                     "Start and end follow the preview direction"
+                                                }
+                                                ComponentId::Radio => {
+                                                    "Tab to enter a group · Arrows to select · Space to select"
+                                                }
+                                                ComponentId::Segmented => {
+                                                    "Tab to enter a group · Arrow keys select · Space to select"
+                                                }
+                                                ComponentId::Switch => {
+                                                    "Tab to navigate · Enter or Space to toggle · Arrow keys set state"
+                                                }
+                                                ComponentId::Tag => {
+                                                    "Tab to navigate · Space to select · Enter or Space to close"
                                                 }
                                             })
                                             .child(

@@ -35,6 +35,22 @@ harness = false
 name = "divider"
 harness = false
 
+[[bench]]
+name = "segmented"
+harness = false
+
+[[bench]]
+name = "tag"
+harness = false
+
+[[bench]]
+name = "radio"
+harness = false
+
+[[bench]]
+name = "switch"
+harness = false
+
 [profile.dev]
 incremental = false
 

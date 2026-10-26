@@ -329,3 +329,156 @@ sample is `build/ant-design-gpui/checkbox-performance-final.txt`.
 
 No complete library or repository test suite was run. Native macOS/Linux rendering
 and accessibility still require validation on their respective platforms.
+
+## Segmented component validation (2026-10-26)
+
+Validated on Windows x64 with the pinned Rust and GPUI versions. The implementation
+uses retained typed selection, stable option focus handles, native radio semantics,
+and a single GPU-painted selection surface measured from actual GPUI item bounds.
+Option reconciliation is linear; fonts, palettes, shadows and styled shadow variants
+are cached. Unstyled options avoid carrying an inline native style refinement.
+
+- `cargo test --locked --offline --lib segmented::`: **34 passed**, including
+  interaction, retained state, focus, layout, motion, style tokens and the independent
+  browser comparison.
+- `cargo test --locked --offline --example gallery segmented_`: **3 passed**, covering
+  the 13 public reference examples, responsive layout, sidebar navigation, anchors,
+  controlled selection, dynamic options and retained state across display changes.
+- Strict Clippy for the library, tests, gallery and Segmented benchmark: passed.
+- Native gallery build, focused Rust formatting checks and `git diff --check`: passed.
+- `scripts/test-segmented-accessibility.ps1 -SkipBuild`: passed. Native Windows UIA
+  checks Group/RadioButton roles, names, both group and item selection patterns,
+  exactly one selected option, accessible selection, disabled guards, Space/Enter,
+  arrows/Home/End, one-stop Tab traversal, controlled updates, icon-only labels,
+  live theme/density/RTL changes and normal window teardown.
+
+The independent browser fixture compares **576 states / 1,728 items** executed
+from Ant Design 6.6.7's original styles: four themes, both directions, three sizes,
+both shapes and orientations, disabled states, icons, block layout, custom tokens,
+hover, active and focus. Metrics include radii, padding, line heights, icon gaps,
+all shadow layers and focus outlines. Chromium alpha comparisons account for its
+8-bit serialization. See `fixtures/segmented/README.md` for provenance and regeneration.
+Fixture SHA-256: `c6f245d9395672a902942c303f20508558364f405c7b5832425cea557ff732f4`.
+
+Native light/default and narrow dark/compact LTR/RTL captures were visually inspected.
+They are stored under ignored `build/ant-design-gpui/segmented-{light,dark-compact-ltr,
+dark-compact-rtl}.png`. Offscreen checks additionally verify interrupted thumb/color
+motion, resize snapping, pointer drag exit/reentry, reduced motion, custom surface
+corners/opacity, and translucent background/shadow overrides without duplicate layers.
+
+Release CPU measurements used `scripts/run-segmented-perf.ps1` with the verified
+`windows-msvc-performance` preset. All **16,000** draw/rerender iterations asserted
+zero scheduled idle frames. Diagnostic means on this host:
+
+| Workload | Mean time |
+| --- | ---: |
+| Style from cached tokens | 9.1 ns |
+| Style with cached theme lookup | 31.3 ns |
+| Three-option builder | 241 ns |
+| 100-option builder | 3.78 µs |
+| Warm draw of 100 three-option groups | 11.00 ms |
+| Warm draw of 100 round groups | 8.16 ms |
+| Warm draw of 100 groups with icons | 11.52 ms |
+| Warm draw of 100 vertical groups | 6.85 ms |
+
+Making option style refinements optional reduced the same 100-option builder from
+45.93 µs to 3.78 µs. Draw measurements vary with host load and concurrent work;
+they measure CPU layout/paint, not GPU presentation latency. Raw output is in
+`build/ant-design-gpui/segmented-performance.txt`.
+
+Only Segmented's related tests were executed. Native macOS/Linux rendering and
+accessibility still require validation on those platforms.
+
+## Switch component validation (2026-10-26)
+
+Switch uses retained GPUI state, the shared activation guard, native Switch
+semantics and cached component tokens. Affine layout offsets resolve handle and
+content positions in one layout pass, including RTL, intrinsic content sizing
+and negative token padding. An empty resting switch uses just its track and
+handle; text and custom content measure both states to avoid width changes.
+Interrupted handle/color transitions remain continuous, and reduced motion
+settles immediately. Loading reuses the monochrome icon atlas with GPU rotation.
+
+- `cargo test --locked --offline --lib switch::`: **19 passed**, including
+  interaction, lifecycle, styling, motion, token, geometry and browser tests.
+- Seven related gallery checks passed: four Switch checks and the shared catalog,
+  toolbar and anchor-jump regressions. The expanded catalog requires scrolling
+  the sidebar to reach later jump links; the test uses real wheel input and
+  verifies that navigation scrolling does not move the example page.
+- Strict Clippy for the library, tests, gallery and Switch benchmark passed.
+  Formatting, native builds and whitespace/UTF-8 LF checks passed.
+- The Switch README example compiled and ran through rustdoc's merged runner
+  with ten passing README examples.
+- `scripts/test-switch-accessibility.ps1 -SkipBuild` passed on both native
+  builds, including the final optimized executable. Checks cover native names,
+  TogglePattern, checked state, exactly-once accessible activation, Space/Enter,
+  physical arrow behavior in RTL, Tab, disabled/loading focus removal and
+  recovery, theme/density/direction updates and normal teardown. AccessKit maps
+  Switch to a Windows Button exposing TogglePattern; localized control-type text
+  follows the operating system language.
+
+The independent fixture compares **1,664 browser states** executed from the
+original Ant Design 6.6.7 Switch style source across four themes, both directions,
+both sizes, rest/hover/focus/press, checked/disabled/loading states, asymmetric
+content and all fourteen component-token overrides. It preserves the source's
+disabled handle pseudo-element shadow and empty-content intrinsic width.
+Final recapture was byte-identical, SHA-256
+`03d8ea9e0a3cf436122f3c100631657f4bb8e0619e2db801ec033a5c9b43d7cf`.
+See `fixtures/switch/README.md` for provenance and regeneration.
+
+Native light, dark/compact/RTL and narrow captures were visually inspected at
+150% display scaling. They remain under `build/ant-design-gpui/` as
+`switch-light.png`, `switch-dark-compact-rtl.png` and `switch-narrow.png`.
+
+Release measurements ran through `scripts/run-switch-perf.ps1` under the verified
+`windows-msvc-performance` preset. Cached style resolution measured **47.2 ns**;
+builders measured **95.4 ns**. Warm draws of 100 switches measured **1.15 ms**
+for plain controls, **4.25 ms** with text and **4.67 ms** with icons. All **12,000**
+draw/rerender iterations asserted zero scheduled idle frames with motion enabled.
+These are CPU diagnostics collected on a shared host, not GPU presentation
+latency or fixed performance thresholds. Raw output is in
+`build/ant-design-gpui/switch-performance-final.txt`.
+
+No complete library unit-test or repository suite was run. Native macOS/Linux
+rendering and accessibility still require validation on those platforms.
+
+## Radio implementation
+
+Validated on Windows x64 on 2026-10-26 against the pinned Ant Design 6.6.7 source.
+
+- `cargo test --locked --offline --lib radio::`: **47 passed**.
+- `cargo test --locked --offline --example gallery radio_gallery`: **3 passed**.
+- Strict Clippy for the library, tests, gallery and Radio benchmark passed.
+- All Radio source, tests, gallery and benchmark files passed rustfmt checks.
+- Independent original-source browser fixtures compare **3,200 controls** across
+  four themes and rest/hover/active/focus states, including RTL, wireframe, custom
+  tokens, all button sizes and connected group geometry.
+- Windows native UI Automation passed on the gallery: RadioButton roles/names,
+  SelectionItemPattern, exclusive selection, disabled guards/focus release,
+  Space/Enter, roving Tab/Shift+Tab, arrow wrapping, live theme/density/RTL changes
+  and normal window teardown.
+- Earlier light, dark/compact/RTL and narrow native gallery captures are under
+  ignored `build/ant-design-gpui/radio-qa/`; the dot-path change is verified by
+  offscreen scene geometry and timing checks.
+
+Offscreen regression checks cover controlled proposals, retained defaults, rapid
+inputs before redraw, scope updates inside cached views, stable focus across
+reorder, disabled choices, native circle/dot geometry at 150% display scaling
+with default and customized borders,
+dot size/opacity/reversal, live dot-size tokens and color transition timing,
+immediate label/button-border changes, connected borders/corners,
+full-width and vertical layouts, continuous motion, idle frame scheduling,
+transparent hover-border waves, hidden controls, invalid custom spacing and
+clipped decoration opacity.
+
+Release CPU measurements ran through `scripts/run-radio-perf.ps1` under the
+verified `windows-msvc-performance` build. Lazy option style storage reduced the
+100-option builder from **43.41 us to about 3 us** on this host. In two focused
+runs, cached circular and button style resolution measured **56-70 ns** and
+**93-98 ns**; warm draws of 100 standard radios measured **2.27-2.92 ms**. Every
+warm draw/rerender iteration asserts zero idle animation frames, and group runs
+assert retained focus identity. These CPU measurements vary with host load and
+are diagnostic; they do not measure GPU presentation latency.
+
+Only Radio's related tests were run. Native macOS/Linux rendering and accessibility
+remain unverified on those platforms.
