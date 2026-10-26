@@ -107,6 +107,11 @@ pub(crate) fn scene_display_item_bounds(
         SceneDisplayItem::Arrow(item) if item.stroke.a != 0 && item.stroke_width > 0.0 => {
             item.stroke_rendering_style
         }
+        SceneDisplayItem::SpeechBubble(item)
+            if item.path.stroke.a != 0 && item.path.stroke_width > 0.0 =>
+        {
+            item.path.stroke_rendering_style
+        }
         SceneDisplayItem::SerialNumber(item)
             if item.color.a != 0
                 && item.stroke_width > 0.0

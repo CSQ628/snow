@@ -9,6 +9,7 @@
 
 class SnowCanvasSceneItem;
 class SnowCanvasOverlayItem;
+class QPen;
 
 namespace snow_canvas_stroke_rendering {
 
@@ -35,6 +36,7 @@ struct Diagnostics {
 
 Diagnostics takeDiagnostics();
 void recordCacheAllocation(bool detach);
+void applyShapeStrokeStyle(QPen& pen, SnowStrokeStyle style);
 const Cache& geometry(const SnowCanvasSceneItem& item);
 const Cache& geometry(const SnowCanvasOverlayItem& item);
 const Cache* cachedGeometry(const SnowCanvasSceneItem& item);

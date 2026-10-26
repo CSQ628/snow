@@ -2490,6 +2490,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-application-storage-tests
         COMMAND snow-shot-application-storage-tests)
+    add_test(NAME snow-shot-screenshot-mouse-action-storage-tests
+        COMMAND snow-shot-application-storage-tests --screenshot-mouse-actions-only)
+    set_tests_properties(snow-shot-screenshot-mouse-action-storage-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-auto-save-execution-storage-tests
         COMMAND snow-shot-application-storage-tests --auto-save-after-execution-only)
     set_tests_properties(snow-shot-auto-save-execution-storage-tests PROPERTIES

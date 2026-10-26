@@ -1709,8 +1709,8 @@ pub(crate) fn scene_item_from_speech_bubble(
         .flat_map(|chunk| chunk.commands.iter().copied())
         .collect();
     let path = ArrowDisplayItem {
-        stroke_rendering_style: Default::default(),
-        stroke_rendering_seed: 0,
+        stroke_rendering_style: body.stroke_rendering_style,
+        stroke_rendering_seed: body.stroke_rendering_seed,
         brush_mode: Default::default(),
         pressure_geometry: None,
         id: display_item_id(id),

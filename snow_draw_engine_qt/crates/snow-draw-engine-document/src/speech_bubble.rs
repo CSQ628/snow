@@ -389,12 +389,22 @@ pub fn speech_bubble_bounds(value: &SpeechBubbleData) -> DrawRect {
         value.body.stroke_width / 2.0
     } else {
         0.0
-    };
+    } + speech_bubble_stroke_rendering_outset(value);
     DrawRect::new(
         bounds[0] - outset,
         bounds[1] - outset,
         bounds[2] + outset,
         bounds[3] + outset,
+    )
+}
+
+fn speech_bubble_stroke_rendering_outset(value: &SpeechBubbleData) -> f64 {
+    if value.body.stroke.a == 0 || value.body.stroke_width <= 0.0 {
+        return 0.0;
+    }
+    snow_draw_engine_core::arrow::stroke_rendering_outset(
+        value.body.stroke_rendering_style,
+        f64::MAX,
     )
 }
 
@@ -431,7 +441,8 @@ pub fn speech_bubble_hit_test(value: &SpeechBubbleData, point: Point<f64>, toler
         value.body.stroke_width / 2.0
     } else {
         0.0
-    } + tolerance.max(0.0);
+    } + tolerance.max(0.0)
+        + speech_bubble_stroke_rendering_outset(value);
     geometry
         .outline
         .iter()
@@ -1322,6 +1333,57 @@ mod tests {
             opacity: 1.0,
         })
     }
+    #[test]
+    fn speech_bubble_styled_bounds_and_hits_include_only_visible_ink_excursions() {
+        use snow_draw_engine_core::arrow::StrokeRenderingStyle;
+
+        for shape in [
+            HighlightShape::Rectangle,
+            HighlightShape::Ellipse,
+            HighlightShape::Diamond,
+            HighlightShape::ThoughtBubble,
+        ] {
+            let mut value = bubble(shape);
+            value.body.rotation = 0.37;
+            value.tails.push(speech_bubble_default_tail(
+                &value,
+                Point::new(0.0, 110.0),
+                1.0,
+            ));
+            let plain = speech_bubble_bounds(&value);
+            let path = speech_bubble_path_geometry(&value);
+            for (style, extra) in [
+                (StrokeRenderingStyle::Artist, 2.0),
+                (StrokeRenderingStyle::Cartoonist, 4.0),
+            ] {
+                value.body.stroke_rendering_style = style;
+                let styled = speech_bubble_bounds(&value);
+                assert!((styled.min_x - (plain.min_x - extra)).abs() < 1e-9);
+                assert!((styled.max_y - (plain.max_y + extra)).abs() < 1e-9);
+                assert_eq!(speech_bubble_path_geometry(&value), path);
+                value.body.stroke.a = 0;
+                let hidden = speech_bubble_bounds(&value);
+                assert!((hidden.min_x - path.canvas_bounds[0]).abs() < 1e-9);
+                value.body.stroke.a = 255;
+            }
+        }
+
+        let mut value = bubble(HighlightShape::Rectangle);
+        value.body.fill.a = 0;
+        value.body.rotation = 0.37;
+        let point = speech_bubble_local_to_canvas(&value, Point::new(-52.5, 0.0));
+        assert!(!speech_bubble_hit_test(&value, point, 0.0));
+        value.body.stroke_rendering_style = StrokeRenderingStyle::Artist;
+        assert!(speech_bubble_hit_test(&value, point, 0.0));
+        value.body.stroke_rendering_style = StrokeRenderingStyle::Cartoonist;
+        assert!(speech_bubble_hit_test(&value, point, 0.0));
+        value.body.stroke.a = 0;
+        assert!(!speech_bubble_hit_test(&value, point, 0.0));
+        value.body.stroke.a = 255;
+        value.body.stroke_width = 0.0;
+        assert!(!speech_bubble_hit_test(&value, point, 0.0));
+    }
+
     #[test]
     fn thought_bubble_cloud_preserves_bounds_and_radial_hit_testing_when_resized() {
         for (width, height) in [(280.0, 180.0), (160.0, 160.0), (20.0, 600.0), (800.0, 20.0)] {

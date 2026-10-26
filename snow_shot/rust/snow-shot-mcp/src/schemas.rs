@@ -1519,6 +1519,16 @@ mod tests {
             assert!(schema(method, Some(input.clone())).is_ok());
             input["style"]["shape"] = json!("thought_bubble");
             assert!(schema(method, Some(input.clone())).is_ok());
+            for style in ["architect", "artist", "cartoonist"] {
+                input["style"]["stroke_rendering_style"] = json!(style);
+                assert!(schema(method, Some(input.clone())).is_ok());
+            }
+            input["style"]["stroke_rendering_style"] = json!("rough");
+            assert!(schema(method, Some(input.clone())).is_err());
+            input["style"]
+                .as_object_mut()
+                .unwrap()
+                .remove("stroke_rendering_style");
             input["style"]["shape"] = json!("triangle");
             assert!(schema(method, Some(input)).is_err());
         }
@@ -1858,7 +1868,13 @@ mod tests {
     #[test]
     fn stroke_rendering_styles_are_typed() {
         for value in ["architect", "artist", "cartoonist"] {
-            for target in ["rectangle", "arrow", "line", "serial_number"] {
+            for target in [
+                "rectangle",
+                "speech_bubble",
+                "arrow",
+                "line",
+                "serial_number",
+            ] {
                 assert!(
                     schema(
                         "snow_shot_screenshot_set_tool_style",

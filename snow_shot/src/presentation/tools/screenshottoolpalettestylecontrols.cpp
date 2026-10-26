@@ -1653,6 +1653,7 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     strokeConfig.popupObjectName = QStringLiteral("screenshotStrokeOptions");
     strokeConfig.styleRowObjectName = QStringLiteral("screenshotStrokeStyles");
     strokeConfig.renderingStylesEnabled = styleTool == ScreenshotToolPalette::Tool::Shape ||
+                                          styleTool == ScreenshotToolPalette::Tool::SpeechBubble ||
                                           styleTool == ScreenshotToolPalette::Tool::Line;
     strokeConfig.initialRenderingStyle = buildingStyle.strokeRenderingStyle();
     strokeConfig.setRenderingStyle = [this](SnowCanvasStrokeRenderingStyle style) {

@@ -17567,6 +17567,7 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
     using Rendering = SnowCanvasStrokeRenderingStyle;
     const auto product = snow_shot::presentation::screenshotCanvasStyleDefaults();
     require(product.rectangle.strokeRenderingStyle == Rendering::Architect &&
+                product.speechBubble.strokeRenderingStyle == Rendering::Architect &&
                 product.arrow.strokeRenderingStyle == Rendering::Architect &&
                 product.line.strokeRenderingStyle == Rendering::Architect,
             "Architect should remain the default for each supported tool");
@@ -17592,7 +17593,7 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
         return true;
     });
     auto expected = product;
-    for (const auto tool : {Tool::Shape, Tool::Arrow, Tool::Line}) {
+    for (const auto tool : {Tool::Shape, Tool::SpeechBubble, Tool::Arrow, Tool::Line}) {
         QWidget* row = openStrokeRenderingRow(palette, tool);
         require(!row->isHidden(), "supported tools should expose stroke rendering controls");
         const auto buttons = strokeRenderingButtons(row);
@@ -17605,16 +17606,18 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
         const int index = tool == Tool::Arrow ? 2 : 1;
         buttons.at(index)->click();
         const auto style = static_cast<Rendering>(index);
-        auto& expectedStyle = tool == Tool::Arrow  ? expected.arrow
-                              : tool == Tool::Line ? expected.line
-                                                   : expected.rectangle;
+        auto& expectedStyle = tool == Tool::Arrow          ? expected.arrow
+                              : tool == Tool::Line         ? expected.line
+                              : tool == Tool::SpeechBubble ? expected.speechBubble
+                                                           : expected.rectangle;
         expectedStyle.strokeRenderingStyle = style;
         require(commits == before + 1 &&
                     properties == SnowCanvasShapeStylePropertyStrokeRenderingStyle &&
                     emitted.strokeRenderingStyle == style &&
-                    kind == (tool == Tool::Arrow  ? SnowCanvasShapeKind::Arrow
-                             : tool == Tool::Line ? SnowCanvasShapeKind::Line
-                                                  : SnowCanvasShapeKind::Rectangle) &&
+                    kind == (tool == Tool::Arrow          ? SnowCanvasShapeKind::Arrow
+                             : tool == Tool::Line         ? SnowCanvasShapeKind::Line
+                             : tool == Tool::SpeechBubble ? SnowCanvasShapeKind::SpeechBubble
+                                                          : SnowCanvasShapeKind::Rectangle) &&
                     palette.creationStyleDefaults() == expected,
                 "a rendering choice should emit one property and remember only its tool");
         buttons.at(index)->click();
@@ -17631,7 +17634,8 @@ void strokeRenderingControlsPreserveIndependentToolStyles() {
              {Tool::FreeDraw, Tool::SpeechBubble, Tool::Shape, Tool::Arrow, Tool::Line}) {
             QWidget* row = openStrokeRenderingRow(palette, tool);
             const auto buttons = strokeRenderingButtons(row);
-            const bool supported = tool == Tool::Shape || tool == Tool::Arrow || tool == Tool::Line;
+            const bool supported = tool == Tool::Shape || tool == Tool::SpeechBubble ||
+                                   tool == Tool::Arrow || tool == Tool::Line;
             require(
                 row->isHidden() != supported,
                 "reused stroke editors should expose rendering styles only for supported tools");
@@ -17734,16 +17738,19 @@ void serialNumberStrokeRenderingControlsRespectBadgeTypes() {
 
 void strokeRenderingMixedSelectionResolvesOneProperty() {
     using Tool = ScreenshotToolPalette::Tool;
-    for (const auto tool : {Tool::Shape, Tool::Arrow, Tool::Line}) {
+    for (const auto tool : {Tool::Shape, Tool::SpeechBubble, Tool::Arrow, Tool::Line}) {
         ScreenshotToolPalette::Options options;
         options.showLineTool = true;
+        options.showSpeechBubbleTool = true;
         ScreenshotToolPalette palette(options);
         QWidget* row = openStrokeRenderingRow(palette, tool);
         const auto buttons = strokeRenderingButtons(row);
         SnowCanvasStyleToolbarState state;
         state.source = tool == Tool::Arrow  ? SnowCanvasStyleToolbarSource::SelectedArrow
                        : tool == Tool::Line ? SnowCanvasStyleToolbarSource::SelectedLine
-                                            : SnowCanvasStyleToolbarSource::SelectedRectangle;
+                       : tool == Tool::SpeechBubble
+                           ? SnowCanvasStyleToolbarSource::SelectedSpeechBubble
+                           : SnowCanvasStyleToolbarSource::SelectedRectangle;
         state.shapeStyle.strokeRenderingStyle = SnowCanvasStrokeRenderingStyle::Artist;
         state.shapeStyle.strokeStyle = SnowCanvasStrokeStyle::Dashed;
         state.shapeStyleMixed =
@@ -17784,6 +17791,7 @@ void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
         qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
     auto defaults = screenshotCanvasStyleDefaults();
     defaults.rectangle.strokeRenderingStyle = Rendering::Artist;
+    defaults.speechBubble.strokeRenderingStyle = Rendering::Artist;
     defaults.arrow.strokeRenderingStyle = Rendering::Cartoonist;
     defaults.line.strokeRenderingStyle = Rendering::Artist;
     defaults.serialNumber.strokeRenderingStyle = Rendering::Cartoonist;
@@ -17796,7 +17804,8 @@ void strokeRenderingPreferencesRoundTripAndRejectUnknownValues() {
                 canvas.canvasStyleToolbarState().serialNumberStyle.strokeRenderingStyle ==
                     Rendering::Cartoonist,
             "saved sequence stroke type must reach canvas creation state");
-    for (const auto tool : {SnowCanvasTool::Shape, SnowCanvasTool::Arrow, SnowCanvasTool::Line}) {
+    for (const auto tool : {SnowCanvasTool::Shape, SnowCanvasTool::SpeechBubble,
+                            SnowCanvasTool::Arrow, SnowCanvasTool::Line}) {
         require(canvas.setCanvasTool(tool), "activate a tool with restored rendering preferences");
         require(canvas.canvasStyleToolbarState().shapeStyle.strokeRenderingStyle ==
                     (tool == SnowCanvasTool::Arrow ? Rendering::Cartoonist : Rendering::Artist),
