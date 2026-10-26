@@ -519,7 +519,8 @@ typedef enum SnowHighlightShape {
 typedef enum SnowRectangleShape {
     SNOW_RECTANGLE_SHAPE_RECTANGLE = 0,
     SNOW_RECTANGLE_SHAPE_ELLIPSE = 1,
-    SNOW_RECTANGLE_SHAPE_DIAMOND = 2
+    SNOW_RECTANGLE_SHAPE_DIAMOND = 2,
+    SNOW_RECTANGLE_SHAPE_THOUGHT_BUBBLE = 3
 } SnowRectangleShape;
 
 typedef enum SnowBrushMode {

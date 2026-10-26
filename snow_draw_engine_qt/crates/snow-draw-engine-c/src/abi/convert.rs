@@ -547,6 +547,9 @@ pub(crate) fn snow_text_element_info_from_rust(value: TextElementInfo) -> SnowTe
                 snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
                 snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
                 snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+                snow_draw_engine::HighlightShape::ThoughtBubble => {
+                    SnowRectangleShape::ThoughtBubble
+                }
             }),
         bubble_stroke_width: value.bubble_body.map_or(0.0, |b| b.stroke_width),
         bubble_corner_radii: value
@@ -779,6 +782,9 @@ impl From<SnowShapeStyle> for ShapeStyle {
                 SnowRectangleShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
                 SnowRectangleShape::Ellipse => snow_draw_engine::HighlightShape::Ellipse,
                 SnowRectangleShape::Diamond => snow_draw_engine::HighlightShape::Diamond,
+                SnowRectangleShape::ThoughtBubble => {
+                    snow_draw_engine::HighlightShape::ThoughtBubble
+                }
             },
         }
     }
@@ -1066,12 +1072,16 @@ impl From<ShapeStyle> for SnowShapeStyle {
             highlight_shape: match value.highlight_shape {
                 snow_draw_engine::HighlightShape::Rectangle => SnowHighlightShape::Rectangle,
                 snow_draw_engine::HighlightShape::Ellipse => SnowHighlightShape::Ellipse,
-                snow_draw_engine::HighlightShape::Diamond => SnowHighlightShape::Rectangle,
+                snow_draw_engine::HighlightShape::Diamond
+                | snow_draw_engine::HighlightShape::ThoughtBubble => SnowHighlightShape::Rectangle,
             },
             shape: match value.shape {
                 snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
                 snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
                 snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+                snow_draw_engine::HighlightShape::ThoughtBubble => {
+                    SnowRectangleShape::ThoughtBubble
+                }
             },
         }
     }
@@ -1196,6 +1206,9 @@ pub(crate) fn runtime_config_from_c(
                     SnowRectangleShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
                     SnowRectangleShape::Ellipse => snow_draw_engine::HighlightShape::Ellipse,
                     SnowRectangleShape::Diamond => snow_draw_engine::HighlightShape::Diamond,
+                    SnowRectangleShape::ThoughtBubble => {
+                        snow_draw_engine::HighlightShape::ThoughtBubble
+                    }
                 },
                 rectangle: rectangle.rectangle_shape_style(),
                 arrow: arrow.arrow_style(),
@@ -1305,6 +1318,9 @@ impl From<SnowMagnifierStyle> for snow_draw_engine::MagnifierStyle {
                 SnowRectangleShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
                 SnowRectangleShape::Ellipse => snow_draw_engine::HighlightShape::Ellipse,
                 SnowRectangleShape::Diamond => snow_draw_engine::HighlightShape::Diamond,
+                SnowRectangleShape::ThoughtBubble => {
+                    snow_draw_engine::HighlightShape::ThoughtBubble
+                }
             },
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
@@ -1324,6 +1340,9 @@ impl From<snow_draw_engine::MagnifierStyle> for SnowMagnifierStyle {
                 snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
                 snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
                 snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+                snow_draw_engine::HighlightShape::ThoughtBubble => {
+                    SnowRectangleShape::ThoughtBubble
+                }
             },
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
@@ -1357,6 +1376,9 @@ impl From<StyleDefaults> for SnowStyleDefaults {
                 snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
                 snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
                 snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+                snow_draw_engine::HighlightShape::ThoughtBubble => {
+                    SnowRectangleShape::ThoughtBubble
+                }
             },
             ..SnowShapeStyle::default()
         };
@@ -1396,6 +1418,9 @@ impl From<StyleDefaults> for SnowStyleDefaults {
                 snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
                 snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
                 snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+                snow_draw_engine::HighlightShape::ThoughtBubble => {
+                    SnowRectangleShape::ThoughtBubble
+                }
             },
             spotlight_corner_radii: value.editor.spotlight_corner_radii.into(),
         }

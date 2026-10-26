@@ -86,13 +86,16 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             ? QStringList{QStringLiteral("degrees"), QStringLiteral("radians")}
             : QStringList{QStringLiteral("px"), QStringLiteral("cm"), QStringLiteral("m"),
                           QStringLiteral("km"), QStringLiteral("mm")};
+    QStringList shapes{QStringLiteral("rectangle"), QStringLiteral("ellipse"),
+                       QStringLiteral("diamond")};
+    if (target == QStringLiteral("speech_bubble"))
+        shapes.append(QStringLiteral("thought_bubble"));
     const QHash<QString, QStringList> enums{
         {QStringLiteral("unit"), units},
         {QStringLiteral("angle_type"), {QStringLiteral("directed"), QStringLiteral("interior")}},
         {QStringLiteral("connection_type"),
          {QStringLiteral("none"), QStringLiteral("leader_line"), QStringLiteral("gradient")}},
-        {QStringLiteral("shape"),
-         {QStringLiteral("rectangle"), QStringLiteral("ellipse"), QStringLiteral("diamond")}},
+        {QStringLiteral("shape"), shapes},
         {QStringLiteral("fill_style"),
          {QStringLiteral("line"), QStringLiteral("cross_line"), QStringLiteral("solid"),
           QStringLiteral("border")}},

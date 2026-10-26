@@ -769,6 +769,15 @@ enum ShapeVariant {
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+enum AnnotationShapeVariant {
+    Rectangle,
+    Ellipse,
+    Diamond,
+    /// Only supported by the speech_bubble style target.
+    ThoughtBubble,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 enum FillStyle {
     Line,
     CrossLine,
@@ -986,7 +995,7 @@ struct StylePatch {
     #[serde(default)]
     corner_radius: Option<f64>,
     #[serde(default)]
-    shape: Option<ShapeVariant>,
+    shape: Option<AnnotationShapeVariant>,
     #[serde(default)]
     fill_style: Option<FillStyle>,
     #[serde(default)]
@@ -1507,6 +1516,8 @@ mod tests {
                     "stroke_width": 3, "fill": [255, 255, 255, 255],
                     "fill_style": "solid", "corner_radius": 6}});
             input[owner] = json!("fixture");
+            assert!(schema(method, Some(input.clone())).is_ok());
+            input["style"]["shape"] = json!("thought_bubble");
             assert!(schema(method, Some(input.clone())).is_ok());
             input["style"]["shape"] = json!("triangle");
             assert!(schema(method, Some(input)).is_err());

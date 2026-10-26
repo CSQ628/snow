@@ -142,6 +142,7 @@ constexpr char kSignatureTextFont[] = "font:text-size-presets";
 constexpr char kSignatureTextFill[] = "fill:text-colors";
 constexpr char kSignatureCornerRadius[] = "numeric:corner-radius";
 constexpr char kSignatureShapeKind[] = "radio:shape-kind";
+constexpr char kSignatureBubbleShapeKind[] = "radio:speech-bubble-shape-kind";
 constexpr char kSignatureArrowType[] = "radio:arrow-type";
 constexpr char kSignatureLineType[] = "radio:line-type";
 constexpr char kSignatureArrowhead[] = "icon-options:arrowhead";
@@ -499,6 +500,7 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Rectangle"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Ellipse"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Diamond"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Thought Bubble"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Stroke color"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Stroke color %1"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Stroke width %1"),
@@ -1244,7 +1246,11 @@ void ScreenshotToolPaletteStyleControls::prepareStyleReconcile(int sourceTool, i
         auto*& group = source == ScreenshotToolPalette::Tool::Spotlight
                            ? m_spotlightShapeButtonGroup
                            : m_shapeButtonGroup;
-        stageReusableWidget(kRoleShapeKind, kSignatureShapeKind, container);
+        stageReusableWidget(kRoleShapeKind,
+                            source == ScreenshotToolPalette::Tool::SpeechBubble
+                                ? kSignatureBubbleShapeKind
+                                : kSignatureShapeKind,
+                            container);
         container = nullptr;
         group = nullptr;
     }
@@ -1547,7 +1553,7 @@ void ScreenshotToolPaletteStyleControls::addToolbarSpacing(
 
 ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::buildShapeSelector(
     QWidget* controls, const ScreenshotToolPaletteStyleFamilyHost& host,
-    const ScreenshotToolPaletteButtonMetrics& metrics, bool spotlight) {
+    const ScreenshotToolPaletteButtonMetrics& metrics, bool spotlight, bool speechBubble) {
     ScreenshotToolPaletteShapeFamilyResult result;
     result.controls = controls;
     auto* layout = static_cast<QHBoxLayout*>(controls->layout());
@@ -1561,8 +1567,13 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
         {1, QStringLiteral("Ellipse"), custom_outlined_icons::ShapeEllipse()},
         {2, QStringLiteral("Diamond"), custom_outlined_icons::ShapeDiamond()},
     };
+    if (speechBubble) {
+        shapeConfig.options.push_back(
+            {3, QStringLiteral("Thought Bubble"), custom_outlined_icons::ShapeThoughtBubble()});
+    }
+    const char* signature = speechBubble ? kSignatureBubbleShapeKind : kSignatureShapeKind;
     shapeConfig.initialId = 0;
-    container = takeReusableWidget(kRoleShapeKind, kSignatureShapeKind, layout, controls);
+    container = takeReusableWidget(kRoleShapeKind, signature, layout, controls);
     if (container == nullptr) {
         const ScreenshotToolPaletteRadioEditor shapeEditor =
             createScreenshotToolPaletteRadioEditor(controls, shapeConfig, metrics);
@@ -1575,13 +1586,16 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     container->setObjectName(shapeConfig.objectName);
     container->setProperty("screenshotStyleEditorRoot", true);
     container->setProperty("screenshotStyleEditorRole", kRoleShapeKind);
-    container->setProperty("screenshotStyleEditorSignature", kSignatureShapeKind);
+    container->setProperty("screenshotStyleEditorSignature", signature);
     QObject::disconnect(group, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, nullptr,
                         nullptr);
     QObject::connect(group, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controlCallbackContext(controls), [this, spotlight](int id) {
+                     controlCallbackContext(controls), [this, spotlight, speechBubble](int id) {
+                         if (id < 0 || id > (speechBubble ? 3 : 2))
+                             return;
                          const auto shape = id == 1   ? SnowCanvasRectangleShape::Ellipse
                                             : id == 2 ? SnowCanvasRectangleShape::Diamond
+                                            : id == 3 ? SnowCanvasRectangleShape::ThoughtBubble
                                                       : SnowCanvasRectangleShape::Rectangle;
                          if (spotlight)
                              setSpotlightShape(shape);
@@ -1630,7 +1644,8 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     auto* layout = static_cast<QHBoxLayout*>(controls->layout());
 
     if (includeShapeOnlyEditors) {
-        result = buildShapeSelector(controls, host, metrics, false);
+        result = buildShapeSelector(controls, host, metrics, false,
+                                    styleTool == ScreenshotToolPalette::Tool::SpeechBubble);
     }
 
     ScreenshotToolPaletteStrokeEditorConfig strokeConfig;
@@ -4385,9 +4400,8 @@ void ScreenshotToolPaletteStyleControls::registerShapeEntries() {
              }
              const QSignalBlocker blocker(m_shapeButtonGroup);
              const auto shape = activeShapeStyle().shape();
-             m_shapeButtonGroup->setCheckedId(shape == SnowCanvasRectangleShape::Ellipse   ? 1
-                                              : shape == SnowCanvasRectangleShape::Diamond ? 2
-                                                                                           : 0);
+             m_shapeButtonGroup->setCheckedId(static_cast<int>(shape));
+             updateRectangleOnlyControlsVisibility();
          }},
         {ShapeStrokeWidthRefresh,
          [this, mixed]() {
@@ -4967,7 +4981,8 @@ void ScreenshotToolPaletteStyleControls::updateRectangleOnlyControlsVisibility()
         m_shapeControlsContainer->setVisible(visible);
     }
     if (m_cornerRadiusEditor != nullptr) {
-        m_cornerRadiusEditor->setVisible(visible);
+        m_cornerRadiusEditor->setVisible(visible && activeShapeStyle().shape() !=
+                                                        SnowCanvasRectangleShape::ThoughtBubble);
     }
 }
 

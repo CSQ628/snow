@@ -57,6 +57,7 @@ fn speech_bubble_scene_tail_edits_publish_closed_geometry_and_complete_damage() 
         HighlightShape::Rectangle,
         HighlightShape::Ellipse,
         HighlightShape::Diamond,
+        HighlightShape::ThoughtBubble,
     ] {
         let owner = ElementId {
             index: 1,
