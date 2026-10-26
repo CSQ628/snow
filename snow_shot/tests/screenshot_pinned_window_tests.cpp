@@ -39,6 +39,7 @@
 #include "close_release_native_test_support.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
 #include "snow_shot/presentation/collagedocument.h"
+#include "../src/presentation/collage/collageresourcebudget_p.h"
 #include "snow_shot/presentation/screenshotanimationplayback.h"
 #include "../src/image/snowimageqtcodec.h"
 #include "pinned_animation_fixtures.h"
@@ -23188,7 +23189,8 @@ void pinnedImageStitchingTextAndDeferredContent() {
     require(ready && Access::recognition(text), "formatted pin initializes its text session");
     Access::recognition(text)->activate(ScreenshotRecognitionSessionController::Mode::Text);
     waitForUi(20);
-    auto occupied = snow_shot::presentation::reserveCollageImport(qint64{512} * 1024 * 1024);
+    auto occupied =
+        snow_shot::presentation::collage_detail::reserveWorking(qint64{512} * 1024 * 1024);
     require(occupied != nullptr, "occupy the shared rasterization budget before OCR capture");
     const auto rejected = text.stitchingSnapshot();
     require(!rejected.source.isValid() && !rejected.error.isEmpty(),
