@@ -1,7 +1,10 @@
 // Copyright (C) 2026 mg-chao
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 
 use gpui::{
     AccessibleAction, App, ClickEvent, FocusHandle, KeyDownEvent, KeyboardButton, MouseButton,
@@ -101,7 +104,19 @@ fn activation_key(key: &str) -> Option<KeyboardButton> {
 #[derive(Clone, Default)]
 pub struct ActivationGuard(Rc<RefCell<PressState>>);
 
+#[derive(Clone)]
+pub(crate) struct WeakActivationGuard(Weak<RefCell<PressState>>);
+
+impl WeakActivationGuard {
+    pub fn availability(&self) -> Option<Availability> {
+        self.0.upgrade().map(|state| state.borrow().availability)
+    }
+}
+
 impl ActivationGuard {
+    pub(crate) fn downgrade(&self) -> WeakActivationGuard {
+        WeakActivationGuard(Rc::downgrade(&self.0))
+    }
     pub fn new(availability: Availability) -> Self {
         Self(Rc::new(RefCell::new(PressState {
             availability,

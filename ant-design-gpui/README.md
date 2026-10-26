@@ -851,3 +851,11 @@ cargo test --locked --offline --example gallery switch_
 The focused Release benchmark measures cached styles, builders and warm drawing
 or rerendering of 100 plain, text-labeled and icon switches. Each draw verifies
 that resting switches schedule no animation frames with motion enabled.
+
+## Popups
+
+Tooltip, Popover, and Popconfirm share an anchored popup foundation with scoped
+configuration, native content factories, keyboard interaction, and guarded async
+confirmation. `UiRoot` supplies their window-local host. See the
+[popup guide](docs/popups.md), [verification report](docs/popup-system.md), and the
+gallery's `--component tooltip`, `popover`, and `popconfirm` pages.

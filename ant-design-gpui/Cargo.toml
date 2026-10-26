@@ -59,6 +59,10 @@ harness = false
 name = "input"
 harness = false
 
+[[bench]]
+name = "popup"
+harness = false
+
 [profile.dev]
 incremental = false
 

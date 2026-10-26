@@ -22,6 +22,7 @@ use super::{
     input::{self, InputPage},
     input_examples,
     input_number::{self, InputNumberPage},
+    popup::{self, Kind, PopupPage},
     radio::{self, RadioPage},
     segmented::{self, SegmentedPage},
     switch::{self, SwitchPage},
@@ -72,6 +73,9 @@ pub(super) struct Gallery {
     pub segmented: Entity<SegmentedPage>,
     pub switch: Entity<SwitchPage>,
     pub tag: Entity<TagPage>,
+    pub tooltip: Entity<PopupPage>,
+    pub popover: Entity<PopupPage>,
+    pub popconfirm: Entity<PopupPage>,
     pub scroll: ScrollHandle,
     anchors: Vec<ScrollAnchor>,
     checkbox_anchors: Vec<ScrollAnchor>,
@@ -82,6 +86,9 @@ pub(super) struct Gallery {
     segmented_anchors: Vec<ScrollAnchor>,
     switch_anchors: Vec<ScrollAnchor>,
     tag_anchors: Vec<ScrollAnchor>,
+    tooltip_anchors: Vec<ScrollAnchor>,
+    popover_anchors: Vec<ScrollAnchor>,
+    popconfirm_anchors: Vec<ScrollAnchor>,
     _config: Subscription,
 }
 
@@ -124,6 +131,18 @@ impl Gallery {
             .iter()
             .map(|_| ScrollAnchor::for_handle(scroll.clone()))
             .collect();
+        let tooltip_anchors: Vec<_> = popup::TOOLTIP_DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
+        let popover_anchors: Vec<_> = popup::POPOVER_DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
+        let popconfirm_anchors: Vec<_> = popup::POPCONFIRM_DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
         Self {
             button: cx.new(|cx| ButtonPage::new(scope.clone(), anchors.clone(), cx)),
             checkbox: cx.new(|cx| CheckboxPage::new(scope.clone(), checkbox_anchors.clone(), cx)),
@@ -151,6 +170,20 @@ impl Gallery {
                 .new(|cx| SegmentedPage::new(scope.clone(), segmented_anchors.clone(), cx)),
             switch: cx.new(|cx| SwitchPage::new(scope.clone(), switch_anchors.clone(), cx)),
             tag: cx.new(|cx| TagPage::new(scope.clone(), tag_anchors.clone(), cx)),
+            tooltip: cx.new(|cx| {
+                PopupPage::new(Kind::Tooltip, scope.clone(), tooltip_anchors.clone(), cx)
+            }),
+            popover: cx.new(|cx| {
+                PopupPage::new(Kind::Popover, scope.clone(), popover_anchors.clone(), cx)
+            }),
+            popconfirm: cx.new(|cx| {
+                PopupPage::new(
+                    Kind::Popconfirm,
+                    scope.clone(),
+                    popconfirm_anchors.clone(),
+                    cx,
+                )
+            }),
             _config: scope.observe(cx),
             scope,
             selected: ComponentId::Button,
@@ -164,6 +197,9 @@ impl Gallery {
             segmented_anchors,
             switch_anchors,
             tag_anchors,
+            tooltip_anchors,
+            popover_anchors,
+            popconfirm_anchors,
         }
     }
 
@@ -297,6 +333,9 @@ impl Gallery {
                         ComponentId::Input => "Data Entry / Input",
                         ComponentId::InputNumber => "Data Entry / InputNumber",
                         ComponentId::Tag => "Data Display / Tag",
+                        ComponentId::Tooltip => "Data Display / Tooltip",
+                        ComponentId::Popover => "Data Display / Popover",
+                        ComponentId::Popconfirm => "Feedback / Popconfirm",
                     },
                 ))
             })
@@ -506,6 +545,27 @@ impl Gallery {
                         .zip(&self.radio_anchors)
                         .filter(|_| self.selected == ComponentId::Radio)
                         .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                )
+                .chain(
+                    popup::TOOLTIP_DEMOS
+                        .iter()
+                        .zip(&self.tooltip_anchors)
+                        .filter(|_| self.selected == ComponentId::Tooltip)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                )
+                .chain(
+                    popup::POPOVER_DEMOS
+                        .iter()
+                        .zip(&self.popover_anchors)
+                        .filter(|_| self.selected == ComponentId::Popover)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                )
+                .chain(
+                    popup::POPCONFIRM_DEMOS
+                        .iter()
+                        .zip(&self.popconfirm_anchors)
+                        .filter(|_| self.selected == ComponentId::Popconfirm)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
                 );
             for (id, title, pending, anchor) in links {
                 let anchor = anchor.clone();
@@ -650,6 +710,9 @@ impl Gallery {
                                 ComponentId::Input => "Open Ant Design Input reference",
                                 ComponentId::InputNumber => "Open Ant Design InputNumber reference",
                                 ComponentId::Tag => "Open Ant Design Tag reference",
+                                ComponentId::Tooltip => "Open Ant Design Tooltip reference",
+                                ComponentId::Popover => "Open Ant Design Popover reference",
+                                ComponentId::Popconfirm => "Open Ant Design Popconfirm reference",
                             })
                             .href(match self.selected {
                                 ComponentId::Button => "https://ant.design/components/button",
@@ -663,6 +726,11 @@ impl Gallery {
                                     "https://ant.design/components/input-number"
                                 }
                                 ComponentId::Tag => "https://ant.design/components/tag",
+                                ComponentId::Tooltip => "https://ant.design/components/tooltip",
+                                ComponentId::Popover => "https://ant.design/components/popover",
+                                ComponentId::Popconfirm => {
+                                    "https://ant.design/components/popconfirm"
+                                }
                             }),
                     )
                     .when(expanded, |footer| {
@@ -700,6 +768,9 @@ impl Render for Gallery {
             ComponentId::Input => input::DEMOS.len(),
             ComponentId::InputNumber => input_number::DEMOS.len(),
             ComponentId::Tag => tag::DEMOS.len(),
+            ComponentId::Tooltip => popup::TOOLTIP_DEMOS.len(),
+            ComponentId::Popover => popup::POPOVER_DEMOS.len(),
+            ComponentId::Popconfirm => popup::POPCONFIRM_DEMOS.len(),
         };
         let coverage = match self.selected {
             ComponentId::Input => input_examples::summary(input::DEMOS),
@@ -804,6 +875,10 @@ impl Render for Gallery {
                                         ComponentId::Tag => {
                                             self.tag.clone().into_any_element()
                                         }
+                                        ComponentId::Tooltip => self.tooltip.clone().into_any_element(),
+                                        ComponentId::Popover => self.popover.clone().into_any_element(),
+                                        ComponentId::Popconfirm => self.popconfirm.clone().into_any_element(),
+
                                     })
                                     .child(
                                         div()
@@ -835,6 +910,7 @@ impl Render for Gallery {
                                                 }
                                                 ComponentId::Input => "Tab to navigate · Enter to commit · Ctrl/Cmd+Z to undo",
                                                 ComponentId::InputNumber => "Tab to navigate · Arrow keys to step · Enter to commit",
+                                                ComponentId::Tooltip | ComponentId::Popover | ComponentId::Popconfirm => "Tab to navigate · Enter or Space to open · Escape to dismiss",
                                                 ComponentId::Tag => {
                                                     "Tab to navigate · Space to select · Enter or Space to close"
                                                 }

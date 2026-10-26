@@ -589,6 +589,7 @@ impl TagState {
 
 impl RenderOnce for Tag {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let popup_trigger = crate::popup::PopupTrigger::current(cx);
         let scope = self
             .scope
             .clone()
@@ -932,7 +933,7 @@ impl RenderOnce for Tag {
         let checkable = self.checked.is_some();
         let weak = state.downgrade();
         let root = if let Some(guard) = guard {
-            guard.install(root, move |activation, window, cx| {
+            let root = guard.install(root, move |activation, window, cx| {
                 if (checkable && activation == Activation::Keyboard(KeyboardButton::Enter))
                     || (href.is_some() && activation == Activation::Keyboard(KeyboardButton::Space))
                 {
@@ -963,7 +964,8 @@ impl RenderOnce for Tag {
                 if let Some(href) = &href {
                     cx.open_url(href);
                 }
-            })
+            });
+            popup_trigger.install(root, &guard, focus.as_ref().expect("actionable tag focus"))
         } else {
             root
         };
@@ -971,7 +973,7 @@ impl RenderOnce for Tag {
         if self.accessibility.label.is_none() && !self.label.is_empty() {
             self.accessibility.label = Some(self.label);
         }
-        let root = self.accessibility.apply(root);
+        let root = popup_trigger.apply(self.accessibility.apply(root));
         match focus {
             Some(focus) => FocusRing::new(metrics.focus_color, px(metrics.focus_width as f32))
                 .radius(px(metrics.radius as f32))

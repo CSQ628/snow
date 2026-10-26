@@ -16,12 +16,16 @@ pub use input_number::{
     NumericValue,
 };
 pub mod locale;
+pub mod popconfirm;
+pub mod popover;
+pub mod popup;
 pub mod radio;
 pub mod root;
 pub mod segmented;
 pub mod switch;
 pub mod tag;
 pub mod theme;
+pub mod tooltip;
 
 pub use button::Button;
 pub use checkbox::{Checkbox, CheckboxChange, CheckboxGroup, CheckboxOption};
@@ -34,11 +38,15 @@ pub use input::{
     InputGroupContext, InputGroupItem, InputGroupOrientation, InputSearch, InputState, OtpEvent,
     OtpInput, OtpOptions, OtpState, PasswordInput, SearchInput, SearchSource, TextArea,
 };
+pub use popconfirm::Popconfirm;
+pub use popover::Popover;
+pub use popup::{Popup, PopupHandle, PopupHost};
 pub use radio::{Radio, RadioChange, RadioGroup, RadioOption};
 pub use root::UiRoot;
 pub use segmented::{Segmented, SegmentedOption};
 pub use switch::{Switch, SwitchChange};
 pub use tag::{CheckableTag, CheckableTagGroup, Tag, TagChange, TagClose, TagOption};
+pub use tooltip::Tooltip;
 
 /// Install application defaults and namespaced keyboard bindings once per GPUI app.
 ///

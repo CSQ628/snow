@@ -15,6 +15,9 @@ pub(super) enum ComponentId {
     Segmented,
     Switch,
     Tag,
+    Tooltip,
+    Popover,
+    Popconfirm,
 }
 
 pub(super) struct Component {
@@ -88,5 +91,26 @@ pub(super) const COMPONENTS: &[Component] = &[
         group: "Data Display",
         title: "Tag",
         description: "Used for marking and categorization.",
+    },
+    Component {
+        id: ComponentId::Tooltip,
+        navigation_id: "gallery.navigation.tooltip",
+        group: "Data Display",
+        title: "Tooltip",
+        description: "Simple text popup tips.",
+    },
+    Component {
+        id: ComponentId::Popover,
+        navigation_id: "gallery.navigation.popover",
+        group: "Data Display",
+        title: "Popover",
+        description: "A floating card with additional content.",
+    },
+    Component {
+        id: ComponentId::Popconfirm,
+        navigation_id: "gallery.navigation.popconfirm",
+        group: "Feedback",
+        title: "Popconfirm",
+        description: "A compact confirmation of an action.",
     },
 ];

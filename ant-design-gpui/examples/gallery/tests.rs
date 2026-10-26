@@ -32,6 +32,66 @@ struct Fixture {
 mod input;
 
 #[test]
+fn popup_gallery_pages_support_navigation_capture_selection_and_responsive_cards() {
+    let mut f = Fixture::new();
+    for (kind, id, first_id, second_id) in [
+        (
+            super::popup::Kind::Tooltip,
+            ComponentId::Tooltip,
+            "gallery.tooltip.card.basic",
+            "gallery.tooltip.card.smooth-transition",
+        ),
+        (
+            super::popup::Kind::Popover,
+            ComponentId::Popover,
+            "gallery.popover.card.basic",
+            "gallery.popover.card.triggerType",
+        ),
+        (
+            super::popup::Kind::Popconfirm,
+            ComponentId::Popconfirm,
+            "gallery.popconfirm.card.basic",
+            "gallery.popconfirm.card.locale",
+        ),
+    ] {
+        assert_eq!(
+            Options::parse(["--component".into(), kind.name().into()])
+                .unwrap()
+                .component,
+            id
+        );
+        f.gallery.update(&mut f.cx, |gallery, cx| {
+            gallery.selected = id;
+            gallery.scroll.set_offset(Default::default());
+            cx.notify();
+        });
+        for width in [1280., 1100., 640.] {
+            f.resize(width);
+            let first = f.bounds(first_id);
+            let second = f.bounds(second_id);
+            let content = f.bounds("gallery.content");
+            assert!(first.left() >= content.left());
+            assert!(second.right() <= content.right());
+            if width == 1280. {
+                assert_eq!(first.top(), second.top());
+            } else {
+                assert!(second.top() >= first.bottom());
+            }
+        }
+        f.resize(1280.);
+        f.reveal_sidebar("gallery.jump.placement");
+        f.click("gallery.jump.placement");
+        f.next_frame();
+        let placement = match kind {
+            super::popup::Kind::Tooltip => "gallery.tooltip.card.placement",
+            super::popup::Kind::Popover => "gallery.popover.card.placement",
+            super::popup::Kind::Popconfirm => "gallery.popconfirm.card.placement",
+        };
+        assert!((f.bounds(placement).top() - f.bounds("gallery.content").top()).abs() <= px(1.));
+    }
+}
+
+#[test]
 fn switch_gallery_keeps_reference_order_and_supports_native_capture_selection() {
     assert_eq!(
         super::switch::DEMOS
@@ -86,6 +146,7 @@ fn switch_gallery_layout_and_navigation_follow_window_width() {
         }
     }
     fixture.resize(1280.);
+    fixture.reveal_sidebar("gallery.jump.text");
     fixture.click("gallery.jump.text");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");
@@ -299,6 +360,12 @@ impl Fixture {
         scroll.set_offset(point(px(0.), offset.y - bounds.top() + px(180.)));
         self.gallery.update(&mut self.cx, |_, cx| cx.notify());
         self.draw();
+    }
+
+    fn reveal_sidebar(&mut self, selector: &'static str) {
+        let sidebar = self.bounds("gallery.sidebar").center();
+        let target = self.bounds(selector).center();
+        self.scroll(sidebar, f32::from(sidebar.y - target.y));
     }
 }
 
@@ -688,7 +755,7 @@ fn demo_jumps_follow_current_layout_and_top_control_restores_the_start() {
     let loading_before_sidebar_scroll = fixture.bounds("gallery.card.loading");
     // The growing component catalogue puts later jump links below the sidebar
     // viewport. Reveal them through its own scroll area before pointer input.
-    fixture.scroll(point(px(100.), px(700.)), -250.);
+    fixture.reveal_sidebar("gallery.jump.loading");
     assert_eq!(
         fixture.bounds("gallery.card.loading"),
         loading_before_sidebar_scroll
@@ -699,6 +766,7 @@ fn demo_jumps_follow_current_layout_and_top_control_restores_the_start() {
     let loading = fixture.bounds("gallery.card.loading");
     assert!((loading.top() - content.top()).abs() <= px(1.));
     fixture.resize(1100.);
+    fixture.reveal_sidebar("gallery.jump.ghost");
     fixture.click("gallery.jump.ghost");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");
@@ -858,6 +926,7 @@ fn checkbox_gallery_keeps_reference_order_and_native_responsive_layout() {
         }
     }
     fixture.resize(1280.);
+    fixture.reveal_sidebar("gallery.jump.controller");
     fixture.click("gallery.jump.controller");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");
@@ -957,8 +1026,7 @@ fn divider_gallery_navigation_uses_its_own_previews_and_scroll_anchors() {
         }
     }
     fixture.resize(1280.);
-    let sidebar = fixture.bounds("gallery.sidebar");
-    fixture.scroll(sidebar.center(), -400.);
+    fixture.reveal_sidebar("gallery.jump.divider-vertical");
     fixture.click("gallery.jump.divider-vertical");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");
@@ -970,7 +1038,7 @@ fn divider_gallery_navigation_uses_its_own_previews_and_scroll_anchors() {
         .gallery
         .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
     assert_eq!(scroll.offset().y, px(0.));
-    fixture.scroll(sidebar.center(), 400.);
+    fixture.reveal_sidebar("gallery.navigation.button");
     fixture.click("gallery.navigation.button");
     assert_eq!(
         fixture
@@ -1040,6 +1108,7 @@ fn tag_gallery_follows_reference_order_and_keeps_its_own_navigation_and_layout()
         }
     }
     fixture.resize(1280.);
+    fixture.reveal_sidebar("gallery.jump.tag-checkable");
     fixture.click("gallery.jump.tag-checkable");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");
@@ -1180,6 +1249,7 @@ fn radio_gallery_preserves_reference_order_and_responsive_navigation() {
         }
     }
     fixture.resize(1280.);
+    fixture.reveal_sidebar("gallery.jump.radio-vertical");
     fixture.click("gallery.jump.radio-vertical");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");
@@ -1286,14 +1356,7 @@ fn segmented_gallery_navigation_is_responsive_and_has_independent_anchors() {
         }
     }
     fixture.resize(1280.);
-    // The growing component catalog places later example links below the
-    // navigation viewport. Scroll the sidebar before clicking the actual link.
-    let jump = fixture.bounds("gallery.jump.segmented-custom");
-    let sidebar = fixture.bounds("gallery.sidebar");
-    fixture.scroll(
-        sidebar.center(),
-        -f32::from(jump.center().y - sidebar.center().y),
-    );
+    fixture.reveal_sidebar("gallery.jump.segmented-custom");
     fixture.click("gallery.jump.segmented-custom");
     fixture.next_frame();
     let content = fixture.bounds("gallery.content");

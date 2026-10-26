@@ -10,6 +10,7 @@ mod divider;
 mod input;
 mod input_examples;
 mod input_number;
+mod popup;
 mod radio;
 mod segmented;
 mod shell;
@@ -53,8 +54,12 @@ impl Options {
                             Some("segmented") => catalog::ComponentId::Segmented,
                             Some("switch") => catalog::ComponentId::Switch,
                             Some("tag") => catalog::ComponentId::Tag,
+                            Some("tooltip") => catalog::ComponentId::Tooltip,
+                            Some("popover") => catalog::ComponentId::Popover,
+                            Some("popconfirm") => catalog::ComponentId::Popconfirm,
+
                             _ => return Err(
-                                "--component requires button, divider, checkbox, input, input-number, radio, segmented, switch, or tag"
+                                "--component requires button, divider, checkbox, input, input-number, radio, segmented, switch, tag, tooltip, popover, or popconfirm"
                                     .into(),
                             ),
                         };
@@ -97,7 +102,7 @@ impl Options {
 
 fn main() {
     let options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
-        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox|input|input-number|radio|segmented|switch|tag] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
+        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox|input|input-number|radio|segmented|switch|tag|tooltip|popover|popconfirm] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
         std::process::exit(2);
     });
     gpui_platform::application().run(move |cx: &mut App| {

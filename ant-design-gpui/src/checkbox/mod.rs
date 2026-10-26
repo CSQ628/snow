@@ -395,6 +395,7 @@ impl CheckboxState {
 
 impl RenderOnce for Checkbox {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let popup_trigger = crate::popup::PopupTrigger::current(cx);
         let scope = self
             .scope
             .clone()
@@ -641,7 +642,8 @@ impl RenderOnce for Checkbox {
         if self.accessibility.label.is_none() && !self.label.is_empty() {
             self.accessibility.label = Some(self.label);
         }
-        self.accessibility.apply(root)
+        let root = popup_trigger.install(root, &guard, &focus);
+        popup_trigger.apply(self.accessibility.apply(root))
     }
 }
 

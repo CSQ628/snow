@@ -352,6 +352,7 @@ impl SwitchState {
 
 impl RenderOnce for Switch {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let popup_trigger = crate::popup::PopupTrigger::current(cx);
         let scope = self
             .scope
             .clone()
@@ -765,7 +766,8 @@ impl RenderOnce for Switch {
         });
         self.accessibility.disabled = availability.disabled;
         self.accessibility.busy = self.loading;
-        let root = self.accessibility.apply(root);
+        let root = popup_trigger.install(root, &guard, &focus);
+        let root = popup_trigger.apply(self.accessibility.apply(root));
         FocusRing::new(
             metrics.focus_color.opacity(focus_opacity),
             px(metrics.focus_width as f32),

@@ -523,6 +523,7 @@ impl ButtonState {
 
 impl RenderOnce for Button {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let popup_trigger = crate::popup::PopupTrigger::current(cx);
         let scope = self
             .scope
             .clone()
@@ -1008,7 +1009,7 @@ impl RenderOnce for Button {
             Role::Button
         };
         let weak = state.downgrade();
-        let mut element = guard.install(element, move |activation, window, cx| {
+        let element = guard.install(element, move |activation, window, cx| {
             if href.is_some() && activation == Activation::Keyboard(gpui::KeyboardButton::Space) {
                 return;
             }
@@ -1026,6 +1027,7 @@ impl RenderOnce for Button {
             }
         });
         self.accessibility.role = Some(role);
+        let mut element = popup_trigger.install(element, &guard, &focus);
         self.accessibility.disabled = availability.disabled;
         self.accessibility.busy = loading;
         if self.accessibility.label.is_none() && !self.label.is_empty() {
@@ -1038,22 +1040,24 @@ impl RenderOnce for Button {
             });
             element = group.decorate_with_border(element, ring, window, joined_border);
         }
-        self.accessibility.apply(
-            FocusRing::new(
-                style
-                    .focus_color
-                    .with_alpha(style.focus_color.a * f64::from(opacity))
-                    .to_hsla(),
-                px(if self.group.is_some() {
-                    0.
-                } else {
-                    style.focus_width as f32
-                }),
-            )
-            .with_offset(px(style.focus_offset as f32))
-            .radius(radii.top_left)
-            .apply(element, &focus)
-            .corners(radii),
+        popup_trigger.apply(
+            self.accessibility.apply(
+                FocusRing::new(
+                    style
+                        .focus_color
+                        .with_alpha(style.focus_color.a * f64::from(opacity))
+                        .to_hsla(),
+                    px(if self.group.is_some() {
+                        0.
+                    } else {
+                        style.focus_width as f32
+                    }),
+                )
+                .with_offset(px(style.focus_offset as f32))
+                .radius(radii.top_left)
+                .apply(element, &focus)
+                .corners(radii),
+            ),
         )
     }
 }

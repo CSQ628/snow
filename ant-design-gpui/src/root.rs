@@ -3,7 +3,7 @@
 
 //! A retained window root providing traversal and theme defaults.
 
-use crate::{ConfigScope, Direction, behavior};
+use crate::{ConfigScope, Direction, behavior, popup::PopupHost};
 use gpui::{
     AnyView, Context, FocusHandle, Focusable, IntoElement, Render, Subscription, Window, div,
     prelude::*, px, relative,
@@ -64,7 +64,7 @@ impl Render for UiRoot {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let config = self.scope.snapshot(cx);
         let tokens = &config.theme.tokens;
-        behavior::traversal(div().id("ant-design-root").track_focus(&self.focus))
+        let content = behavior::traversal(div().id("ant-design-root").track_focus(&self.focus))
             .size_full()
             .bg(tokens.color_bg_layout)
             .text_color(tokens.color_text)
@@ -72,6 +72,7 @@ impl Render for UiRoot {
             .font(config.font.clone())
             .line_height(relative(tokens.line_height as f32))
             .when(config.direction == Direction::Rtl, |root| root.text_right())
-            .child(self.content.clone())
+            .child(self.content.clone());
+        PopupHost::new("ant-design-popup-host", content)
     }
 }

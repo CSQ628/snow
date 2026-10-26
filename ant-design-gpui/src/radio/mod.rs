@@ -516,6 +516,7 @@ impl RadioState {
 
 impl RenderOnce for Radio {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let popup_trigger = crate::popup::PopupTrigger::current(cx);
         let scope = self
             .scope
             .clone()
@@ -902,7 +903,8 @@ impl RenderOnce for Radio {
         if self.accessibility.label.is_none() && !self.label.is_empty() {
             self.accessibility.label = Some(self.label);
         }
-        let root = self.accessibility.apply(root);
+        let root = popup_trigger.install(root, &guard, &focus);
+        let root = popup_trigger.apply(self.accessibility.apply(root));
         // Keep a concrete semantic element through RenderOnce. Erasing it into
         // AnyElement here would hide its role from native accessibility adapters.
         FocusRing::new(

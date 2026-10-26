@@ -6,6 +6,7 @@
 use crate::{
     icons::IconPalette,
     locale::{Locale, LocalePatch},
+    popup::{PopupConfig, PopupConfigPatch, PopupTriggers, TooltipConfig, TooltipConfigPatch},
     theme::{ResolvedTheme, ThemeConfig},
 };
 use gpui::{App, AppContext, Context, Entity, Global, Subscription};
@@ -73,6 +74,9 @@ pub struct ConfigPatch {
     pub disabled: Option<bool>,
     pub variant: Option<Variant>,
     pub motion: Option<bool>,
+    pub tooltip: TooltipConfigPatch,
+    pub popover: PopupConfigPatch,
+    pub popconfirm: PopupConfigPatch,
 }
 
 /// A read-only snapshot. Cloning it shares all expensive theme/catalog data.
@@ -88,6 +92,9 @@ pub struct ResolvedConfig {
     pub variant: Variant,
     /// Scoped permission for decorative motion. GPUI reduced motion still wins.
     pub motion: bool,
+    pub tooltip: TooltipConfig,
+    pub popover: PopupConfig,
+    pub popconfirm: PopupConfig,
     configured_size: Option<Size>,
     theme_config: Arc<ThemeConfig>,
 }
@@ -104,6 +111,9 @@ impl PartialEq for ResolvedConfig {
             && self.disabled == other.disabled
             && self.variant == other.variant
             && self.motion == other.motion
+            && self.tooltip == other.tooltip
+            && self.popover == other.popover
+            && self.popconfirm == other.popconfirm
             && shared_eq(&self.locale, &other.locale)
             && shared_eq(&self.theme_config, &other.theme_config)
             && shared_eq(&self.theme, &other.theme)
@@ -128,6 +138,12 @@ impl Default for ResolvedConfig {
             disabled: false,
             variant: Variant::Outlined,
             motion: true,
+            tooltip: TooltipConfig::default(),
+            popover: PopupConfig::default(),
+            popconfirm: PopupConfig {
+                triggers: PopupTriggers::CLICK,
+                ..Default::default()
+            },
         }
     }
 }
@@ -220,6 +236,9 @@ impl ResolvedConfig {
             disabled: patch.disabled.unwrap_or(parent.disabled),
             variant: patch.variant.unwrap_or(parent.variant),
             motion: patch.motion.unwrap_or(parent.motion),
+            tooltip: patch.tooltip.resolve(parent.tooltip),
+            popover: patch.popover.resolve(parent.popover),
+            popconfirm: patch.popconfirm.resolve(parent.popconfirm),
         })
     }
 }
@@ -293,6 +312,22 @@ impl Global for ApplicationDefaults {}
 pub struct ConfigScope(Entity<ConfigState>);
 
 impl ConfigScope {
+    /// The nearest explicit unique-tooltip boundary owns its window-local group.
+    pub(crate) fn tooltip_unique_group(&self, cx: &App) -> Option<gpui::EntityId> {
+        let mut scope = self.clone();
+        loop {
+            let state = scope.0.read(cx);
+            if let Some(unique) = state.patch.tooltip.unique {
+                return unique.then_some(scope.0.entity_id());
+            }
+            let parent = state.parent.clone()?;
+            scope = parent;
+        }
+    }
+    pub(crate) fn identity(&self) -> gpui::EntityId {
+        self.0.entity_id()
+    }
+
     /// Application-wide defaults shared by new and existing windows.
     pub fn application(cx: &mut App) -> Self {
         crate::init(cx);

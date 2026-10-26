@@ -57,6 +57,34 @@ common_messages! {
     code_character => CodeCharacter,
 }
 
+/// Popconfirm-owned messages, independent of application-supplied titles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PopconfirmMessages {
+    pub ok_text: SharedString,
+    pub cancel_text: SharedString,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PopconfirmMessagePatch {
+    pub ok_text: Option<SharedString>,
+    pub cancel_text: Option<SharedString>,
+}
+
+impl PopconfirmMessages {
+    fn patched(&self, patch: &PopconfirmMessagePatch) -> Self {
+        Self {
+            ok_text: patch
+                .ok_text
+                .clone()
+                .unwrap_or_else(|| self.ok_text.clone()),
+            cancel_text: patch
+                .cancel_text
+                .clone()
+                .unwrap_or_else(|| self.cancel_text.clone()),
+        }
+    }
+}
+
 /// Locale identity is metadata, never a translated display label.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub enum LocaleId {
@@ -83,6 +111,7 @@ impl LocaleId {
 pub struct Locale {
     pub id: LocaleId,
     pub common: CommonMessages,
+    pub popconfirm: PopconfirmMessages,
 }
 
 impl Locale {
@@ -90,6 +119,10 @@ impl Locale {
         static VALUE: LazyLock<Arc<Locale>> = LazyLock::new(|| {
             Arc::new(Locale {
                 id: LocaleId::EnUs,
+                popconfirm: PopconfirmMessages {
+                    ok_text: "OK".into(),
+                    cancel_text: "Cancel".into(),
+                },
                 common: CommonMessages {
                     placeholder: "Please select".into(),
                     close: "Close".into(),
@@ -114,6 +147,10 @@ impl Locale {
         static VALUE: LazyLock<Arc<Locale>> = LazyLock::new(|| {
             Arc::new(Locale {
                 id: LocaleId::ZhCn,
+                popconfirm: PopconfirmMessages {
+                    ok_text: "确定".into(),
+                    cancel_text: "取消".into(),
+                },
                 common: CommonMessages {
                     placeholder: "请选择".into(),
                     close: "关闭".into(),
@@ -138,6 +175,10 @@ impl Locale {
         static VALUE: LazyLock<Arc<Locale>> = LazyLock::new(|| {
             Arc::new(Locale {
                 id: LocaleId::ZhTw,
+                popconfirm: PopconfirmMessages {
+                    ok_text: "確定".into(),
+                    cancel_text: "取消".into(),
+                },
                 common: CommonMessages {
                     placeholder: "請選擇".into(),
                     close: "關閉".into(),
@@ -163,6 +204,7 @@ impl Locale {
         Arc::new(Self {
             id: LocaleId::Custom(id.into()),
             common: Self::en_us().common.patched(&common),
+            popconfirm: Self::en_us().popconfirm.clone(),
         })
     }
 
@@ -176,6 +218,7 @@ impl Locale {
 pub struct LocalePatch {
     pub locale: Option<Arc<Locale>>,
     pub common: CommonMessagePatch,
+    pub popconfirm: PopconfirmMessagePatch,
 }
 
 impl LocalePatch {
@@ -190,19 +233,23 @@ impl LocalePatch {
         previous: Option<&Arc<Locale>>,
     ) -> Arc<Locale> {
         let base = self.locale.as_ref().unwrap_or(parent);
-        if self.common.is_empty() {
+        if self.common.is_empty() && self.popconfirm == PopconfirmMessagePatch::default() {
             return base.clone();
         }
         let common = base.common.patched(&self.common);
-        if common == base.common {
+        let popconfirm = base.popconfirm.patched(&self.popconfirm);
+        if common == base.common && popconfirm == base.popconfirm {
             return base.clone();
         }
-        if let Some(previous) = previous.filter(|old| old.id == base.id && old.common == common) {
+        if let Some(previous) = previous
+            .filter(|old| old.id == base.id && old.common == common && old.popconfirm == popconfirm)
+        {
             return previous.clone();
         }
         Arc::new(Locale {
             id: base.id.clone(),
             common,
+            popconfirm,
         })
     }
 }
@@ -210,6 +257,60 @@ impl LocalePatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popconfirm_catalogs_and_field_overrides_follow_locale_changes() {
+        assert_eq!(Locale::en_us().popconfirm.ok_text.as_ref(), "OK");
+        assert_eq!(Locale::en_us().popconfirm.cancel_text.as_ref(), "Cancel");
+        assert_eq!(Locale::zh_cn().popconfirm.ok_text.as_ref(), "确定");
+        assert_eq!(Locale::zh_tw().popconfirm.ok_text.as_ref(), "確定");
+        let patch = LocalePatch {
+            popconfirm: PopconfirmMessagePatch {
+                ok_text: Some("Delete".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let english = patch.resolve(&Locale::en_us());
+        assert_eq!(english.popconfirm.ok_text.as_ref(), "Delete");
+        assert_eq!(english.popconfirm.cancel_text.as_ref(), "Cancel");
+        let chinese = patch.resolve(&Locale::zh_cn());
+        assert_eq!(chinese.popconfirm.ok_text.as_ref(), "Delete");
+        assert_eq!(chinese.popconfirm.cancel_text.as_ref(), "取消");
+        let switched = LocalePatch {
+            locale: Some(Locale::zh_tw()),
+            ..Default::default()
+        }
+        .resolve(&english);
+        assert_eq!(switched.popconfirm.ok_text.as_ref(), "確定");
+    }
+
+    #[test]
+    fn popconfirm_equivalent_overrides_and_previous_results_share_catalogs() {
+        let english = Locale::en_us();
+        let equivalent = LocalePatch {
+            popconfirm: PopconfirmMessagePatch {
+                ok_text: Some("OK".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(Arc::ptr_eq(&english, &equivalent.resolve(&english)));
+        let patch = LocalePatch {
+            popconfirm: PopconfirmMessagePatch {
+                ok_text: Some("Delete".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let previous = patch.resolve(&english);
+        assert!(Arc::ptr_eq(
+            &previous,
+            &patch.resolve_with_previous(&english, Some(&previous))
+        ));
+        let custom = Locale::custom("fr_FR", CommonMessagePatch::default());
+        assert_eq!(custom.popconfirm, english.popconfirm);
+    }
 
     #[test]
     fn builtin_catalogs_are_complete_and_english_is_identity() {

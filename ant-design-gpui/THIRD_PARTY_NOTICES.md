@@ -5,7 +5,8 @@ Adapted algorithms, translations and artwork retain the upstream MIT notices.
 
 ## Ant Design
 
-Theme derivation, token defaults, Button, Checkbox, Radio, Divider, Tag and Input visual rules, gallery examples and descriptions,
+Theme derivation, token defaults, Button, Checkbox, Radio, Divider, Tag, Input, Tooltip,
+Popover and Popconfirm visual rules, rounded popup arrows, gallery examples and descriptions,
 and common translations are adapted from
 Ant Design 6.6.7, commit `f8f5595ab5e891fff6a2a06c5b3b98af643d008e`:
 https://github.com/ant-design/ant-design
@@ -44,6 +45,20 @@ Tag's independent browser measurements and provenance are under
 
 Radio's independent browser measurements and input provenance are under
 `fixtures/radio/`; its generator executes the original token defaults and styles.
+
+Tooltip, Popover and Popconfirm browser measurements and input provenance are
+under `fixtures/popup/`; their generator executes the original styles and rounded
+arrow geometry. Popconfirm translations retain the same upstream MIT notice.
+The native collision solver also follows the observable alignment behavior of
+`@rc-component/trigger` 3.10.1 (MIT); its notice is preserved at
+`fixtures/popup/placement-tools/licenses/rc-component-trigger--LICENSE`.
+
+Live placement fixtures execute that package with React using an isolated,
+locked npm toolchain. These packages are development-only and are not Rust runtime
+dependencies. Exact versions and integrity hashes are in
+`fixtures/popup/placement-tools/package-lock.json`; complete upstream notices,
+including React, rc-component packages, esbuild and TypeScript, are preserved in
+`fixtures/popup/placement-tools/licenses/` with a hashed index.
 
 ## Ant Design colors and fast-color
 
@@ -110,11 +125,16 @@ Input editing also directly uses `unicode-segmentation` 1.13.3 and
 `num-traits` 0.2.19. Each is licensed under MIT OR Apache-2.0. Their original
 license files are included in the generated dependency bundle.
 
-The collector passed on 2026-10-26 with 486 notices covering 256 external runtime
+The input implementation collector passed on 2026-10-26 with 486 notices covering 256 external runtime
 Rust packages and 38 repository vcpkg packages. The input implementation audit is under
 `../build/ant-design-gpui/input-unpatched-license-audit/third-party/` and uses the documented
 fallback license directory below. GPUI Kit was consulted as an architectural
 reference; no source was copied and no GPUI Kit dependency was added.
+
+The popup implementation collector was run on 2026-10-26 against the locked Windows x64 runtime
+dependency graph: 465 notices covering 254 Rust packages and 21 vcpkg packages,
+using the standalone-media selection. The validation bundle is under
+`../build/ant-design-gpui/popup-license-audit/third-party/`.
 
 The shared collector also includes vcpkg and repository attribution records;
 this independent library does not link those Qt/vcpkg packages. Canonical

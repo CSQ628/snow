@@ -10,6 +10,7 @@ mod motion;
 mod wave;
 
 pub use accessibility::{Accessibility, SemanticElement};
+pub(crate) use activation::WeakActivationGuard;
 pub use activation::{Activation, ActivationGuard, Availability};
 pub use focus::{
     FocusNext, FocusPrevious, FocusRing, FocusRingElement, focus_handle, initialize, traversal,
