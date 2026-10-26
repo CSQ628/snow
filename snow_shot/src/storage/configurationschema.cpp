@@ -1874,7 +1874,10 @@ QJsonArray shortcutDefaults(const QString& key, const QJsonValue& value) {
     return snow_shot::shortcuts::shortcutBindingsToJson(
         snow_shot::shortcuts::shortcutBindingsFromJson(
             value, true, -1, nullptr, nullptr,
-            key == QStringLiteral("screenshot_shortcuts/toggle_guides")));
+            key == QStringLiteral("screenshot_shortcuts/toggle_guides"),
+            key.startsWith(QStringLiteral("global_shortcuts/"))
+                ? snow_shot::shortcuts::ShortcutPolicy::Native
+                : snow_shot::shortcuts::ShortcutPolicy::Application));
 }
 
 #ifdef Q_OS_MACOS
@@ -2011,11 +2014,13 @@ ConfigurationNormalization normalizeLanguage(const QJsonValue& value) {
 
 ConfigurationNormalization normalizeShortcuts(const QJsonValue& value, int maximumItems,
                                               bool allowModifierOnlyShift,
-                                              bool allowModifierOnlyAlt) {
+                                              bool allowModifierOnlyAlt,
+                                              snow_shot::shortcuts::ShortcutPolicy policy) {
     bool changed = false;
     bool valid = false;
     const auto bindings = snow_shot::shortcuts::shortcutBindingsFromJson(
-        value, allowModifierOnlyShift, maximumItems, &valid, &changed, allowModifierOnlyAlt);
+        value, allowModifierOnlyShift, maximumItems, &valid, &changed, allowModifierOnlyAlt,
+        policy);
     return {snow_shot::shortcuts::shortcutBindingsToJson(bindings), valid, changed};
 }
 
@@ -2962,7 +2967,10 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     case ConfigurationValueKind::ShortcutList:
         return normalizeShortcuts(value, schemaEntry->maximumListItems,
                                   allowsModifierOnlyShift(key),
-                                  key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
+                                  key == QStringLiteral("screenshot_shortcuts/toggle_guides"),
+                                  key.startsWith(QStringLiteral("global_shortcuts/"))
+                                      ? shortcuts::ShortcutPolicy::Native
+                                      : shortcuts::ShortcutPolicy::Application);
     case ConfigurationValueKind::Structured:
         return exactType(value, QJsonValue::Object);
     }
