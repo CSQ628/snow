@@ -1,6 +1,6 @@
 # Ant Design GPUI
 
-Apache-2.0 Ant Design controls built with GPUI. The public Button component uses
+Apache-2.0 Ant Design controls built with GPUI. Button, Checkbox and Divider use
 native layout, focus, accessibility and motion, with retained configuration,
 localization, complete themes and all 829 pinned icons.
 
@@ -15,6 +15,8 @@ cd ant-design-gpui
 cargo run --locked --offline --example gallery
 # Optional: -- --dark --compact --rtl --reduced-motion
 # Reproduce a narrow layout: -- --window-size 640x720 --capture C:/temp/gallery.png
+# Open Checkbox directly: -- --component checkbox
+# Open Divider directly: -- --component divider
 ```
 
 The native gallery has a fixed component sidebar, direct example links and a
@@ -29,6 +31,15 @@ capabilities needed for their full reference examples. Titles precede previews,
 and cards use two columns only when the padded content has sufficient room.
 The Color & Variant matrix follows the reference's responsive component sizing.
 Tab/Shift+Tab navigate; Enter/Space activate controls.
+
+Checkbox's seven public examples follow the reference order, with working
+controlled state, disabled controls, groups, indeterminate Check all, native
+grid layout and semantic styling. Select Checkbox in the sidebar or use
+`--component checkbox`; Space toggles focused checkboxes.
+
+Divider's nine examples cover horizontal and vertical separators, title placement,
+spacing, plain text, solid/dashed/dotted lines, component tokens and semantic styling.
+Select Divider in the sidebar or use `--component divider`.
 
 Run only this example's offscreen regression tests with
 `cargo test --locked --offline --example gallery`.
@@ -139,6 +150,136 @@ requires the repository's configured `windows-msvc-performance` Release build.
 Independent [browser fixtures](fixtures/button/README.md) check 2,208 original
 Ant Design computed styles across four themes and three interaction states.
 `scripts/test-button-accessibility.ps1` provides opt-in Windows UI Automation checks.
+
+## Checkbox
+
+```rust
+use ant_design_gpui::{Checkbox, ConfigScope};
+
+# fn remember_checkbox(scope: ConfigScope) -> impl gpui::IntoElement {
+Checkbox::new("remember")
+    .scope(scope)
+    .label("Remember me")
+    .default_checked(true)
+    .on_change(|change, window, cx| {
+        // change.checked is the requested new value.
+    })
+# }
+```
+
+Use stable, locally unique IDs when building controls during render. An
+uncontrolled Checkbox retains its own value; `.default_checked(...)` sets only
+its initial value. `.checked(...)` supplies a controlled value: update application
+state in `.on_change(cx.listener(...))` and rerender to accept the change.
+`.indeterminate(true)` displays a mixed mark independently of the checked value,
+which supports deriving a Check all control from the selected values.
+
+The entire label toggles the control. Space and native accessibility actions use
+the same guarded change handler. Disabled controls leave the tab order and
+relinquish focus; `.disabled(false)` overrides a disabled provider. Supply
+`.accessibility_label(...)` for an unlabeled Checkbox, `.automation_id(...)` for
+native automation, and `.focus_handle(&handle)` for programmatic focus.
+
+```rust
+use ant_design_gpui::{ConfigScope, checkbox::{CheckboxGroup, CheckboxOption}};
+
+# fn fruit_choices(scope: ConfigScope) -> impl gpui::IntoElement {
+CheckboxGroup::new("fruit")
+    .scope(scope)
+    .accessibility_label("Fruit choices")
+    .options([
+        CheckboxOption::new("apple", "Apple", "Apple"),
+        CheckboxOption::new("pear", "Pear", "Pear"),
+        CheckboxOption::new("orange", "Orange", "Orange"),
+    ])
+    .default_value(["Apple"])
+    .on_change(|values, window, cx| {
+        // Values follow the current option order.
+    })
+# }
+```
+
+Groups accept typed values and explicit option IDs so focus remains stable when
+options reorder. `.value(...)` controls selection; `.default_value(...)` initializes
+retained selection. An option's explicit disabled setting overrides the group and
+provider. Groups wrap with token spacing and support `.vertical(true)`; GPUI
+`Styled` refinements also allow native grid layouts and full-width controls.
+
+Checkbox follows the scope's theme, font, direction and motion policy. Ant Design
+does not define Checkbox-specific component tokens; use
+`ComponentThemeConfig::<CheckboxTheme>::default().with_tokens(...)` for component-local
+global token overrides. Root `Styled`, `.icon_style(StyleRefinement)` and
+`.label_style(StyleRefinement)` customize the semantic slots. The gallery shows
+both static refinements and styles derived from controlled state.
+
+```powershell
+cargo run --locked --offline --example gallery -- --component checkbox
+cargo test --locked --offline --lib checkbox::
+cargo test --locked --offline --example gallery checkbox_
+./scripts/run-checkbox-perf.ps1
+```
+
+Colors, ticks and click waves follow scoped motion and application reduced motion;
+`.wave(false)` disables the wave. Idle controls schedule no animation frames. Tick
+meshes are retained across redraws, color changes and scrolling, with no image assets.
+Independent [browser fixtures](fixtures/checkbox/README.md) compare 576 original
+Ant Design states across four themes, both directions, hover and keyboard focus.
+`scripts/test-checkbox-accessibility.ps1` checks native Windows checkbox roles,
+mixed state, toggling and keyboard interaction.
+
+## Divider
+
+```rust
+use ant_design_gpui::{Divider, Size};
+use ant_design_gpui::divider::{DividerTitlePlacement, DividerVariant};
+use gpui::px;
+
+let section = Divider::new("details")
+    .label("Details")
+    .title_placement(DividerTitlePlacement::Start);
+let subtle = Divider::new("subsection")
+    .label("More information").plain(true)
+    .variant(DividerVariant::Dashed).size(Size::Small);
+let inline = Divider::new("actions-separator").vertical(true);
+let edge_title = Divider::new("edge-title")
+    .label("Settings")
+    .title_placement(DividerTitlePlacement::End)
+    .title_margin(px(0.));
+# let _ = (section, subtle, inline, edge_title);
+```
+
+Pass `.scope(scope.clone())` to inherit a window's theme, direction and explicitly
+configured size. Unset horizontal spacing is 24px without a title and 16px with
+one; small/medium spacing is 8px/16px. Large preserves the unset spacing. Theme
+algorithms derive these values from the effective aliases. Vertical dividers use
+0.9em height and 8px inline margins by default; place them in an `items_center()`
+row alongside text or actions. Vertical dividers ignore titles and size.
+
+`Start` and `End` mirror in RTL; `Left` and `Right` are physical placements.
+`.title_margin(...)` replaces the short rail and outer padding for edge titles.
+`.child(...)` accepts any GPUI title element; `.label(...)` accepts text, including
+`"0"`. The last title setter wins. Titles remain on one line; narrow layouts let
+the rails collapse before the title overflows, matching Ant Design.
+
+Native `Styled` refinements apply to the root. `.rail_style(...)` and
+`.content_style(...)` refine the two semantic slots. Border color/width style
+the rail stroke. Register `DividerTokenPatch` through `DividerTheme` for scoped
+title padding, edge rail proportions and vertical margins. Padding accepts
+pixels/rems or font multiples (`relative(1.)` means 1em).
+
+Dividers expose native separator roles and orientation without a tab stop.
+Text titles supply their accessible name; use `.accessibility_label(...)` for
+custom titles when necessary. They own only a scope subscription and two bounded
+paint caches. Solid rails use one quad; dashed/dotted rails reuse tessellation
+across redraws, scrolling and color changes, with no per-mark layout children.
+Idle dividers schedule zero animation frames.
+
+Run `cargo test --locked --offline --lib divider::` and
+`cargo test --locked --offline --example gallery divider` for focused coverage.
+Independent browser references and regeneration instructions are in
+[`fixtures/divider/README.md`](fixtures/divider/README.md).
+Run `scripts/run-divider-perf.ps1` for optimized Release measurements under
+`windows-msvc-performance`.
 
 ## Retained configuration
 

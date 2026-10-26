@@ -5,6 +5,8 @@
 
 mod button;
 mod catalog;
+mod checkbox;
+mod divider;
 mod shell;
 
 #[cfg(test)]
@@ -17,6 +19,7 @@ use gpui::{App, AppContext, Bounds, Focusable, WindowBounds, WindowOptions, px, 
 
 #[derive(Default)]
 struct Options {
+    component: catalog::ComponentId,
     capture: Option<PathBuf>,
     reduced_motion: bool,
     dark: bool,
@@ -31,6 +34,14 @@ impl Options {
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
+                "--component" => {
+                    options.component = match arguments.next().as_deref() {
+                        Some("button") => catalog::ComponentId::Button,
+                        Some("divider") => catalog::ComponentId::Divider,
+                        Some("checkbox") => catalog::ComponentId::Checkbox,
+                        _ => return Err("--component requires button, divider, or checkbox".into()),
+                    };
+                }
                 "--capture" => {
                     options.capture = Some(
                         arguments
@@ -69,7 +80,7 @@ impl Options {
 
 fn main() {
     let options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
-        eprintln!("{error}\nUsage: gallery [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
+        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
         std::process::exit(2);
     });
     gpui_platform::application().run(move |cx: &mut App| {
@@ -102,7 +113,11 @@ fn main() {
             },
             |window, cx| {
                 window.set_window_title("Ant Design GPUI · Components");
-                let gallery = cx.new(|cx| shell::Gallery::new(scope.clone(), cx));
+                let gallery = cx.new(|cx| {
+                    let mut gallery = shell::Gallery::new(scope.clone(), cx);
+                    gallery.selected = options.component;
+                    gallery
+                });
                 let root = cx.new(|cx| UiRoot::new(scope, gallery, window, cx));
                 window.focus(&root.focus_handle(cx), cx);
                 window.activate_window();

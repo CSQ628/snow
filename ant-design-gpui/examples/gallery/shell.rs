@@ -17,6 +17,8 @@ use gpui::{
 use super::{
     button::{ButtonPage, DEMOS, Preview},
     catalog::{COMPONENTS, ComponentId},
+    checkbox::{self, CheckboxPage},
+    divider::{self, DividerPage},
 };
 
 pub(super) fn sidebar_width(viewport_width: Pixels) -> Pixels {
@@ -55,8 +57,12 @@ pub(super) struct Gallery {
     pub scope: ConfigScope,
     pub selected: ComponentId,
     pub button: Entity<ButtonPage>,
+    pub checkbox: Entity<CheckboxPage>,
+    pub divider: Entity<DividerPage>,
     pub scroll: ScrollHandle,
     anchors: Vec<ScrollAnchor>,
+    checkbox_anchors: Vec<ScrollAnchor>,
+    divider_anchors: Vec<ScrollAnchor>,
     _config: Subscription,
 }
 
@@ -67,13 +73,25 @@ impl Gallery {
             .iter()
             .map(|_| ScrollAnchor::for_handle(scroll.clone()))
             .collect();
+        let checkbox_anchors: Vec<_> = checkbox::DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
+        let divider_anchors: Vec<_> = divider::DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
         Self {
             button: cx.new(|cx| ButtonPage::new(scope.clone(), anchors.clone(), cx)),
+            checkbox: cx.new(|cx| CheckboxPage::new(scope.clone(), checkbox_anchors.clone(), cx)),
+            divider: cx.new(|cx| DividerPage::new(scope.clone(), divider_anchors.clone(), cx)),
             _config: scope.observe(cx),
             scope,
             selected: ComponentId::Button,
             scroll,
             anchors,
+            checkbox_anchors,
+            divider_anchors,
         }
     }
 
@@ -196,11 +214,13 @@ impl Gallery {
             .justify_between()
             .gap(px(8.))
             .when(window.viewport_size().width >= px(1040.), |toolbar| {
-                toolbar.child(
-                    div()
-                        .text_color(tokens.color_text_tertiary)
-                        .child("General / Button"),
-                )
+                toolbar.child(div().text_color(tokens.color_text_tertiary).child(
+                    match self.selected {
+                        ComponentId::Button => "General / Button",
+                        ComponentId::Divider => "Layout / Divider",
+                        ComponentId::Checkbox => "Data Entry / Checkbox",
+                    },
+                ))
             })
             .child(
                 div()
@@ -268,8 +288,21 @@ impl Gallery {
         let tokens = &config.theme.tokens;
         let expanded = sidebar_width(window.viewport_size().width) > px(72.);
         let mut entries = div().flex().flex_col().gap(px(4.));
+        let mut group = None;
         for component in COMPONENTS {
             let id = component.id;
+            if expanded && group != Some(component.group) {
+                entries = entries.child(
+                    div()
+                        .px(px(12.))
+                        .pt(px(if group.is_some() { 16. } else { 0. }))
+                        .pb(px(4.))
+                        .text_size(px(12.))
+                        .text_color(tokens.color_text_tertiary)
+                        .child(component.group),
+                );
+            }
+            group = Some(component.group);
             entries = entries.child(
                 div()
                     .id(component.navigation_id)
@@ -279,16 +312,26 @@ impl Gallery {
                             .automation_id(component.navigation_id)
                             .scope(self.scope.clone())
                             .label(if expanded { component.title } else { "" })
-                            .icon(IconName::AppstoreOutlined)
+                            .icon(match id {
+                                ComponentId::Divider => IconName::BorderHorizontalOutlined,
+                                _ => IconName::AppstoreOutlined,
+                            })
                             .accessibility_label(component.title)
-                            .accessibility_description("Selected component")
+                            .accessibility_description(if self.selected == id {
+                                "Selected component"
+                            } else {
+                                "View component examples"
+                            })
                             .button_type(ButtonType::Text)
                             .block(true)
                             .w_full()
                             .h(px(40.))
                             .when(expanded, |button| button.justify_start())
-                            .bg(tokens.color_primary_bg)
-                            .text_color(tokens.color_primary)
+                            .when(self.selected == id, |button| {
+                                button
+                                    .bg(tokens.color_primary_bg)
+                                    .text_color(tokens.color_primary)
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if this.selected != id {
                                     this.selected = id;
@@ -309,47 +352,71 @@ impl Gallery {
                     .text_color(tokens.color_text_tertiary)
                     .child("On this page"),
             );
-            for (index, demo) in DEMOS.iter().enumerate() {
-                let anchor = self.anchors[index].clone();
-                let pending = matches!(demo.preview, Preview::Pending(_));
-                let debug_id = format!("gallery.jump.{}", demo.id);
+            let links = DEMOS
+                .iter()
+                .zip(&self.anchors)
+                .filter(|_| self.selected == ComponentId::Button)
+                .map(|(demo, anchor)| {
+                    (
+                        demo.id,
+                        demo.title,
+                        matches!(demo.preview, Preview::Pending(_)),
+                        anchor,
+                    )
+                })
+                .chain(
+                    checkbox::DEMOS
+                        .iter()
+                        .zip(&self.checkbox_anchors)
+                        .filter(|_| self.selected == ComponentId::Checkbox)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                )
+                .chain(
+                    divider::DEMOS
+                        .iter()
+                        .zip(&self.divider_anchors)
+                        .filter(|_| self.selected == ComponentId::Divider)
+                        .map(|(demo, anchor)| (demo.id, demo.title, false, anchor)),
+                );
+            for (id, title, pending, anchor) in links {
+                let anchor = anchor.clone();
+                let debug_id = format!("gallery.jump.{id}");
                 entries = entries.child(
-                    div()
-                        .id(demo.id)
-                        .debug_selector(move || debug_id.clone())
-                        .child(
-                            Button::new(demo.id)
-                                .scope(self.scope.clone())
-                                .button_type(ButtonType::Text)
-                                .block(true)
-                                .h(px(30.))
-                                .px(px(12.))
-                                .justify_start()
-                                .label(match demo.id {
-                                    "custom-disabled-bg" => "Disabled background",
-                                    "style-class" => "Semantic styling",
-                                    _ => demo.title,
-                                })
-                                .text_size(px(12.))
-                                .text_color(if pending {
-                                    tokens.color_text_tertiary
-                                } else {
-                                    tokens.color_text_secondary
-                                })
-                                .accessibility_description(format!(
-                                    "Jump to {}{}",
-                                    demo.title,
-                                    if pending { ", planned preview" } else { "" }
-                                ))
-                                .on_click(cx.listener(move |_, _, window, cx| {
-                                    anchor.scroll_to(window, cx);
-                                    let entity = cx.weak_entity();
-                                    window.on_next_frame(move |_, cx| {
-                                        let _ = entity.update(cx, |_, cx| cx.notify());
-                                    });
-                                    cx.notify();
-                                })),
-                        ),
+                    div().id(id).debug_selector(move || debug_id.clone()).child(
+                        Button::new(id)
+                            .scope(self.scope.clone())
+                            .button_type(ButtonType::Text)
+                            .block(true)
+                            .h(px(30.))
+                            .px(px(12.))
+                            .justify_start()
+                            .label(match id {
+                                "custom-disabled-bg" => "Disabled background",
+                                "style-class" => "Semantic styling",
+                                "divider-size" => "Spacing size",
+                                "divider-style-class" => "Semantic styling",
+                                _ => title,
+                            })
+                            .text_size(px(12.))
+                            .text_color(if pending {
+                                tokens.color_text_tertiary
+                            } else {
+                                tokens.color_text_secondary
+                            })
+                            .accessibility_description(format!(
+                                "Jump to {}{}",
+                                title,
+                                if pending { ", planned preview" } else { "" }
+                            ))
+                            .on_click(cx.listener(move |_, _, window, cx| {
+                                anchor.scroll_to(window, cx);
+                                let entity = cx.weak_entity();
+                                window.on_next_frame(move |_, cx| {
+                                    let _ = entity.update(cx, |_, cx| cx.notify());
+                                });
+                                cx.notify();
+                            })),
+                    ),
                 );
             }
         }
@@ -417,7 +484,7 @@ impl Gallery {
                                 .pb(px(8.))
                                 .text_size(px(12.))
                                 .text_color(tokens.color_text_tertiary)
-                                .child("General"),
+                                .child("Components"),
                         )
                     })
                     .child(entries),
@@ -439,8 +506,16 @@ impl Gallery {
                             .w_full()
                             .label(if expanded { "Ant Design reference" } else { "" })
                             .icon(IconName::BookOutlined)
-                            .accessibility_label("Open Ant Design Button reference")
-                            .href("https://ant.design/components/button"),
+                            .accessibility_label(match self.selected {
+                                ComponentId::Button => "Open Ant Design Button reference",
+                                ComponentId::Divider => "Open Ant Design Divider reference",
+                                ComponentId::Checkbox => "Open Ant Design Checkbox reference",
+                            })
+                            .href(match self.selected {
+                                ComponentId::Button => "https://ant.design/components/button",
+                                ComponentId::Divider => "https://ant.design/components/divider",
+                                ComponentId::Checkbox => "https://ant.design/components/checkbox",
+                            }),
                     )
                     .when(expanded, |footer| {
                         footer.child(
@@ -464,10 +539,14 @@ impl Render for Gallery {
             .iter()
             .find(|component| component.id == self.selected)
             .expect("registered component page");
-        let live = DEMOS
-            .iter()
-            .filter(|demo| !matches!(demo.preview, Preview::Pending(_)))
-            .count();
+        let live = match self.selected {
+            ComponentId::Button => DEMOS
+                .iter()
+                .filter(|demo| !matches!(demo.preview, Preview::Pending(_)))
+                .count(),
+            ComponentId::Checkbox => checkbox::DEMOS.len(),
+            ComponentId::Divider => divider::DEMOS.len(),
+        };
         div()
             .id("gallery")
             .size_full()
@@ -543,7 +622,15 @@ impl Render for Gallery {
                                             ),
                                     )
                                     .child(match self.selected {
-                                        ComponentId::Button => self.button.clone(),
+                                        ComponentId::Button => {
+                                            self.button.clone().into_any_element()
+                                        }
+                                        ComponentId::Checkbox => {
+                                            self.checkbox.clone().into_any_element()
+                                        }
+                                        ComponentId::Divider => {
+                                            self.divider.clone().into_any_element()
+                                        }
                                     })
                                     .child(
                                         div()
@@ -554,7 +641,17 @@ impl Render for Gallery {
                                             .gap(px(16.))
                                             .text_size(px(12.))
                                             .text_color(tokens.color_text_tertiary)
-                                            .child("Tab to navigate · Enter or Space to activate")
+                                            .child(match self.selected {
+                                                ComponentId::Button => {
+                                                    "Tab to navigate · Enter or Space to activate"
+                                                }
+                                                ComponentId::Checkbox => {
+                                                    "Tab to navigate · Space to toggle"
+                                                }
+                                                ComponentId::Divider => {
+                                                    "Start and end follow the preview direction"
+                                                }
+                                            })
                                             .child(
                                                 div()
                                                     .id("gallery.footer.top")

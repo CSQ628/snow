@@ -27,6 +27,14 @@ harness = false
 name = "button"
 harness = false
 
+[[bench]]
+name = "checkbox"
+harness = false
+
+[[bench]]
+name = "divider"
+harness = false
+
 [profile.dev]
 incremental = false
 

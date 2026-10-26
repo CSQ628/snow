@@ -80,6 +80,16 @@ impl Fixture {
         self.draw();
     }
 
+    fn click_checkbox(&mut self, selector: &'static str) {
+        let bounds = self.bounds(selector);
+        // These example wrappers stretch to fill their column; hit the box.
+        self.cx.simulate_click(
+            point(bounds.left() + px(8.), bounds.center().y),
+            Modifiers::none(),
+        );
+        self.draw();
+    }
+
     fn scope(&self) -> ConfigScope {
         self.gallery
             .read_with(&self.cx, |gallery, _| gallery.scope.clone())
@@ -155,8 +165,12 @@ impl Fixture {
 
 #[test]
 fn catalogue_keeps_reference_order_and_pending_cards_explain_their_status_without_fake_controls() {
-    assert_eq!(COMPONENTS.len(), 1);
+    assert_eq!(COMPONENTS.len(), 3);
     assert_eq!(COMPONENTS[0].group, "General");
+    assert_eq!(COMPONENTS[1].id, ComponentId::Divider);
+    assert_eq!(COMPONENTS[1].group, "Layout");
+    assert_eq!(COMPONENTS[2].id, ComponentId::Checkbox);
+    assert_eq!(COMPONENTS[2].group, "Data Entry");
     assert_eq!(
         DEMOS.iter().map(|demo| demo.id).collect::<Vec<_>>(),
         [
@@ -648,4 +662,172 @@ fn color_matrix_uses_the_references_responsive_component_size() {
             expected
         );
     }
+}
+
+#[test]
+fn checkbox_gallery_keeps_reference_order_and_native_responsive_layout() {
+    assert_eq!(
+        super::checkbox::DEMOS
+            .iter()
+            .map(|demo| demo.id)
+            .collect::<Vec<_>>(),
+        [
+            "basic",
+            "disabled",
+            "controller",
+            "group",
+            "check-all",
+            "layout",
+            "style-class"
+        ],
+    );
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.checkbox");
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Checkbox,
+    );
+    for width in [1280., 1100., 640.] {
+        fixture.resize(width);
+        let first = fixture.bounds("gallery.checkbox.card.basic");
+        let second = fixture.bounds("gallery.checkbox.card.disabled");
+        let content = fixture.bounds("gallery.content");
+        assert!(first.left() >= content.left());
+        assert!(second.right() <= content.right());
+        if width == 1280. {
+            assert_eq!(first.top(), second.top());
+        } else {
+            assert!(second.top() >= first.bottom());
+        }
+    }
+    fixture.resize(1280.);
+    fixture.click("gallery.jump.controller");
+    fixture.next_frame();
+    let content = fixture.bounds("gallery.content");
+    let card = fixture.bounds("gallery.checkbox.card.controller");
+    assert!((card.top() - content.top()).abs() <= px(1.));
+    fixture.click("gallery.control.top");
+    fixture.next_frame();
+    let scroll = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
+    assert_eq!(scroll.offset().y, px(0.));
+}
+
+#[test]
+fn checkbox_controller_and_check_all_examples_update_application_state() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.checkbox");
+    fixture.reveal("checkbox.controller");
+    let page = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.checkbox.clone());
+    fixture.click_checkbox("checkbox.controller");
+    assert!(!page.read_with(&fixture.cx, |page, _| page.checked));
+    fixture.click("checkbox.controller.disable");
+    assert!(page.read_with(&fixture.cx, |page, _| page.disabled));
+    fixture.click_checkbox("checkbox.controller");
+    assert!(!page.read_with(&fixture.cx, |page, _| page.checked));
+    fixture.click("checkbox.controller.toggle");
+    assert!(page.read_with(&fixture.cx, |page, _| page.checked));
+
+    fixture.reveal("checkbox.check-all");
+    assert_eq!(
+        page.read_with(&fixture.cx, |page, _| page.checked_list.len()),
+        2
+    );
+    fixture.click_checkbox("checkbox.check-all");
+    assert_eq!(
+        page.read_with(&fixture.cx, |page, _| page.checked_list.clone()),
+        ["Apple", "Pear", "Orange"]
+    );
+    fixture.click_checkbox("checkbox.check-all");
+    assert!(page.read_with(&fixture.cx, |page, _| page.checked_list.is_empty()));
+    fixture.click("gallery.control.theme");
+    fixture.click("gallery.control.density");
+    fixture.click("gallery.control.direction");
+    assert!(page.read_with(&fixture.cx, |page, _| page.checked_list.is_empty()));
+    fixture.click("gallery.navigation.button");
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Button
+    );
+}
+
+#[test]
+fn checkbox_gallery_can_be_selected_for_native_capture() {
+    assert_eq!(
+        Options::parse(["--component".into(), "checkbox".into()])
+            .unwrap()
+            .component,
+        ComponentId::Checkbox,
+    );
+    assert!(Options::parse(["--component".into()]).is_err());
+    assert!(Options::parse(["--component".into(), "missing".into()]).is_err());
+}
+
+#[test]
+fn divider_gallery_navigation_uses_its_own_previews_and_scroll_anchors() {
+    let mut fixture = Fixture::new();
+    fixture.click("gallery.navigation.divider");
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Divider,
+    );
+    for selector in [
+        "gallery.preview.divider-horizontal",
+        "gallery.preview.divider-with-text",
+        "gallery.preview.divider-vertical",
+    ] {
+        let preview = fixture.bounds(selector);
+        assert!(preview.size.height >= px(120.));
+    }
+    for width in [1280., 1100., 640.] {
+        fixture.resize(width);
+        let first = fixture.bounds("gallery.card.divider-horizontal");
+        let second = fixture.bounds("gallery.card.divider-with-text");
+        let content = fixture.bounds("gallery.content");
+        assert!(first.left() >= content.left());
+        assert!(second.right() <= content.right());
+        if width == 1280. {
+            assert_eq!(first.top(), second.top());
+        } else {
+            assert!(second.top() >= first.bottom());
+        }
+    }
+    fixture.resize(1280.);
+    fixture.click("gallery.jump.divider-vertical");
+    fixture.next_frame();
+    let content = fixture.bounds("gallery.content");
+    let vertical = fixture.bounds("gallery.card.divider-vertical");
+    assert!((vertical.top() - content.top()).abs() <= px(1.));
+    fixture.click("gallery.control.top");
+    fixture.next_frame();
+    let scroll = fixture
+        .gallery
+        .read_with(&fixture.cx, |gallery, _| gallery.scroll.clone());
+    assert_eq!(scroll.offset().y, px(0.));
+    fixture.click("gallery.navigation.button");
+    assert_eq!(
+        fixture
+            .gallery
+            .read_with(&fixture.cx, |gallery, _| gallery.selected),
+        ComponentId::Button,
+    );
+}
+
+#[test]
+fn divider_gallery_can_be_selected_for_native_capture() {
+    assert_eq!(
+        Options::parse(["--component".into(), "divider".into()])
+            .unwrap()
+            .component,
+        ComponentId::Divider,
+    );
 }

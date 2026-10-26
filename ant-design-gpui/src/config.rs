@@ -88,6 +88,7 @@ pub struct ResolvedConfig {
     pub variant: Variant,
     /// Scoped permission for decorative motion. GPUI reduced motion still wins.
     pub motion: bool,
+    configured_size: Option<Size>,
     theme_config: Arc<ThemeConfig>,
 }
 
@@ -98,6 +99,7 @@ fn shared_eq<T: PartialEq>(left: &Arc<T>, right: &Arc<T>) -> bool {
 impl PartialEq for ResolvedConfig {
     fn eq(&self, other: &Self) -> bool {
         self.size == other.size
+            && self.configured_size == other.configured_size
             && self.direction == other.direction
             && self.disabled == other.disabled
             && self.variant == other.variant
@@ -121,6 +123,7 @@ impl Default for ResolvedConfig {
             theme_config,
             locale: Locale::en_us(),
             size: Size::Medium,
+            configured_size: None,
             direction: Direction::Ltr,
             disabled: false,
             variant: Variant::Outlined,
@@ -130,6 +133,12 @@ impl Default for ResolvedConfig {
 }
 
 impl ResolvedConfig {
+    /// The nearest explicitly configured size, preserving an unset provider.
+    /// Some controls, such as Divider, distinguish their default spacing from medium.
+    pub fn configured_size(&self) -> Option<Size> {
+        self.configured_size
+    }
+
     pub fn theme_config(&self) -> &ThemeConfig {
         &self.theme_config
     }
@@ -206,6 +215,7 @@ impl ResolvedConfig {
                 .locale
                 .resolve_with_previous(&parent.locale, previous.map(|old| &old.locale)),
             size: patch.size.unwrap_or(parent.size),
+            configured_size: patch.size.or(parent.configured_size),
             direction: patch.direction.unwrap_or(parent.direction),
             disabled: patch.disabled.unwrap_or(parent.disabled),
             variant: patch.variant.unwrap_or(parent.variant),
@@ -441,16 +451,53 @@ mod tests {
         let original = cx.update(|cx| scope.snapshot(cx));
         cx.update(|cx| {
             assert!(!scope.set_patch(ConfigPatch::default(), cx).unwrap());
+            assert!(Arc::ptr_eq(&original, &scope.snapshot(cx)));
+            assert!(
+                scope
+                    .update_patch(cx, |patch| patch.size = Some(Size::Medium))
+                    .unwrap()
+            );
+            let explicit = scope.snapshot(cx);
+            assert_eq!(explicit.size, original.size);
+            assert_eq!(explicit.configured_size(), Some(Size::Medium));
+            assert_eq!(original.configured_size(), None);
+            assert!(Arc::ptr_eq(&original.theme, &explicit.theme));
             assert!(
                 !scope
                     .update_patch(cx, |patch| patch.size = Some(Size::Medium))
                     .unwrap()
             );
-            assert!(Arc::ptr_eq(&original, &scope.snapshot(cx)));
+            assert!(Arc::ptr_eq(&explicit, &scope.snapshot(cx)));
             scope
                 .update_patch(cx, |patch| patch.direction = Some(Direction::Rtl))
                 .unwrap();
             assert!(Arc::ptr_eq(&original.theme, &scope.snapshot(cx).theme));
+        });
+    }
+
+    #[gpui::test]
+    fn configured_size_preserves_inherited_presence_and_removal(cx: &mut TestAppContext) {
+        let (root, child) = cx.update(|cx| {
+            let root = ConfigScope::new_window(cx);
+            let child = root.child(ConfigPatch::default(), cx).unwrap();
+            assert_eq!(child.snapshot(cx).configured_size(), None);
+            root.update_patch(cx, |patch| patch.size = Some(Size::Medium))
+                .unwrap();
+            (root, child)
+        });
+        cx.update(|cx| {
+            assert_eq!(child.snapshot(cx).configured_size(), Some(Size::Medium));
+            child
+                .update_patch(cx, |patch| patch.size = Some(Size::Small))
+                .unwrap();
+            root.update_patch(cx, |patch| patch.size = None).unwrap();
+        });
+        cx.update(|cx| {
+            assert_eq!(root.snapshot(cx).configured_size(), None);
+            assert_eq!(child.snapshot(cx).configured_size(), Some(Size::Small));
+            child.update_patch(cx, |patch| patch.size = None).unwrap();
+            assert_eq!(child.snapshot(cx).configured_size(), None);
+            assert_eq!(child.snapshot(cx).size, Size::Medium);
         });
     }
 

@@ -240,3 +240,92 @@ through the actual GPUI element path in the offscreen tests.
 
 Only the gallery's focused tests were run for this refinement; no complete
 library or repository test suite was run.
+
+## Divider component validation (2026-10-26)
+
+Divider uses native GPUI flex layout, theme scopes and separator semantics.
+Rails paint directly, without a layout child per dash or dot. Their bounded
+geometry caches survive scrolling and color changes. Unset provider size is
+retained separately from its medium fallback, preserving Ant's default 24px
+untitled spacing and its explicitly configured 16px medium spacing.
+
+- `cargo test --locked --offline --lib divider::`: **21 passed**. This includes
+  13 offscreen layout/semantic tests, four rail geometry/cache tests, three token
+  tests and the independent browser comparison test.
+- The browser comparison checks **592 measurements** from the original Divider
+  style generator across four themes, both directions, sizes, orientations,
+  titles, variants and component-token overrides. Repeated capture was identical:
+  SHA-256 `ea2a5a47d0d6afa8a3c74eea2fa978f0c36ab5995f74ff63274bb5cd4902096e`.
+  See `fixtures/divider/README.md` for provenance and regeneration.
+- `cargo test --locked --offline --lib config::tests`: **9 passed**, covering
+  inherited size presence/removal, explicit-medium invalidation and no-op identity.
+- `cargo test --locked --offline --example gallery divider`: **5 passed**,
+  covering nine previews, responsive layout, scoped tokens, navigation and capture.
+- The README examples compiled and passed. Strict Clippy passed for the library,
+  tests, gallery and Divider benchmark. Formatting, `git diff --check` and the
+  native gallery build passed.
+
+Native light, dark/compact/RTL and narrow captures were inspected at 150% display
+scaling. A Windows UI Automation probe inspected the hidden preview through its
+HWND and found **27 native Separator controls**, with the expected title names,
+stable automation IDs and no keyboard focus stops. Offscreen tests also verify
+orientation and absence of focus/click actions. Captures remain under ignored
+`build/ant-design-gpui/divider-reference/`.
+
+Independent browser pixel probes at 100%/150%/200% verified snapped stroke widths,
+thin/thick dash proportions, short-rail solid/proportional patterns and square
+versus round dots. Text antialiasing and minor dotted endpoint rasterization
+remain renderer-specific. Native macOS/Linux rendering is not validated here.
+
+Release measurements use `scripts/run-divider-perf.ps1` beneath the verified
+`windows-msvc-performance` preset. Final 100-control warm draw means were
+0.40ms for solid untitled, 1.31ms for solid titled, 1.45ms for dashed titled and
+1.44ms for dotted titled. Every draw asserted **zero idle animation frames**.
+These are CPU diagnostics rather than GPU presentation latency or CI thresholds;
+the final raw sample is `build/ant-design-gpui/divider-performance.txt`.
+
+Only the related component/configuration/gallery tests were run; no complete
+library or repository test suite was run.
+
+## Checkbox validation (2026-10-26)
+
+Checkbox and CheckboxGroup use retained GPUI state, native focus and accessibility,
+typed group values and stable option IDs. The tick is cached vector geometry;
+scrolling, color changes and idle redraws reuse its mesh. Colors interpolate in
+premultiplied sRGB. Tick scale and opacity follow the source's separate transitions,
+and the checked-only wave uses Ant Design's short Checkbox timing. Scoped and
+application reduced motion stop animation frames.
+
+- `cargo test --locked --offline --lib checkbox::`: **31 passed**.
+- `cargo test --locked --offline --example gallery -- checkbox catalogue toolbar
+  demo_jumps`: **6 passed**, covering Checkbox's examples and shared navigation.
+- The two Checkbox README examples compile; the shared README's merged doctest
+  runner executed **6 passing examples**.
+- Strict Clippy for the library, tests, gallery and Checkbox benchmark: passed.
+- `cargo fmt --check`, native gallery build and whitespace checks: passed.
+- `scripts/test-checkbox-accessibility.ps1 -SkipBuild`: passed against the native
+  Windows gallery, including names/roles, TogglePattern, checked/mixed state,
+  disabled focus and invocation guards, Tab/Space/Enter, controlled updates,
+  check-all group semantics, theme/density/RTL changes and normal window teardown.
+
+The independent browser fixture contains **576 states** executed from the pinned
+Ant Design 6.6.7 styles using Edge 156.0.4314.42. Comparisons cover four themes,
+LTR/RTL, all checked/mixed/disabled combinations, hover/focus, empty and wrapped
+labels, colors, spacing, outlines and the exact transformed tick polygon. It also
+preserves the source's combined checked/mixed hover cascade. Regeneration and
+source/package hashes are documented in `fixtures/checkbox/README.md`.
+
+Native light, dark/compact/RTL and 640x720 captures were visually inspected.
+Screenshots are in `build/ant-design-gpui/checkbox-light.png`,
+`checkbox-dark-compact-rtl.png` and `checkbox-narrow.png`.
+
+Release CPU measurements ran through `scripts/run-checkbox-perf.ps1` under the
+verified `windows-msvc-performance` preset. Cached style resolution measured
+49.2ns; builders measured 46.0ns. Warm draws of 100 controls measured 1.78ms for
+checked controls, 1.83ms for mixed controls and 1.88ms for a group. All **12,000**
+draw iterations asserted zero scheduled idle frames. These are diagnostic CPU
+means, not GPU presentation latency or hardware-independent thresholds. The raw
+sample is `build/ant-design-gpui/checkbox-performance-final.txt`.
+
+No complete library or repository test suite was run. Native macOS/Linux rendering
+and accessibility still require validation on their respective platforms.
