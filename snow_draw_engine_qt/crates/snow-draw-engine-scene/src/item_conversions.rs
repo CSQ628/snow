@@ -167,6 +167,12 @@ pub(crate) fn scene_item_from_arrow(id: ElementId, arrow: ArrowData) -> SceneDis
     ));
     let arrowhead_primitives = arrowhead_display_primitives(&arrow, shaft.as_ref());
     SceneDisplayItem::Arrow(ArrowDisplayItem {
+        arrow_outline_color: arrow.arrow_outline_color,
+        arrow_outline_width: if arrow.is_regular_arrow() {
+            arrow.arrow_outline_width
+        } else {
+            0.0
+        },
         brush_mode: Default::default(),
         pressure_geometry: None,
         bound_text_id: None,
@@ -237,6 +243,8 @@ pub(crate) fn scene_item_from_free_draw(
         .pressure_geometry(geometry.revision, &geometry)
         .map(Arc::new);
     SceneDisplayItem::Arrow(ArrowDisplayItem {
+        arrow_outline_color: snow_draw_engine_core::arrow::default_arrow_outline_color(),
+        arrow_outline_width: 0.0,
         stroke_rendering_style: Default::default(),
         stroke_rendering_seed: 0,
         brush_mode: free_draw.brush_mode,
@@ -274,6 +282,8 @@ pub(crate) fn scene_item_from_free_draw_preview(
     preview: &FreeDrawPreview,
 ) -> SceneDisplayItem {
     SceneDisplayItem::Arrow(ArrowDisplayItem {
+        arrow_outline_color: snow_draw_engine_core::arrow::default_arrow_outline_color(),
+        arrow_outline_width: 0.0,
         stroke_rendering_style: Default::default(),
         stroke_rendering_seed: 0,
         brush_mode: preview.brush_mode,
@@ -780,6 +790,8 @@ pub(crate) fn focus_connection_item(
     zoom: f64,
 ) -> UiFocusConnectionDisplayItem {
     UiFocusConnectionDisplayItem {
+        arrow_outline_color: snow_draw_engine_core::arrow::default_arrow_outline_color(),
+        arrow_outline_width: 0.0,
         points: vec![[anchor.x, anchor.y], [focus_point.x, focus_point.y]],
         path_commands: vec![
             ArrowPathCommand::MoveTo {
@@ -804,6 +816,8 @@ pub(crate) fn focus_connection_item(
 pub(crate) fn hover_arrow_item(arrow: &ArrowData, zoom: f64) -> UiFocusConnectionDisplayItem {
     let shaft = snow_draw_engine_document::tapered_arrow_geometry(arrow);
     UiFocusConnectionDisplayItem {
+        arrow_outline_color: snow_draw_engine_core::arrow::default_arrow_outline_color(),
+        arrow_outline_width: 0.0,
         points: arrow
             .global_points()
             .iter()
@@ -833,6 +847,8 @@ pub(crate) fn hover_free_draw_item(
     zoom: f64,
 ) -> UiFocusConnectionDisplayItem {
     UiFocusConnectionDisplayItem {
+        arrow_outline_color: snow_draw_engine_core::arrow::default_arrow_outline_color(),
+        arrow_outline_width: 0.0,
         points: free_draw
             .global_vertices()
             .iter()
@@ -869,6 +885,8 @@ pub(crate) fn hover_pen_filter_item(filter: &PenFilterData) -> UiFocusConnection
         })
         .collect();
     UiFocusConnectionDisplayItem {
+        arrow_outline_color: snow_draw_engine_core::arrow::default_arrow_outline_color(),
+        arrow_outline_width: 0.0,
         points: points.iter().map(|point| [point.x, point.y]).collect(),
         path_commands,
         arrow_type: ArrowType::Straight,
@@ -1709,6 +1727,8 @@ pub(crate) fn scene_item_from_speech_bubble(
         .flat_map(|chunk| chunk.commands.iter().copied())
         .collect();
     let path = ArrowDisplayItem {
+        arrow_outline_color: snow_draw_engine_core::arrow::default_arrow_outline_color(),
+        arrow_outline_width: 0.0,
         stroke_rendering_style: body.stroke_rendering_style,
         stroke_rendering_seed: body.stroke_rendering_seed,
         brush_mode: Default::default(),

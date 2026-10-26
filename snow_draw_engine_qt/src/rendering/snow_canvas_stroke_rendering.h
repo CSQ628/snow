@@ -22,6 +22,7 @@ struct Cache {
     QPainterPath originalFill;
     QPainterPath backgroundHeads;
     QPainterPath ink;
+    QPainterPath arrowOutline;
     QRectF paintBounds;
 };
 

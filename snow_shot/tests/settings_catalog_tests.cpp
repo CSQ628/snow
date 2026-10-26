@@ -1189,12 +1189,16 @@ void builtInCatalogIsCompleteAndValid() {
         std::get<settings::SettingsSelectDefinition>(traySection.items.at(6).payload);
     require(leftTray.binding == settings::SettingsSelectBinding::TrayLeftClickAction &&
                 middleTray.binding == settings::SettingsSelectBinding::TrayMiddleClickAction &&
-                leftTray.options.size() == 5 && middleTray.options.size() == 5,
-            "tray selectors must expose independent bindings and five options");
-    const QStringList trayActionValues{
-        QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
-        QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
-        QStringLiteral("open_function_settings")};
+                leftTray.options.size() == 6 && middleTray.options.size() == 6,
+            "tray selectors must expose independent bindings and six options");
+    const QStringList trayActionValues{QStringLiteral("none"),
+                                       QStringLiteral("screenshot"),
+                                       QStringLiteral("show_main_window"),
+                                       QStringLiteral("screenshot_copy"),
+                                       QStringLiteral("screenshot_fixed"),
+                                       QStringLiteral("open_function_settings")};
+    require(leftTray.options.constFirst().label.translated() == QStringLiteral("None"),
+            "tray selectors must offer None as the first option");
     for (int index = 0; index < trayActionValues.size(); ++index) {
         require(leftTray.options.at(index).value == trayActionValues.at(index) &&
                     middleTray.options.at(index).value == trayActionValues.at(index) &&

@@ -773,6 +773,10 @@ impl From<SnowShapeStyle> for ShapeStyle {
             arrow_type: snow_arrow_type_to_rust(value.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_to_rust(value.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(value.arrow_ratio),
+            arrow_outline_color: value.arrow_outline_color.into(),
+            arrow_outline_width: snow_draw_engine_core::arrow::normalize_arrow_outline_width(
+                value.arrow_outline_width,
+            ),
             opacity: value.opacity,
             highlight_shape: match value.highlight_shape {
                 SnowHighlightShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
@@ -877,6 +881,10 @@ impl From<SnowArrowStyle> for snow_draw_engine::ArrowStyle {
             arrow_type: snow_arrow_type_to_rust(value.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_to_rust(value.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(value.arrow_ratio),
+            arrow_outline_color: value.arrow_outline_color.into(),
+            arrow_outline_width: snow_draw_engine_core::arrow::normalize_arrow_outline_width(
+                value.arrow_outline_width,
+            ),
         }
     }
 }
@@ -895,6 +903,10 @@ impl From<snow_draw_engine::ArrowStyle> for SnowArrowStyle {
             arrow_type: snow_arrow_type_from_rust(value.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_from_rust(value.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(value.arrow_ratio),
+            arrow_outline_color: value.arrow_outline_color.into(),
+            arrow_outline_width: snow_draw_engine_core::arrow::normalize_arrow_outline_width(
+                value.arrow_outline_width,
+            ),
             reserved0: [0; 4],
         }
     }
@@ -1068,6 +1080,10 @@ impl From<ShapeStyle> for SnowShapeStyle {
             arrow_type: snow_arrow_type_from_rust(value.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_from_rust(value.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(value.arrow_ratio),
+            arrow_outline_color: value.arrow_outline_color.into(),
+            arrow_outline_width: snow_draw_engine_core::arrow::normalize_arrow_outline_width(
+                value.arrow_outline_width,
+            ),
             opacity: value.opacity,
             highlight_shape: match value.highlight_shape {
                 snow_draw_engine::HighlightShape::Rectangle => SnowHighlightShape::Rectangle,
@@ -1391,6 +1407,10 @@ impl From<StyleDefaults> for SnowStyleDefaults {
             arrow_type: snow_arrow_type_from_rust(arrow.arrow_type),
             arrow_shaft_type: snow_arrow_shaft_type_from_rust(arrow.arrow_shaft_type),
             arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(arrow.arrow_ratio),
+            arrow_outline_color: arrow.arrow_outline_color.into(),
+            arrow_outline_width: snow_draw_engine_core::arrow::normalize_arrow_outline_width(
+                arrow.arrow_outline_width,
+            ),
             ..SnowShapeStyle::default()
         };
         Self {
@@ -2222,6 +2242,30 @@ mod tests {
 mod stroke_rendering_tests {
     use super::*;
     use snow_draw_engine_core::arrow::StrokeRenderingStyle;
+
+    #[test]
+    fn arrow_outline_style_round_trips_through_abi() {
+        let source = SnowShapeStyle {
+            arrow_outline_color: SnowColorRgba8 {
+                r: 12,
+                g: 120,
+                b: 240,
+                a: 128,
+            },
+            arrow_outline_width: 8.0,
+            ..Default::default()
+        };
+        let native: ShapeStyle = source.into();
+        assert_eq!(SnowShapeStyle::from(native), source);
+        let arrow = native.arrow_style();
+        let ffi = SnowArrowStyle::from(arrow);
+        assert_eq!(snow_draw_engine::ArrowStyle::from(ffi), arrow);
+        let invalid = SnowShapeStyle {
+            arrow_outline_width: 80.0,
+            ..source
+        };
+        assert_eq!(ShapeStyle::from(invalid).arrow_outline_width, 72.0);
+    }
 
     #[test]
     fn stroke_rendering_style_and_display_round_trip_through_abi() {

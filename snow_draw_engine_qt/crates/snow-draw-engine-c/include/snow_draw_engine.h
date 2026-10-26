@@ -545,6 +545,8 @@ typedef struct SnowShapeStyle {
     SnowHighlightShape highlight_shape;
     SnowRectangleShape shape;
     SnowBrushMode brush_mode;
+    SnowColorRgba8 arrow_outline_color;
+    double arrow_outline_width;
 } SnowShapeStyle;
 
 typedef enum SnowShapeKind {
@@ -567,6 +569,10 @@ typedef enum SnowShapeKind {
 #define SNOW_SHAPE_STYLE_PROPERTY_START_ARROWHEAD (1u << 5)
 #define SNOW_SHAPE_STYLE_PROPERTY_END_ARROWHEAD (1u << 6)
 #define SNOW_SHAPE_STYLE_PROPERTY_STROKE_STYLE (1u << 7)
+#define SNOW_SHAPE_STYLE_PROPERTY_ARROW_OUTLINE_COLOR (1u << 16)
+#define SNOW_SHAPE_STYLE_PROPERTY_ARROW_OUTLINE_WIDTH (1u << 17)
+#define SNOW_SHAPE_STYLE_MIXED_ARROW_OUTLINE_COLOR SNOW_SHAPE_STYLE_PROPERTY_ARROW_OUTLINE_COLOR
+#define SNOW_SHAPE_STYLE_MIXED_ARROW_OUTLINE_WIDTH SNOW_SHAPE_STYLE_PROPERTY_ARROW_OUTLINE_WIDTH
 #define SNOW_SHAPE_STYLE_PROPERTY_ARROW_RATIO (1u << 13)
 #define SNOW_SHAPE_STYLE_PROPERTY_ARROW_SHAFT_TYPE (1u << 12)
 #define SNOW_SHAPE_STYLE_PROPERTY_ARROW_TYPE (1u << 8)
@@ -610,6 +616,8 @@ typedef struct SnowArrowStyle {
     SnowArrowShaftType arrow_shaft_type;
     double arrow_ratio;
     uint8_t reserved0[4];
+    SnowColorRgba8 arrow_outline_color;
+    double arrow_outline_width;
 } SnowArrowStyle;
 
 typedef struct SnowTextStyle {
@@ -1435,6 +1443,8 @@ typedef struct SnowSceneDisplayItem {
     const char* font_family_utf8;
     SnowMagnifierGeometry magnifier;
     double text_ink_reserve;
+    SnowColorRgba8 arrow_outline_color;
+    double arrow_outline_width;
 } SnowSceneDisplayItem;
 
 /* Conservative ink (fill padding plus text stroke halo) for dirty regions. */
@@ -1510,6 +1520,8 @@ typedef struct SnowOverlayDisplayItem {
     double snap_marker_size;
     double snap_gap_dash_length;
     double snap_gap_dash_gap;
+    SnowColorRgba8 arrow_outline_color;
+    double arrow_outline_width;
 } SnowOverlayDisplayItem;
 
 SnowError snow_runtime_create(SnowRuntime* out_runtime);
@@ -1774,6 +1786,10 @@ snow_viewport_commit_text_draft_payload_ex(SnowRuntime runtime, SnowViewport vie
 SnowError snow_viewport_select_element_ex(SnowRuntime runtime, SnowViewport viewport,
                                           SnowElementId id,
                                           SnowChangedViewportList* out_changed_viewports);
+
+/* Clears selection without changing the active tool or document history. */
+SnowError snow_viewport_clear_selection_ex(SnowRuntime runtime, SnowViewport viewport,
+                                           SnowChangedViewportList* out_changed_viewports);
 
 SnowError snow_viewport_reset_editing_state_ex(SnowRuntime runtime, SnowViewport viewport,
                                                SnowChangedViewportList* out_changed_viewports);

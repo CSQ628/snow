@@ -833,6 +833,10 @@ impl EditorSession {
         self.editor.selected_ids()
     }
 
+    pub fn clear_selection(&mut self) {
+        self.editor.clear_selection();
+    }
+
     pub fn select_element(
         &mut self,
         document: &DocumentModel,

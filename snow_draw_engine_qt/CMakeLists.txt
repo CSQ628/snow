@@ -274,6 +274,14 @@ endif()
 
 if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     enable_testing()
+    add_executable(snow-canvas-abi-layout-tests tests/snow_canvas_abi_layout_tests.cpp)
+    target_include_directories(snow-canvas-abi-layout-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    set_target_properties(snow-canvas-abi-layout-tests PROPERTIES
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    add_test(NAME snow-canvas-abi-layout-tests COMMAND snow-canvas-abi-layout-tests)
+    set_tests_properties(snow-canvas-abi-layout-tests PROPERTIES LABELS "unit" TIMEOUT 30)
+
     add_executable(snow-canvas-snapping-tests tests/snow_canvas_snapping_tests.cpp)
     target_include_directories(snow-canvas-snapping-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
@@ -445,6 +453,9 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     snow_shot_import_offscreen_platform(snow-canvas-automatic-selection-tests)
     add_test(NAME snow-canvas-automatic-selection-tests COMMAND snow-canvas-automatic-selection-tests -platform offscreen)
     set_tests_properties(snow-canvas-automatic-selection-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-canvas-text-dismiss-tests
+        COMMAND snow-canvas-automatic-selection-tests --text-dismiss-only -platform offscreen)
+    set_tests_properties(snow-canvas-text-dismiss-tests PROPERTIES LABELS "unit" TIMEOUT 60)
 
     add_executable(snow-canvas-quick-selection-tests tests/snow_canvas_quick_selection_tests.cpp)
     target_link_libraries(snow-canvas-quick-selection-tests PRIVATE snow_draw_engine_qt_canvas)
@@ -532,6 +543,10 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     target_link_libraries(snow-canvas-arrow-text-tests PRIVATE snow_draw_engine_qt_canvas)
     qt_import_plugins(snow-canvas-arrow-text-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
     add_test(NAME snow-canvas-arrow-text-tests COMMAND snow-canvas-arrow-text-tests)
+    add_test(NAME snow-canvas-arrow-outline-rendering-tests COMMAND snow-canvas-stroke-rendering-tests --arrow-outline-only -platform offscreen)
+    set_tests_properties(snow-canvas-arrow-outline-rendering-tests PROPERTIES LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
+    add_test(NAME snow-canvas-arrow-outline-tests COMMAND snow-canvas-arrow-text-tests --arrow-outline-only -platform offscreen)
+    set_tests_properties(snow-canvas-arrow-outline-tests PROPERTIES LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     add_test(NAME snow-canvas-text-delete-tests
         COMMAND snow-canvas-arrow-text-tests --delete-text-only -platform offscreen)
     set_tests_properties(snow-canvas-text-delete-tests PROPERTIES LABELS unit TIMEOUT 60)

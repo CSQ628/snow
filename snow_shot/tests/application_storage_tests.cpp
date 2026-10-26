@@ -1036,11 +1036,11 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
          {QStringLiteral("ultrafast"), QStringLiteral("veryfast"), QStringLiteral("medium"),
           QStringLiteral("veryslow"), QStringLiteral("placebo")}},
         {QStringLiteral("tray/left_click_action"),
-         {QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
+         {QStringLiteral("none"), QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
           QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
           QStringLiteral("open_function_settings")}},
         {QStringLiteral("tray/middle_click_action"),
-         {QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
+         {QStringLiteral("none"), QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
           QStringLiteral("screenshot_copy"), QStringLiteral("screenshot_fixed"),
           QStringLiteral("open_function_settings")}},
     };
@@ -3752,6 +3752,22 @@ void trayClickSettingsSurviveRestart() {
                                                   QStringLiteral("tray.restart-app"),
                                                   QStringLiteral("tray.exit")},
             "tray click choices and Restart App must survive storage restart");
+    require(tray.setLeftClickAction(QStringLiteral("none")) &&
+                tray.middleClickAction() == QStringLiteral("open_function_settings") &&
+                applicationStorage.flushNow().success,
+            "disabling the left tray click must preserve the middle-click choice");
+    static_cast<void>(initialize(executable, temporary.path()));
+    require(tray.leftClickAction() == QStringLiteral("none") &&
+                tray.middleClickAction() == QStringLiteral("open_function_settings"),
+            "None must survive storage restart independently for the left tray click");
+    require(tray.setMiddleClickAction(QStringLiteral("none")) &&
+                tray.leftClickAction() == QStringLiteral("none") &&
+                applicationStorage.flushNow().success,
+            "both tray click actions can be disabled");
+    static_cast<void>(initialize(executable, temporary.path()));
+    require(tray.leftClickAction() == QStringLiteral("none") &&
+                tray.middleClickAction() == QStringLiteral("none"),
+            "None must survive storage restart for both tray click actions");
     applicationStorage.shutdown();
 }
 

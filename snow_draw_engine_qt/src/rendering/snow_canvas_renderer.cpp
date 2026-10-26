@@ -690,6 +690,24 @@ void drawArrowDisplayItem(QPainter& painter, const ArrowRenderProjection& projec
 }
 
 template <typename Item>
+void drawArrowOutline(QPainter& painter,
+                      const snow_canvas_render_geometry::ViewProjection& projection,
+                      const Item& item) {
+    if (item.arrow_outline_color.a == 0 || item.arrow_outline_width <= 0.0 ||
+        item.stroke_width <= 0.0)
+        return;
+    const auto& geometry = snow_canvas_stroke_rendering::geometry(item);
+    painter.save();
+    painter.translate(canvasToView(projection, item.center_x, item.center_y));
+    painter.rotate(item.rotation * kRadiansToDegrees);
+    painter.scale(projection.cameraZoom, projection.cameraZoom);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(toQColor(item.arrow_outline_color));
+    painter.drawPath(geometry.arrowOutline);
+    painter.restore();
+}
+
+template <typename Item>
 void drawStrokeRenderingInk(QPainter& painter, const snow_canvas_stroke_rendering::Cache& geometry,
                             const Item& item, const QColor& headBackground) {
     painter.setPen(Qt::NoPen);
@@ -995,8 +1013,9 @@ void drawArrowItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
     }
     painter.setOpacity(inheritedOpacity * qBound(0.0, item.opacity, 1.0));
     const ArrowRenderProjection projection = arrowProjectionForScene(displayInfo);
+    const bool hasOutline = item.arrow_outline_width > 0.0 && item.arrow_outline_color.a != 0;
     if (item.has_bound_text_element != 0 && item.arrow_text_overlay == 0 &&
-        (item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT ||
+        (hasOutline || item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT ||
          item.needsArrowTextClip(
              2.0 /
              (projection.view.cameraZoom *
@@ -1016,6 +1035,8 @@ void drawArrowItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
         clip.addRect(labelRect);
         painter.setClipPath(clip, Qt::IntersectClip);
     }
+    if (hasOutline && item.is_free_draw == 0)
+        drawArrowOutline(painter, projection.view, item);
     if (item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT &&
         item.is_free_draw == 0) {
         drawStrokeRenderingGeometry(painter, projection.view, item, projection.background);
@@ -1490,6 +1511,10 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
 
 void drawFocusConnectionItem(QPainter& painter, const OverlayDisplayInfo& displayInfo,
                              const SnowOverlayDisplayItem& item) {
+    if (item.arrow_outline_width > 0.0 && item.arrow_outline_color.a != 0) {
+        const SnowCanvasOverlayItem retained(item);
+        drawArrowOutline(painter, focusConnectionProjection(displayInfo).view, retained);
+    }
     if (item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT) {
         const SnowCanvasOverlayItem retained(item);
         const auto projection = focusConnectionProjection(displayInfo);
@@ -1511,6 +1536,7 @@ void drawFocusConnectionItem(QPainter& painter, const OverlayDisplayInfo& displa
                              const SnowCanvasOverlayItem& item) {
     if (item.stroke_rendering_style != SNOW_STROKE_RENDERING_STYLE_ARCHITECT) {
         const auto projection = focusConnectionProjection(displayInfo);
+        drawArrowOutline(painter, projection.view, item);
         drawStrokeRenderingGeometry(painter, projection.view, item, projection.background);
         return;
     }

@@ -3388,9 +3388,21 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event,
     restoredSelectionForNextTextToolPress = false;
     bool canDispatchAfterTextCommit = true;
     if (plan.shouldCommitTextEditor) {
+        const bool dismissSelection =
+            event->button() == Qt::LeftButton && !plan.shouldRestoreSelectionOnCommit &&
+            displayState.snapshot().styleToolbarState.selected_element_count != 0;
         const SnowCanvasWidgetTextInteraction::CommitResult commitResult =
             commitText(true, plan.shouldRestoreSelectionOnCommit);
         if (!lifetime) {
+            return false;
+        }
+        // Bound-label commits retain selection for keyboard and focus workflows.
+        // An outside click also dismisses the selection that existed before the
+        // commit, without overriding automatic selection of newly created text.
+        if (dismissSelection && !applyMutation([&]() {
+                return snow_canvas_commands::clearSelection(runtimeBinding.engine(),
+                                                            runtimeBinding.viewportHandle());
+            })) {
             return false;
         }
         if (plan.dispatchAfterCommitRequiresRestoredSelection) {
