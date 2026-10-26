@@ -2,6 +2,7 @@
 #include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
 #include "snow_shot/app/supportedpinfiles.h"
+#include "snow_shot/image/imageimportlimits.h"
 #include "snow_shot/presentation/screenshotdocumentformatting.h"
 #include "screenshotclipboardcontentsnapshot.h"
 #include "screenshotclipboarddibdecoder_p.h"
@@ -96,9 +97,10 @@ qint64 snapshotBytes(const ScreenshotClipboardContentSnapshot& snapshot) {
     return bytes;
 }
 
-bool admitImage(QSize size, qint64 retained, const AllocationCheck& allocate) {
+bool admitImage(QSize size, qint64 retained, const AllocationCheck& allocate,
+                qint64 maximumPixels = kMaximumClipboardImagePixels) {
     const auto pixels = static_cast<qint64>(size.width()) * size.height();
-    return size.isValid() && !size.isEmpty() && pixels <= kMaximumClipboardImagePixels &&
+    return size.isValid() && !size.isEmpty() && pixels <= maximumPixels &&
            (!allocate || allocate(retained + pixels * 8));
 }
 
@@ -231,13 +233,17 @@ snow::image::Format imageFileCodecFormat(snow_shot::image::ImageFileCodec codec)
     return snow::image::Format::unknown;
 }
 
-QImage normalizedImage(QImage image) {
+QImage normalizedImage(QImage image, bool imageImport = false) {
     if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
         return {};
     }
     const qint64 pixels = static_cast<qint64>(image.width()) * image.height();
-    if (pixels <= 0 || pixels > kMaximumClipboardImagePixels || image.sizeInBytes() <= 0 ||
-        image.sizeInBytes() > kMaximumClipboardImageBytes) {
+    const auto maximumPixels =
+        imageImport ? snow_shot::image::maximumImageImportPixels : kMaximumClipboardImagePixels;
+    const auto maximumBytes =
+        imageImport ? snow_shot::image::maximumImageImportBytes : kMaximumClipboardImageBytes;
+    if (pixels <= 0 || pixels > maximumPixels || image.sizeInBytes() <= 0 ||
+        image.sizeInBytes() > maximumBytes) {
         return {};
     }
     // The immutable clipboard snapshot already retains its QImage owner. Share
@@ -303,8 +309,8 @@ void preserveHtmlCanvasBackground(QTextDocument* document) {
     document->rootFrame()->setFrameFormat(rootFormat);
 }
 
-std::optional<ScreenshotClipboardContent> imageContent(QImage image) {
-    image = normalizedImage(std::move(image));
+std::optional<ScreenshotClipboardContent> imageContent(QImage image, bool imageImport = false) {
+    image = normalizedImage(std::move(image), imageImport);
     if (image.isNull()) {
         return std::nullopt;
     }
@@ -582,10 +588,12 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
     }
 
     const QFileInfo before(localImage.absolutePath);
+    const auto maximumEncodedBytes =
+        firstFrameOnly ? snow_shot::image::maximumImageImportBytes : kMaximumEncodedImageBytes;
     if (!before.exists() || !before.isFile() || !before.isReadable() ||
         before.size() != localImage.size ||
         before.lastModified().toUTC() != localImage.lastModifiedUtc || before.size() <= 0 ||
-        before.size() > (textFile ? 1024 * 1024 : kMaximumEncodedImageBytes)) {
+        before.size() > (textFile ? 1024 * 1024 : maximumEncodedBytes)) {
         return std::nullopt;
     }
     if (allocate && !allocate(retained + before.size() + 1))
@@ -631,7 +639,9 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
     const auto codecFormat = imageFileCodecFormat(format->codec);
     if ((allocate || firstFrameOnly) &&
         !admitImage(snow_shot::image_codec::inspectCanvasSize(encoded, codecFormat),
-                    retained + encoded.size(), allocate))
+                    retained + encoded.size(), allocate,
+                    firstFrameOnly ? snow_shot::image::maximumImageImportPixels
+                                   : kMaximumClipboardImagePixels))
         return std::nullopt;
     QString animationError;
     const AllocationCheck animationAdmission =
@@ -641,10 +651,11 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
         auto image = snow_shot::image_codec::decodeAnimationFirstFrame(
             encoded, &animationError, cancelled, animationAdmission);
         if (!image.isNull())
-            return imageContent(std::move(image));
+            return imageContent(std::move(image), true);
         if (!animationError.isEmpty() || cancellationRequested(cancelled))
             return std::nullopt;
-        auto result = imageContent(snow_shot::image_codec::decodeFirstFrame(encoded, codecFormat));
+        auto result =
+            imageContent(snow_shot::image_codec::decodeFirstFrame(encoded, codecFormat), true);
         return cancellationRequested(cancelled) ? std::nullopt : std::move(result);
     }
     auto animation = snow_shot::image_codec::decodeAnimationSource(encoded, &animationError,
@@ -1101,9 +1112,11 @@ QStringList ScreenshotClipboardContentReader::filePathsForImport(const QMimeData
     return localFilePaths(mimeData);
 }
 
-QList<ScreenshotClipboardLocalImage>
-ScreenshotClipboardContentReader::snapshotLocalFiles(const QStringList& paths,
-                                                     CancellationCheck cancelled) {
+QList<ScreenshotClipboardLocalImage> ScreenshotClipboardContentReader::snapshotLocalFiles(
+    const QStringList& paths, CancellationCheck cancelled, FilePurpose purpose) {
+    const auto maximumEncodedBytes = purpose == FilePurpose::ImageImport
+                                         ? snow_shot::image::maximumImageImportBytes
+                                         : kMaximumEncodedImageBytes;
     QList<ScreenshotClipboardLocalImage> files;
     QSet<QString> seen;
     for (const QString& path : paths) {
@@ -1119,7 +1132,7 @@ ScreenshotClipboardContentReader::snapshotLocalFiles(const QStringList& paths,
                             return suffix == QLatin1String(format.suffix);
                         });
         if (!supported || !info.isFile() || !info.isReadable() || info.size() <= 0 ||
-            info.size() > (isTextFile(suffix) ? 1024 * 1024 : kMaximumEncodedImageBytes)) {
+            info.size() > (isTextFile(suffix) ? 1024 * 1024 : maximumEncodedBytes)) {
             continue;
         }
         const QString absolute = info.absoluteFilePath();
