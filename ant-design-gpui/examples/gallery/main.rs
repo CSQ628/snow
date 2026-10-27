@@ -6,12 +6,14 @@
 mod button;
 mod catalog;
 mod checkbox;
+mod context_menu;
 mod divider;
 mod input;
 mod input_examples;
 mod input_number;
 mod popup;
 mod radio;
+mod scroll_area;
 mod segmented;
 mod select;
 mod shell;
@@ -61,9 +63,11 @@ impl Options {
                             Some("tooltip") => catalog::ComponentId::Tooltip,
                             Some("popover") => catalog::ComponentId::Popover,
                             Some("popconfirm") => catalog::ComponentId::Popconfirm,
+                            Some("context-menu") => catalog::ComponentId::ContextMenu,
+                            Some("scroll-area") => catalog::ComponentId::ScrollArea,
 
                             _ => return Err(
-                                "--component requires button, divider, checkbox, input, input-number, radio, select, slider, segmented, switch, tag, tooltip, popover, or popconfirm"
+                                "--component requires button, divider, checkbox, input, input-number, radio, select, slider, segmented, switch, tag, tooltip, popover, popconfirm, context-menu, or scroll-area"
                                     .into(),
                             ),
                         };
@@ -106,7 +110,7 @@ impl Options {
 
 fn main() {
     let options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
-        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox|input|input-number|radio|select|slider|segmented|switch|tag|tooltip|popover|popconfirm] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
+        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox|input|input-number|radio|select|slider|segmented|switch|tag|tooltip|popover|popconfirm|context-menu|scroll-area] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
         std::process::exit(2);
     });
     gpui_platform::application().run(move |cx: &mut App| {

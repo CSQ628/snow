@@ -20,6 +20,8 @@ pub(super) enum ComponentId {
     Tooltip,
     Popover,
     Popconfirm,
+    ContextMenu,
+    ScrollArea,
 }
 
 pub(super) struct Component {
@@ -44,6 +46,20 @@ pub(super) const COMPONENTS: &[Component] = &[
         group: "Layout",
         title: "Divider",
         description: "A divider line separates different content.",
+    },
+    Component {
+        id: ComponentId::ScrollArea,
+        navigation_id: "gallery.navigation.scroll-area",
+        group: "Layout",
+        title: "Scroll Area",
+        description: "Native scrolling with precise, themed overlay scrollbars.",
+    },
+    Component {
+        id: ComponentId::ContextMenu,
+        navigation_id: "gallery.navigation.context-menu",
+        group: "Navigation",
+        title: "Context Menu",
+        description: "Actions for the content under your pointer or keyboard focus.",
     },
     Component {
         id: ComponentId::Checkbox,

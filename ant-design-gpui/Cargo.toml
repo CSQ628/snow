@@ -67,6 +67,10 @@ harness = false
 name = "select_slider"
 harness = false
 
+[[bench]]
+name = "context_scroll"
+harness = false
+
 [profile.dev]
 incremental = false
 

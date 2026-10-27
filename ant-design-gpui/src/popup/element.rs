@@ -133,6 +133,11 @@ impl Element for PopupElement {
                     })
                     .child(content);
                 body.style().refine(&options.surface_style);
+                if let Some(margin) = options.viewport_margin {
+                    body = body
+                        .max_w((window.viewport_size().width - 2. * margin).max(px(0.)))
+                        .max_h((window.viewport_size().height - 2. * margin).max(px(0.)));
+                }
                 body = match options.width {
                     super::PopupWidth::Content => body,
                     super::PopupWidth::Trigger => body.w(bounds.size.width),
@@ -345,7 +350,7 @@ impl Element for PopupSurface {
         let anchor = state.context_position.map_or(state.anchor, |position| {
             Bounds::new(position, size(px(0.), px(0.)))
         });
-        let layout = PopupGeometry {
+        let mut layout = PopupGeometry {
             anchor,
             popup_size: bounds.size,
             viewport: Bounds::new(Point::default(), window.viewport_size()),
@@ -362,6 +367,23 @@ impl Element for PopupSurface {
             auto_adjust_overflow: options.auto_adjust_overflow,
         }
         .resolve();
+        if let Some(margin) = options.viewport_margin {
+            let contain = |origin: Pixels, extent: Pixels, viewport: Pixels| {
+                let spare = (viewport - extent).max(px(0.));
+                let inset = margin.min(spare / 2.);
+                origin.clamp(inset, spare - inset)
+            };
+            layout.bounds.origin.x = contain(
+                layout.bounds.origin.x,
+                layout.bounds.size.width,
+                window.viewport_size().width,
+            );
+            layout.bounds.origin.y = contain(
+                layout.bounds.origin.y,
+                layout.bounds.size.height,
+                window.viewport_size().height,
+            );
+        }
         let host = state.host.clone();
         let id = state.id;
         if let Some(entry) = host.borrow_mut().entries.get_mut(&id) {

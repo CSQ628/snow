@@ -30,6 +30,7 @@ struct Binding {
 #[derive(Default)]
 pub(super) struct Metadata {
     pub tooltip: bool,
+    pub menu: bool,
     pub enabled: bool,
     pub expanded: bool,
     pub clickable: bool,
@@ -200,7 +201,11 @@ impl PopupTrigger {
                     node.set_description(description);
                 }
             } else {
-                node.set_has_popup(accesskit::HasPopup::Dialog);
+                node.set_has_popup(if metadata.menu {
+                    accesskit::HasPopup::Menu
+                } else {
+                    accesskit::HasPopup::Dialog
+                });
                 node.set_expanded(metadata.expanded);
                 if metadata.can_activate() {
                     node.add_action(if metadata.expanded {

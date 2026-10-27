@@ -7,6 +7,7 @@ pub mod behavior;
 pub mod button;
 pub mod checkbox;
 pub mod config;
+pub mod context_menu;
 pub mod divider;
 pub mod icons;
 pub mod input;
@@ -21,6 +22,7 @@ pub mod popover;
 pub mod popup;
 pub mod radio;
 pub mod root;
+pub mod scroll_area;
 pub mod segmented;
 pub mod select;
 pub use select::{
@@ -40,6 +42,10 @@ pub use checkbox::{Checkbox, CheckboxChange, CheckboxGroup, CheckboxOption};
 pub use config::{
     ConfigPatch, ConfigScope, Direction, ResolvedConfig, Size, ValidationStatus, Variant,
 };
+pub use context_menu::{
+    ContextMenu, ContextMenuState, MenuActivation, MenuActivationSource, MenuCheck, MenuEntry,
+    MenuEvent, MenuItem, MenuItems, MenuItemsError,
+};
 pub use divider::Divider;
 pub use input::{
     CountConfig, CountInfo, Input, InputChange, InputCommit, InputEvent, InputGroup,
@@ -51,6 +57,9 @@ pub use popover::Popover;
 pub use popup::{Popup, PopupHandle, PopupHost};
 pub use radio::{Radio, RadioChange, RadioGroup, RadioOption};
 pub use root::UiRoot;
+pub use scroll_area::{
+    ScrollArea, ScrollAreaEvent, ScrollAreaState, ScrollAxis, ScrollbarVisibility,
+};
 pub use segmented::{Segmented, SegmentedOption};
 pub use slider::{Slider, SliderChange, SliderEvent, SliderOptions, SliderState, SliderValue};
 pub use switch::{Switch, SwitchChange};

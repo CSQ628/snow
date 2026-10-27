@@ -866,3 +866,62 @@ were not performed.
 cargo test --locked --offline --lib -- wave transition loading loader radio_dot checkbox_tick thumb motion animat color_interpolation checkbox_disabled_label radio_disabled_label radio_button_border button_transparent_color
 cargo clippy --locked --offline --lib --tests -- -D warnings
 ```
+
+## Context Menu and Scroll Area — 2026-10-27
+
+Both controls use retained GPUI controllers, native input dispatch and scoped
+component themes. The Qt siblings supplied behavioral references. Context menus
+share the popup host, use native variable-height virtualization for long menus,
+and retain measured text widths. Scroll areas use one native ScrollHandle for
+content, overlay thumbs, keyboard input, anchors and application updates.
+See [the integration guide](docs/context-menu-scroll-area.md) for APIs and limits.
+
+Only affected tests were executed:
+
+- **120 library tests passed**: 21 context-menu, 22 scroll-area, 72 shared-popup
+  and five locale tests.
+- **Four gallery tests passed**: both pages, responsive cards, navigation anchors,
+  appearance changes, nested scrolling, menu activation and keyboard dismissal.
+- Strict Clippy passed for the library/tests, gallery, native capture example and
+  focused benchmark. Targeted rustfmt and `git diff --check` passed.
+
+Regression coverage includes actual painted highlights and virtualized Home/End
+jumps, lazy branch freshness/cancellation, stale painted item callbacks, same-cycle
+imperative commands, callback-selected focus, Tab dismissal, controller replacement,
+offscreen submenu anchor retirement, viewport containment, native control identity,
+generic context-region semantics, automation IDs and localized names. Scroll tests
+exercise real line/pixel wheel dispatch, Shift and nested boundary routing, repeated
+input before redraw, width fitting, thumb capture, paging, RTL, tiny tracks,
+programmatic position changes and animation/unmount lifetime guards.
+
+The native GPU capture tool generated **32 Windows frames at 150% DPI**, covering
+light/dark/compact/dark-compact, both directions, root/submenu/edge placements and
+1,000-item End navigation. Representative frames were visually inspected,
+including the fully visible final row after viewport containment. Images are in
+`../build/ant-design-gpui/context-scroll-native/`; the reproducible tool is
+`examples/context_scroll_visual.rs`.
+
+Final Release CPU/layout measurements used the configured
+`windows-msvc-performance` tree with benchmarks enabled:
+
+| Operation | Mean | p95 |
+| --- | ---: | ---: |
+| 1,000-item menu, retained scene | 0.076 ms | 0.085 ms |
+| 1,000-item menu, redraw | 0.433 ms | 0.462 ms |
+| 1,000-item menu, navigation | 0.531 ms | 0.602 ms |
+| 1,000-item menu, close/reopen | 0.598 ms | 0.760 ms |
+| 1,000-row native scroll baseline | 5.976 ms | 8.409 ms |
+| 1,000-row themed scroll area | 6.359 ms | 9.468 ms |
+
+Menu results use warmed caches; first layout still shapes label widths. Tall-content
+results deliberately measure unvirtualized content. Native and themed scroll runs
+each rerendered their translated content 205 times, including warmup. Retained
+parent-scene assertions passed, and settled scenes scheduled **zero frames**.
+These are host-specific CPU measurements, not GPU presentation or input latency.
+The complete report is under
+`../build/windows-msvc-performance/ant-design-gpui/context-scroll-results.txt`.
+
+No full crate or repository suite was run. No dependencies were added. The test
+platform cannot initialize a live accessibility tree; semantic nodes are probed
+directly, and painted behavior is tested separately. Live Windows UI Automation,
+screen-reader sessions, macOS and Linux still require native verification.

@@ -143,6 +143,53 @@ pub(super) struct Fixture {
 }
 
 #[test]
+fn popup_open_at_rejects_nonfinite_positions_and_realigns_the_same_session() {
+    let mut f = Fixture::new(|consumer| consumer.triggers = PopupTriggers::CONTEXT_MENU);
+    let handle = f.handle();
+    for position in [
+        point(px(f32::NAN), px(20.)),
+        point(px(20.), px(f32::INFINITY)),
+    ] {
+        f.cx.update_window(f.window.into(), |_, window, cx| {
+            handle.open_at(position, window, cx)
+        })
+        .unwrap();
+        f.draw();
+        assert!(!f.open());
+    }
+    f.cx.update_window(f.window.into(), |_, window, cx| {
+        handle.open_at(point(px(240.), px(220.)), window, cx)
+    })
+    .unwrap();
+    f.draw();
+    assert!(f.open());
+    let (first, session) =
+        f.cx.update(|cx| (handle.layout(cx).unwrap(), handle.session_id(cx)));
+    f.cx.update_window(f.window.into(), |_, window, cx| {
+        handle.open_at(point(px(320.), px(300.)), window, cx)
+    })
+    .unwrap();
+    f.draw();
+    let (second, new_session) =
+        f.cx.update(|cx| (handle.layout(cx).unwrap(), handle.session_id(cx)));
+    assert_ne!(first.bounds.origin, second.bounds.origin);
+    assert_eq!(session, new_session);
+    assert_eq!(
+        f.changes().len(),
+        1,
+        "repositioning does not emit another opening"
+    );
+    f.cx.update_window(f.window.into(), |_, window, cx| {
+        handle.open_at(point(px(f32::NEG_INFINITY), px(20.)), window, cx)
+    })
+    .unwrap();
+    f.draw();
+    assert_eq!(f.cx.update(|cx| handle.layout(cx).unwrap()), second);
+    f.set_open(false);
+    assert!(!f.open());
+}
+
+#[test]
 fn trigger_width_policy_resolves_and_resizes_in_the_same_layout_pass() {
     let mut f = Fixture::new(|c| {
         c.width = PopupWidth::Trigger;

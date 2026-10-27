@@ -29,6 +29,7 @@ struct Fixture {
     _window: WindowHandle<UiRoot>,
 }
 
+mod context_scroll;
 mod input;
 mod select_slider;
 
@@ -376,8 +377,12 @@ fn catalogue_keeps_reference_order_and_pending_cards_explain_their_status_withou
     assert_eq!(COMPONENTS[0].group, "General");
     assert_eq!(COMPONENTS[1].id, ComponentId::Divider);
     assert_eq!(COMPONENTS[1].group, "Layout");
-    assert_eq!(COMPONENTS[2].id, ComponentId::Checkbox);
-    assert_eq!(COMPONENTS[2].group, "Data Entry");
+    assert_eq!(COMPONENTS[2].id, ComponentId::ScrollArea);
+    assert_eq!(COMPONENTS[2].group, "Layout");
+    assert_eq!(COMPONENTS[3].id, ComponentId::ContextMenu);
+    assert_eq!(COMPONENTS[3].group, "Navigation");
+    assert_eq!(COMPONENTS[4].id, ComponentId::Checkbox);
+    assert_eq!(COMPONENTS[4].group, "Data Entry");
     assert_eq!(
         COMPONENTS
             .iter()

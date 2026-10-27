@@ -58,6 +58,9 @@ common_messages! {
     no_data => NoData,
     clear_selection => ClearSelection,
     remove_selection => RemoveSelection,
+    context_menu => ContextMenu,
+    horizontal_scroll_bar => HorizontalScrollBar,
+    vertical_scroll_bar => VerticalScrollBar,
 }
 
 /// Popconfirm-owned messages, independent of application-supplied titles.
@@ -143,6 +146,9 @@ impl Locale {
                     no_data: "No data".into(),
                     clear_selection: "Clear selection".into(),
                     remove_selection: "Remove {label}".into(),
+                    context_menu: "Context menu".into(),
+                    horizontal_scroll_bar: "Horizontal scroll bar".into(),
+                    vertical_scroll_bar: "Vertical scroll bar".into(),
                 },
             })
         });
@@ -174,6 +180,9 @@ impl Locale {
                     no_data: "暂无数据".into(),
                     clear_selection: "清空选择".into(),
                     remove_selection: "移除 {label}".into(),
+                    context_menu: "上下文菜单".into(),
+                    horizontal_scroll_bar: "水平滚动条".into(),
+                    vertical_scroll_bar: "垂直滚动条".into(),
                 },
             })
         });
@@ -205,6 +214,9 @@ impl Locale {
                     no_data: "暫無數據".into(),
                     clear_selection: "清空選擇".into(),
                     remove_selection: "移除 {label}".into(),
+                    context_menu: "快顯功能表".into(),
+                    horizontal_scroll_bar: "水平捲動軸".into(),
+                    vertical_scroll_bar: "垂直捲動軸".into(),
                 },
             })
         });
@@ -338,6 +350,20 @@ mod tests {
         assert_eq!(Locale::en_us().common.placeholder.as_ref(), "Please select");
         assert_eq!(Locale::zh_cn().common.close.as_ref(), "关闭");
         assert_eq!(Locale::zh_tw().common.close.as_ref(), "關閉");
+        assert_eq!(
+            Locale::en_us().text(MessageKey::ContextMenu).as_ref(),
+            "Context menu"
+        );
+        assert_eq!(
+            Locale::zh_cn().text(MessageKey::VerticalScrollBar).as_ref(),
+            "垂直滚动条"
+        );
+        assert_eq!(
+            Locale::zh_tw()
+                .text(MessageKey::HorizontalScrollBar)
+                .as_ref(),
+            "水平捲動軸"
+        );
     }
 
     #[test]

@@ -23,6 +23,8 @@ cargo run --locked --offline --example gallery
 # Open InputNumber directly: -- --component input-number
 # Open Select directly: -- --component select
 # Open Slider directly: -- --component slider
+# Open Context Menu directly: -- --component context-menu
+# Open Scroll Area directly: -- --component scroll-area
 ```
 
 The native gallery has a fixed component sidebar, direct example links and a
@@ -57,6 +59,13 @@ all three variants, cancelable closing, controlled checkable tags, single/multip
 groups, dynamic additions, entrance animation, native drag reordering, component
 tokens, disabled controls and semantic styling. Select Tag or use `--component tag`.
 The dynamic examples add sequential labels; text editing belongs to the host app.
+
+Context Menu and Scroll Area have retained GPUI controllers and dedicated gallery pages.
+Menus support nested and lazy branches, keyboard navigation, typeahead, checks, radio
+groups, icons, shortcut hints and badges. Scroll areas use one native `ScrollHandle`
+for wheel input, keyboard navigation, overlay thumb dragging and application updates.
+See the [Context Menu and Scroll Area guide](docs/context-menu-scroll-area.md) for
+integration, behavior and focused verification commands.
 
 Run only this example's offscreen regression tests with
 `cargo test --locked --offline --example gallery`.

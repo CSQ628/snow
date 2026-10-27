@@ -63,6 +63,31 @@ impl PopupHandle {
         self.set_open(false, window, cx);
     }
 
+    /// Open at a window-relative pointer position. Reopening an already visible
+    /// context popup realigns it immediately without creating another session.
+    pub fn open_at(&self, position: Point<Pixels>, window: &mut Window, cx: &mut App) {
+        self.open_at_with_reason(position, PopupOpenReason::ContextMenu, window, cx);
+    }
+
+    pub(crate) fn open_at_with_reason(
+        &self,
+        position: Point<Pixels>,
+        reason: PopupOpenReason,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if !f32::from(position.x).is_finite() || !f32::from(position.y).is_finite() {
+            return;
+        }
+        if let Some(state) = self.state() {
+            let _ = state.update(cx, |state, cx| {
+                state.context_position = Some(position);
+                cx.notify();
+            });
+            request_open(&state, true, reason, window, cx);
+        }
+    }
+
     pub fn force_align(&self, cx: &mut App) {
         if let Some(state) = self.state() {
             let _ = state.update(cx, |_, cx| cx.notify());
@@ -71,6 +96,18 @@ impl PopupHandle {
 
     pub fn layout(&self, cx: &App) -> Option<PopupLayout> {
         self.state()?.upgrade()?.read(cx).layout
+    }
+
+    /// Native control bindings own focus when present. Composite controls use
+    /// this to provide a fallback tab stop only for a noninteractive trigger.
+    pub(crate) fn trigger_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        self.state()?
+            .upgrade()?
+            .read(cx)
+            .trigger_metadata
+            .borrow()
+            .focus
+            .clone()
     }
 
     /// Changes whenever an opening ends. Async work may use this to distinguish
@@ -133,6 +170,8 @@ pub(super) struct Options {
     pub motion_curve: Option<CubicBezier>,
     pub motion_enabled: Option<bool>,
     pub on_popup_click: Option<SurfaceClickHandler>,
+    pub menu_trigger: bool,
+    pub viewport_margin: Option<Pixels>,
 }
 
 impl Default for Options {
@@ -169,6 +208,8 @@ impl Default for Options {
             motion_curve: None,
             motion_enabled: None,
             on_popup_click: None,
+            menu_trigger: false,
+            viewport_margin: None,
         }
     }
 }
@@ -217,6 +258,16 @@ impl Popup {
     }
     pub fn child(mut self, child: impl IntoElement) -> Self {
         self.child = child.into_any_element();
+        self
+    }
+    pub(crate) fn menu_trigger(mut self) -> Self {
+        self.options.menu_trigger = true;
+        self
+    }
+    /// Arrowless menu surfaces may shift on both axes after normal placement.
+    /// Ordinary popups retain their Ant Design alignment contract.
+    pub(crate) fn constrain_to_viewport(mut self, margin: Pixels) -> Self {
+        self.options.viewport_margin = Some(finite_nonnegative(margin));
         self
     }
     pub fn content<E: IntoElement>(
@@ -606,6 +657,7 @@ impl PopupState {
     fn sync_trigger_metadata(&self) {
         let mut metadata = self.trigger_metadata.borrow_mut();
         metadata.tooltip = self.options.role == Role::Tooltip;
+        metadata.menu = self.options.menu_trigger;
         metadata.enabled = !self.options.disabled;
         metadata.expanded = self.presented();
         metadata.clickable = self.options.triggers.contains(PopupTriggers::CLICK);
