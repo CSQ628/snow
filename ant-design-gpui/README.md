@@ -21,6 +21,8 @@ cargo run --locked --offline --example gallery
 # Open Tag directly: -- --component tag
 # Open Input directly: -- --component input
 # Open InputNumber directly: -- --component input-number
+# Open Select directly: -- --component select
+# Open Slider directly: -- --component slider
 ```
 
 The native gallery has a fixed component sidebar, direct example links and a
@@ -60,6 +62,11 @@ Run only this example's offscreen regression tests with
 `cargo test --locked --offline --example gallery`.
 
 ## Native example and integration
+
+Select and Slider have retained native controllers, typed values, virtualized
+options, native text/IME integration and range editing. Their gallery pages cover
+all 27 Select and 14 Slider public reference demos. See the
+[Select and Slider guide](docs/select-slider.md) for APIs and focused verification.
 
 ```powershell
 cd ant-design-gpui
@@ -199,8 +206,9 @@ cargo test --locked --offline --example gallery -- input_gallery input_number_ga
 Input has 18 reference cards (11 complete, six partial, one planned).
 InputNumber has 14 (11 complete, two partial, one planned). Partial cards show
 working rows and name their pending portions; the numeric-tooltip and spinner
-cards are planned. Addons, Select, custom password visibility icons, manual
-TextArea resizing, and independent internal-part styling remain pending.
+cards are planned. Addon rows, the Input page's Select combination row, custom
+password visibility icons, manual TextArea resizing, and independent internal-part
+styling remain pending. The Select component itself is available on its own gallery page.
 Styling previews demonstrate existing native root refinements and scoped tokens.
 Named retained entities keep each row independent while switching pages, theme,
 density, direction and motion. Standard count demos use UTF-16; custom emoji

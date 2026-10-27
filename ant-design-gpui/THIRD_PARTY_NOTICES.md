@@ -6,7 +6,8 @@ Adapted algorithms, translations and artwork retain the upstream MIT notices.
 ## Ant Design
 
 Theme derivation, token defaults, Button, Checkbox, Radio, Divider, Tag, Input, Tooltip,
-Popover and Popconfirm visual rules, rounded popup arrows, gallery examples and descriptions,
+Popover, Popconfirm, Select and Slider visual rules, Select's simple Empty illustration,
+rounded popup arrows, gallery examples and descriptions,
 and common translations are adapted from
 Ant Design 6.6.7, commit `f8f5595ab5e891fff6a2a06c5b3b98af643d008e`:
 https://github.com/ant-design/ant-design
@@ -59,6 +60,20 @@ dependencies. Exact versions and integrity hashes are in
 `fixtures/popup/placement-tools/package-lock.json`; complete upstream notices,
 including React, rc-component packages, esbuild and TypeScript, are preserved in
 `fixtures/popup/placement-tools/licenses/` with a hashed index.
+
+## Select and Slider behavior references
+
+Native Select search behavior follows `@rc-component/select` 1.10.1 (MIT).
+Its complete upstream notice is preserved in
+`fixtures/select/licenses/rc-component-select.txt`.
+
+Native Slider snapping, keyboard steps, disabled anchors and range interaction
+follow `@rc-component/slider` 1.1.1 (MIT). Its complete upstream notice is in
+`fixtures/slider/licenses/rc-component-slider.txt`. The independent numeric
+fixture in `fixtures/slider/model.json` executes the original numeric hook;
+its source and generator hashes are recorded in the fixture.
+
+These JavaScript packages are development references, not Rust runtime dependencies.
 
 ## Ant Design colors and fast-color
 
@@ -140,3 +155,10 @@ The shared collector also includes vcpkg and repository attribution records;
 this independent library does not link those Qt/vcpkg packages. Canonical
 fallback texts for dependency archives that omit licenses are available in
 `../snow-draw-engine-gpui/licenses/`.
+
+The Select/Slider audit on 2026-10-27 collected 486 notices for 256 external Rust
+packages and 38 installed vcpkg packages using the locked Windows x64 manifest
+and standalone-media selection. Its bundle is under
+`../build/ant-design-gpui/select-slider-license-audit/third-party/`. These components
+add no runtime dependency. The separately executed browser reference packages
+retain their notices under `fixtures/select/licenses/` and `fixtures/slider/licenses/`.

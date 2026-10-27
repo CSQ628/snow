@@ -30,6 +30,7 @@ struct Fixture {
 }
 
 mod input;
+mod select_slider;
 
 #[test]
 fn popup_gallery_pages_support_navigation_capture_selection_and_responsive_cards() {

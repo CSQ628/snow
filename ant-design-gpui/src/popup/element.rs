@@ -133,6 +133,15 @@ impl Element for PopupElement {
                     })
                     .child(content);
                 body.style().refine(&options.surface_style);
+                body = match options.width {
+                    super::PopupWidth::Content => body,
+                    super::PopupWidth::Trigger => body.w(bounds.size.width),
+                    super::PopupWidth::AtLeastTrigger => body.min_w(bounds.size.width),
+                    super::PopupWidth::TriggerMinimum(width) => {
+                        body.w(bounds.size.width.max(finite_nonnegative(width)))
+                    }
+                    super::PopupWidth::Fixed(width) => body.w(finite_nonnegative(width)),
+                };
                 if options.unique_group.is_some() {
                     // The shared background moves independently; new content
                     // retains its final layout and never re-registers old input.

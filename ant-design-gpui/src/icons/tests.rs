@@ -386,6 +386,45 @@ struct PaintFixture {
     colorful: bool,
 }
 
+struct InheritedColorFixture(gpui::Rgba);
+impl gpui::Render for InheritedColorFixture {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        gpui::div()
+            .text_color(self.0)
+            .child(icon(IconName::DownOutlined).inherit_color())
+            .child(icon(IconName::CloseOutlined).palette(IconPalette {
+                text: gpui::rgb(0x00ff00),
+                ..Default::default()
+            }))
+    }
+}
+
+#[test]
+fn inherited_icon_color_follows_native_text_style_without_changing_explicit_palettes() {
+    let mut cx = gpui::TestAppContext::single();
+    let window = cx.add_window(|_, _| InheritedColorFixture(gpui::rgb(0xff0000)));
+    for color in [gpui::rgb(0xff0000), gpui::rgb(0x0000ff)] {
+        window
+            .update(&mut cx, |view, window, cx| {
+                view.0 = color;
+                cx.notify();
+                window.refresh();
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let colors: Vec<_> = window
+                .rendered_scene()
+                .monochrome_sprites
+                .iter()
+                .map(|sprite| sprite.color.to_rgb())
+                .collect();
+            assert_eq!(colors, [color, gpui::rgb(0x00ff00)]);
+        })
+        .unwrap();
+    }
+}
+
 impl gpui::Render for PaintFixture {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         icon(if self.colorful {

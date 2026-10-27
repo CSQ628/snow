@@ -25,6 +25,8 @@ use super::{
     popup::{self, Kind, PopupPage},
     radio::{self, RadioPage},
     segmented::{self, SegmentedPage},
+    select::{self, SelectPage},
+    slider::{self, SliderPage},
     switch::{self, SwitchPage},
     tag::{self, TagPage},
 };
@@ -69,6 +71,8 @@ pub(super) struct Gallery {
     pub divider: Entity<DividerPage>,
     pub input: Entity<InputPage>,
     pub input_number: Entity<InputNumberPage>,
+    pub select: Entity<SelectPage>,
+    pub slider: Entity<SliderPage>,
     pub radio: Entity<RadioPage>,
     pub segmented: Entity<SegmentedPage>,
     pub switch: Entity<SwitchPage>,
@@ -82,6 +86,8 @@ pub(super) struct Gallery {
     divider_anchors: Vec<ScrollAnchor>,
     input_anchors: Vec<ScrollAnchor>,
     input_number_anchors: Vec<ScrollAnchor>,
+    select_anchors: Vec<ScrollAnchor>,
+    slider_anchors: Vec<ScrollAnchor>,
     radio_anchors: Vec<ScrollAnchor>,
     segmented_anchors: Vec<ScrollAnchor>,
     switch_anchors: Vec<ScrollAnchor>,
@@ -112,6 +118,14 @@ impl Gallery {
             .map(|_| ScrollAnchor::for_handle(scroll.clone()))
             .collect();
         let segmented_anchors: Vec<_> = segmented::DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
+        let select_anchors: Vec<_> = select::DEMOS
+            .iter()
+            .map(|_| ScrollAnchor::for_handle(scroll.clone()))
+            .collect();
+        let slider_anchors: Vec<_> = slider::DEMOS
             .iter()
             .map(|_| ScrollAnchor::for_handle(scroll.clone()))
             .collect();
@@ -156,6 +170,8 @@ impl Gallery {
                     cx,
                 )
             }),
+            select: cx.new(|cx| SelectPage::new(scope.clone(), select_anchors.clone(), window, cx)),
+            slider: cx.new(|cx| SliderPage::new(scope.clone(), slider_anchors.clone(), window, cx)),
             input_number: cx.new(|cx| {
                 InputNumberPage::new(
                     scope.clone(),
@@ -193,6 +209,8 @@ impl Gallery {
             divider_anchors,
             input_anchors,
             input_number_anchors,
+            select_anchors,
+            slider_anchors,
             radio_anchors,
             segmented_anchors,
             switch_anchors,
@@ -332,6 +350,8 @@ impl Gallery {
                         ComponentId::Switch => "Data Entry / Switch",
                         ComponentId::Input => "Data Entry / Input",
                         ComponentId::InputNumber => "Data Entry / InputNumber",
+                        ComponentId::Select => "Data Entry / Select",
+                        ComponentId::Slider => "Data Entry / Slider",
                         ComponentId::Tag => "Data Display / Tag",
                         ComponentId::Tooltip => "Data Display / Tooltip",
                         ComponentId::Popover => "Data Display / Popover",
@@ -435,6 +455,8 @@ impl Gallery {
                                 ComponentId::Switch => IconName::SwapOutlined,
                                 ComponentId::Input => IconName::EditOutlined,
                                 ComponentId::InputNumber => IconName::FieldNumberOutlined,
+                                ComponentId::Select => IconName::DownSquareOutlined,
+                                ComponentId::Slider => IconName::SlidersOutlined,
                                 ComponentId::Tag => IconName::TagsOutlined,
                                 _ => IconName::AppstoreOutlined,
                             })
@@ -512,6 +534,24 @@ impl Gallery {
                         .iter()
                         .zip(&self.input_anchors)
                         .filter(|_| self.selected == ComponentId::Input)
+                        .map(|(demo, anchor)| {
+                            (demo.id, demo.title, demo.coverage.planned(), anchor)
+                        }),
+                )
+                .chain(
+                    select::DEMOS
+                        .iter()
+                        .zip(&self.select_anchors)
+                        .filter(|_| self.selected == ComponentId::Select)
+                        .map(|(demo, anchor)| {
+                            (demo.id, demo.title, demo.coverage.planned(), anchor)
+                        }),
+                )
+                .chain(
+                    slider::DEMOS
+                        .iter()
+                        .zip(&self.slider_anchors)
+                        .filter(|_| self.selected == ComponentId::Slider)
                         .map(|(demo, anchor)| {
                             (demo.id, demo.title, demo.coverage.planned(), anchor)
                         }),
@@ -709,6 +749,8 @@ impl Gallery {
                                 ComponentId::Switch => "Open Ant Design Switch reference",
                                 ComponentId::Input => "Open Ant Design Input reference",
                                 ComponentId::InputNumber => "Open Ant Design InputNumber reference",
+                                ComponentId::Select => "Open Ant Design Select reference",
+                                ComponentId::Slider => "Open Ant Design Slider reference",
                                 ComponentId::Tag => "Open Ant Design Tag reference",
                                 ComponentId::Tooltip => "Open Ant Design Tooltip reference",
                                 ComponentId::Popover => "Open Ant Design Popover reference",
@@ -725,6 +767,8 @@ impl Gallery {
                                 ComponentId::InputNumber => {
                                     "https://ant.design/components/input-number"
                                 }
+                                ComponentId::Select => "https://ant.design/components/select",
+                                ComponentId::Slider => "https://ant.design/components/slider",
                                 ComponentId::Tag => "https://ant.design/components/tag",
                                 ComponentId::Tooltip => "https://ant.design/components/tooltip",
                                 ComponentId::Popover => "https://ant.design/components/popover",
@@ -767,6 +811,8 @@ impl Render for Gallery {
             ComponentId::Switch => switch::DEMOS.len(),
             ComponentId::Input => input::DEMOS.len(),
             ComponentId::InputNumber => input_number::DEMOS.len(),
+            ComponentId::Select => select::DEMOS.len(),
+            ComponentId::Slider => slider::DEMOS.len(),
             ComponentId::Tag => tag::DEMOS.len(),
             ComponentId::Tooltip => popup::TOOLTIP_DEMOS.len(),
             ComponentId::Popover => popup::POPOVER_DEMOS.len(),
@@ -775,6 +821,8 @@ impl Render for Gallery {
         let coverage = match self.selected {
             ComponentId::Input => input_examples::summary(input::DEMOS),
             ComponentId::InputNumber => input_examples::summary(input_number::DEMOS),
+            ComponentId::Select => input_examples::summary(select::DEMOS),
+            ComponentId::Slider => input_examples::summary(slider::DEMOS),
             _ => format!("{live} live examples"),
         };
         div()
@@ -872,6 +920,8 @@ impl Render for Gallery {
                                         }
                                         ComponentId::Input => self.input.clone().into_any_element(),
                                         ComponentId::InputNumber => self.input_number.clone().into_any_element(),
+                                        ComponentId::Select => self.select.clone().into_any_element(),
+                                        ComponentId::Slider => self.slider.clone().into_any_element(),
                                         ComponentId::Tag => {
                                             self.tag.clone().into_any_element()
                                         }
@@ -890,6 +940,8 @@ impl Render for Gallery {
                                             .text_size(px(12.))
                                             .text_color(tokens.color_text_tertiary)
                                             .child(match self.selected {
+                                                ComponentId::Select => "Type to search · Arrow keys to navigate · Enter to select · Escape to dismiss",
+                                                ComponentId::Slider => "Tab to navigate · Arrow keys to step · Home or End to reach bounds",
                                                 ComponentId::Button => {
                                                     "Tab to navigate · Enter or Space to activate"
                                                 }

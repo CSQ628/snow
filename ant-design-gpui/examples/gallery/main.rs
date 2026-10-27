@@ -13,7 +13,9 @@ mod input_number;
 mod popup;
 mod radio;
 mod segmented;
+mod select;
 mod shell;
+mod slider;
 mod switch;
 mod tag;
 
@@ -51,6 +53,8 @@ impl Options {
                             Some("input") => catalog::ComponentId::Input,
                             Some("input-number") => catalog::ComponentId::InputNumber,
                             Some("radio") => catalog::ComponentId::Radio,
+                            Some("select") => catalog::ComponentId::Select,
+                            Some("slider") => catalog::ComponentId::Slider,
                             Some("segmented") => catalog::ComponentId::Segmented,
                             Some("switch") => catalog::ComponentId::Switch,
                             Some("tag") => catalog::ComponentId::Tag,
@@ -59,7 +63,7 @@ impl Options {
                             Some("popconfirm") => catalog::ComponentId::Popconfirm,
 
                             _ => return Err(
-                                "--component requires button, divider, checkbox, input, input-number, radio, segmented, switch, tag, tooltip, popover, or popconfirm"
+                                "--component requires button, divider, checkbox, input, input-number, radio, select, slider, segmented, switch, tag, tooltip, popover, or popconfirm"
                                     .into(),
                             ),
                         };
@@ -102,7 +106,7 @@ impl Options {
 
 fn main() {
     let options = Options::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
-        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox|input|input-number|radio|segmented|switch|tag|tooltip|popover|popconfirm] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
+        eprintln!("{error}\nUsage: gallery [--component button|divider|checkbox|input|input-number|radio|select|slider|segmented|switch|tag|tooltip|popover|popconfirm] [--dark] [--compact] [--rtl] [--reduced-motion] [--window-size WIDTHxHEIGHT] [--capture <path.png>]");
         std::process::exit(2);
     });
     gpui_platform::application().run(move |cx: &mut App| {

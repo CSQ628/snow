@@ -843,6 +843,7 @@ pub struct Icon {
     reference: IconRef,
     options: IconRenderOptions,
     style: StyleRefinement,
+    inherit_color: bool,
 }
 
 pub fn icon(reference: impl Into<IconRef>) -> Icon {
@@ -850,10 +851,18 @@ pub fn icon(reference: impl Into<IconRef>) -> Icon {
         reference: reference.into(),
         options: IconRenderOptions::default(),
         style: StyleRefinement::default(),
+        inherit_color: false,
     }
 }
 
 impl Icon {
+    /// Resolve `currentColor` from the native text style at paint time. This
+    /// follows ancestor hover and semantic-slot colors without rebuilding SVGs.
+    #[must_use]
+    pub fn inherit_color(mut self) -> Self {
+        self.inherit_color = true;
+        self
+    }
     #[must_use]
     pub fn render_options(mut self, options: IconRenderOptions) -> Self {
         self.options = options;
@@ -892,11 +901,15 @@ impl RenderOnce for Icon {
         let mut element = canvas(
             |_, _, _| (),
             move |bounds, (), window, cx| {
+                let mut options = self.options;
+                if self.inherit_color {
+                    options.colors.text = window.text_style().color.to_rgb();
+                }
                 if cx.try_global::<IconRenderer>().is_none() {
                     cx.set_global(IconRenderer::default());
                 }
                 cx.update_global::<IconRenderer, _>(|renderer, cx| {
-                    let _ = renderer.paint(bounds, &self.reference, &self.options, window, cx);
+                    let _ = renderer.paint(bounds, &self.reference, &options, window, cx);
                 });
             },
         )

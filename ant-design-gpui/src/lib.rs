@@ -22,6 +22,14 @@ pub mod popup;
 pub mod radio;
 pub mod root;
 pub mod segmented;
+pub mod select;
+pub use select::{
+    Select, SelectEvent, SelectMode, SelectOption, SelectOptions, SelectSettings, SelectState,
+    SelectValue,
+};
+#[cfg(test)]
+mod select_slider_reference_tests;
+pub mod slider;
 pub mod switch;
 pub mod tag;
 pub mod theme;
@@ -44,6 +52,7 @@ pub use popup::{Popup, PopupHandle, PopupHost};
 pub use radio::{Radio, RadioChange, RadioGroup, RadioOption};
 pub use root::UiRoot;
 pub use segmented::{Segmented, SegmentedOption};
+pub use slider::{Slider, SliderChange, SliderEvent, SliderOptions, SliderState, SliderValue};
 pub use switch::{Switch, SwitchChange};
 pub use tag::{CheckableTag, CheckableTagGroup, Tag, TagChange, TagClose, TagOption};
 pub use tooltip::Tooltip;

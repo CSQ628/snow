@@ -36,6 +36,8 @@ pub(super) struct Consumer {
     pub(super) initial_focus: bool,
     destroy: bool,
     fresh: bool,
+    width: PopupWidth,
+    trigger_width: f32,
     trigger_disabled: bool,
     trigger_loading: bool,
     captures: Rc<RefCell<Vec<std::rc::Weak<()>>>>,
@@ -62,6 +64,7 @@ impl Render for Consumer {
             let capture = Rc::new(());
             self.captures.borrow_mut().push(Rc::downgrade(&capture));
             let mut popup = Popup::new("popup-test")
+                .width(self.width)
                 .destroy_on_hidden(self.destroy)
                 .fresh(self.fresh)
                 .scope(self.scope.clone())
@@ -76,7 +79,7 @@ impl Render for Consumer {
                         .scope(self.scope.clone())
                         .focus_handle(&self.trigger_focus)
                         .label("Open")
-                        .w(px(80.))
+                        .w(px(self.trigger_width))
                         .h(px(32.))
                         .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
                 )
@@ -139,6 +142,45 @@ pub(super) struct Fixture {
     consumer: Entity<Consumer>,
 }
 
+#[test]
+fn trigger_width_policy_resolves_and_resizes_in_the_same_layout_pass() {
+    let mut f = Fixture::new(|c| {
+        c.width = PopupWidth::Trigger;
+        c.trigger_width = 180.;
+    });
+    f.set_open(true);
+    let handle = f.handle();
+    assert_eq!(
+        f.cx.update(|cx| handle.layout(cx).unwrap().bounds.size.width),
+        px(180.)
+    );
+    f.edit(|c| c.trigger_width = 240.);
+    assert_eq!(
+        f.cx.update(|cx| handle.layout(cx).unwrap().bounds.size.width),
+        px(240.)
+    );
+    f.edit(|c| c.width = PopupWidth::Fixed(px(350.)));
+    assert_eq!(
+        f.cx.update(|cx| handle.layout(cx).unwrap().bounds.size.width),
+        px(350.)
+    );
+    f.edit(|c| c.width = PopupWidth::TriggerMinimum(px(200.)));
+    assert_eq!(
+        f.cx.update(|cx| handle.layout(cx).unwrap().bounds.size.width),
+        px(240.)
+    );
+    f.edit(|c| c.width = PopupWidth::TriggerMinimum(px(350.)));
+    assert_eq!(
+        f.cx.update(|cx| handle.layout(cx).unwrap().bounds.size.width),
+        px(350.)
+    );
+    f.edit(|c| {
+        c.width = PopupWidth::AtLeastTrigger;
+        c.trigger_width = 400.;
+    });
+    assert!(f.cx.update(|cx| handle.layout(cx).unwrap().bounds.size.width) >= px(400.));
+}
+
 impl Fixture {
     pub(super) fn new(edit: impl FnOnce(&mut Consumer)) -> Self {
         Self::with_cache(edit, false)
@@ -179,6 +221,8 @@ impl Fixture {
                     initial_focus: false,
                     destroy: false,
                     fresh: false,
+                    width: PopupWidth::Content,
+                    trigger_width: 80.,
                     trigger_disabled: false,
                     trigger_loading: false,
                     captures: Rc::default(),

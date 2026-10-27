@@ -229,7 +229,7 @@ impl ShadowMotion {
 }
 
 #[derive(Default)]
-pub(super) struct SurfaceMotion {
+pub(crate) struct SurfaceMotion {
     border: ColorMotion,
     background: ColorMotion,
     text: ColorMotion,

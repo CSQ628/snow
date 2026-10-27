@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::{
-    Button, Input, InputNumber, InputNumberState, InputState, SearchInput, TextArea, UiRoot,
+    Button, Input, InputNumber, InputNumberState, InputState, SearchInput, Select, SelectState,
+    TextArea, UiRoot,
+    select::{SelectOption, SelectOptions},
 };
 use gpui::{
     AppContext, Context, Entity, FocusHandle, Focusable, Hsla, IntoElement, KeyDownEvent,
@@ -19,6 +21,8 @@ struct View {
     scope: ConfigScope,
     inputs: [Entity<InputState>; 2],
     number: Entity<InputNumberState>,
+    select: Entity<SelectState<u32>>,
+    with_select: bool,
     button_focus: FocusHandle,
     size: Size,
     orientation: InputGroupOrientation,
@@ -70,7 +74,14 @@ impl Render for View {
             if self.first_enabled {
                 first = first.disabled(false);
             }
-            let group = if self.mixed {
+            let group = if self.with_select {
+                group.child(first).child(
+                    Select::new("select", &self.select)
+                        .flex_1()
+                        .min_w_0()
+                        .bg(color(1)),
+                )
+            } else if self.mixed {
                 group.child(first).child(
                     InputNumber::new("number", &self.number, cx)
                         .controls(false)
@@ -134,11 +145,20 @@ impl Fixture {
             let scope = ConfigScope::new_window(cx);
             let inputs = std::array::from_fn(|_| cx.new(|cx| InputState::new(window, cx)));
             let number = cx.new(|cx| InputNumberState::new(window, cx));
+            let select = cx.new(|cx| {
+                SelectState::new(
+                    SelectOptions::new([SelectOption::new("one", 1, "One")]).unwrap(),
+                    window,
+                    cx,
+                )
+            });
             let button_focus = crate::behavior::focus_handle(cx);
             let content = cx.new(|_| View {
                 scope: scope.clone(),
                 inputs,
                 number,
+                select,
+                with_select: false,
                 button_focus,
                 size: Size::Medium,
                 orientation: InputGroupOrientation::Horizontal,
@@ -352,6 +372,57 @@ fn fractional_scale_stretches_auto_height_inputs_to_join_button_edges() {
         near(quad.bounds.size.height.0, 32.);
         near(quad.bounds.top().0, q[2].bounds.top().0);
         near(quad.bounds.bottom().0, q[2].bounds.bottom().0);
+    }
+}
+
+#[test]
+fn select_joins_input_and_button_and_inherits_group_size_direction_and_disabled_state() {
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        for (size, height) in [(Size::Small, 24.), (Size::Medium, 32.), (Size::Large, 40.)] {
+            let mut f = Fixture::new();
+            f.configure(|view, cx| {
+                view.with_select = true;
+                view.size = size;
+                view.scope
+                    .update_patch(cx, |patch| patch.direction = Some(direction))
+                    .unwrap();
+            });
+            let quads = f.ordered();
+            assert_eq!(quads.len(), 3);
+            for quad in &quads {
+                near(quad.bounds.size.height.0, height);
+            }
+            let (first, last) = if direction == Direction::Ltr {
+                (quads[0], quads[2])
+            } else {
+                (quads[2], quads[0])
+            };
+            near(quads[1].corner_radii.top_left.0, 0.);
+            near(quads[1].corner_radii.top_right.0, 0.);
+            near(first.bounds.right().0 - quads[1].bounds.left().0, 1.);
+            near(quads[1].bounds.right().0 - last.bounds.left().0, 1.);
+            let select = f.view.read_with(&f.cx, |view, _| view.select.clone());
+            f.cx.update_window(f.window.into(), |_, window, cx| {
+                select.update(cx, |state, cx| state.focus(window, cx))
+            })
+            .unwrap();
+            f.draw();
+            f.cx.update_window(f.window.into(), |_, window, cx| {
+                window.dispatch_event(
+                    PlatformInput::KeyDown(KeyDownEvent {
+                        keystroke: Keystroke::parse("down").unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    }),
+                    cx,
+                );
+            })
+            .unwrap();
+            f.draw();
+            assert!(select.read_with(&f.cx, |state, _| state.is_open()));
+            f.configure(|view, _| view.disabled = Some(true));
+            assert!(!select.read_with(&f.cx, |state, _| state.is_open()));
+        }
     }
 }
 

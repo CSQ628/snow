@@ -55,6 +55,9 @@ common_messages! {
     decrease_value => DecreaseValue,
     verification_code => VerificationCode,
     code_character => CodeCharacter,
+    no_data => NoData,
+    clear_selection => ClearSelection,
+    remove_selection => RemoveSelection,
 }
 
 /// Popconfirm-owned messages, independent of application-supplied titles.
@@ -137,6 +140,9 @@ impl Locale {
                     decrease_value: "Decrease value".into(),
                     verification_code: "Verification code".into(),
                     code_character: "Character {index} of {length}".into(),
+                    no_data: "No data".into(),
+                    clear_selection: "Clear selection".into(),
+                    remove_selection: "Remove {label}".into(),
                 },
             })
         });
@@ -165,6 +171,9 @@ impl Locale {
                     decrease_value: "减少数值".into(),
                     verification_code: "验证码".into(),
                     code_character: "第 {index} 位，共 {length} 位".into(),
+                    no_data: "暂无数据".into(),
+                    clear_selection: "清空选择".into(),
+                    remove_selection: "移除 {label}".into(),
                 },
             })
         });
@@ -193,6 +202,9 @@ impl Locale {
                     decrease_value: "減少數值".into(),
                     verification_code: "驗證碼".into(),
                     code_character: "第 {index} 位，共 {length} 位".into(),
+                    no_data: "暫無數據".into(),
+                    clear_selection: "清空選擇".into(),
+                    remove_selection: "移除 {label}".into(),
                 },
             })
         });

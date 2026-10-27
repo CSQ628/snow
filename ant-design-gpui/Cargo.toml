@@ -63,6 +63,10 @@ harness = false
 name = "popup"
 harness = false
 
+[[bench]]
+name = "select_slider"
+harness = false
+
 [profile.dev]
 incremental = false
 

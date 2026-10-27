@@ -56,6 +56,11 @@ pub struct Input {
     pub(crate) numeric: bool,
     pub(crate) value_error: bool,
     pub(crate) centered: bool,
+    // Reuse the native editor in composite controls without a second control
+    // surface. Text layout, IME geometry, selection and editing stay shared.
+    pub(crate) embedded: bool,
+    /// Embedding controls may use a tighter editing line box than standalone Input.
+    pub(crate) embedded_line_height: Option<f64>,
     pub(crate) mask_glyph: SharedString,
     pub(crate) mask_style: Option<MaskStyle>,
     group: Option<super::InputGroupContext>,
@@ -113,6 +118,8 @@ impl Input {
             numeric: false,
             value_error: false,
             centered: false,
+            embedded: false,
+            embedded_line_height: None,
             mask_glyph: "•".into(),
             mask_style: None,
             group: None,
@@ -617,6 +624,19 @@ impl RenderOnce for Input {
         if self.value_error && !disabled {
             metrics.text = tokens.globals.color_error.to_hsla();
         }
+        if self.embedded {
+            if let Some(height) = self.embedded_line_height {
+                metrics.line_height = height;
+            }
+            metrics.padding_inline = 0.;
+            metrics.padding_block = 0.;
+            metrics.border_width = 0.;
+            metrics.radius = 0.;
+            metrics.background = gpui::transparent_black();
+            metrics.border = gpui::transparent_black();
+            metrics.keyboard_outline = false;
+            metrics.underline_only = false;
+        }
         let read_only = state.read_only;
         let text: SharedString = if state.value().is_empty() {
             self.placeholder.clone()
@@ -702,7 +722,7 @@ impl RenderOnce for Input {
         let shadow = mounted.update(cx, |mounted, cx| {
             let mut policy =
                 MotionPolicy::new(config.motion && tokens.globals.motion, cx.reduce_motion());
-            policy.enabled &= window.is_visible() && window.is_window_active();
+            policy.enabled &= !self.embedded && window.is_visible() && window.is_window_active();
             let now = cx
                 .background_executor()
                 .now()
@@ -768,7 +788,7 @@ impl RenderOnce for Input {
                 .border_b(px(metrics.border_width as f32))
                 .pt(px((metrics.padding_block + metrics.border_width) as f32));
         }
-        if !shadow.is_empty() {
+        if !self.embedded && !shadow.is_empty() {
             root = root.shadow(shadow);
         }
         if self.multiline && self.allow_clear {
@@ -802,6 +822,7 @@ impl RenderOnce for Input {
         );
         let target = self.state.clone();
         let mount = mounted.clone();
+        let embedded = self.embedded;
         root = root.on_mouse_down(MouseButton::Left, move |event, window, cx| {
             target.update(cx, |state, cx| {
                 if state.disabled {
@@ -819,7 +840,9 @@ impl RenderOnce for Input {
                     mounted.selecting = true;
                     mounted.drag_position = Some(event.position);
                 });
-                cx.stop_propagation();
+                if !embedded {
+                    cx.stop_propagation();
+                }
             });
         });
         let mount = mounted.clone();

@@ -23,6 +23,19 @@ pub use geometry::{PopupGeometry, PopupLayout, PopupPlacement};
 pub use host::PopupHost;
 pub use runtime::{Popup, PopupHandle, PopupSession};
 
+/// Size the popup from its anchor in the same layout pass. No measurement
+/// notification or second frame is required when the trigger resizes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum PopupWidth {
+    #[default]
+    Content,
+    Trigger,
+    AtLeastTrigger,
+    /// An explicit width, clamped to at least the trigger width in the same pass.
+    TriggerMinimum(gpui::Pixels),
+    Fixed(gpui::Pixels),
+}
+
 #[cfg(test)]
 mod component_tests;
 #[cfg(test)]

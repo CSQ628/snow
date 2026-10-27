@@ -15,7 +15,7 @@ use gpui::{
 
 use super::{
     PopupArrow, PopupConfig, PopupConfigPatch, PopupLayout, PopupOpenChange, PopupOpenReason,
-    PopupPlacement, PopupTriggers,
+    PopupPlacement, PopupTriggers, PopupWidth,
     element::PopupElement,
     host::{self, Host, UniqueGeometry},
     lifecycle::Lifecycle,
@@ -102,6 +102,7 @@ impl PopupHandle {
 
 #[derive(Clone)]
 pub(super) struct Options {
+    pub width: PopupWidth,
     pub placement: PopupPlacement,
     pub triggers: PopupTriggers,
     pub arrow: PopupArrow,
@@ -137,6 +138,7 @@ pub(super) struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            width: PopupWidth::Content,
             placement: PopupPlacement::Top,
             triggers: PopupTriggers::CLICK,
             arrow: PopupArrow::default(),
@@ -329,6 +331,10 @@ impl Popup {
     }
     pub fn surface_style(mut self, style: StyleRefinement) -> Self {
         self.options.surface_style = style;
+        self
+    }
+    pub fn width(mut self, width: PopupWidth) -> Self {
+        self.options.width = width;
         self
     }
     pub fn accessibility_role(mut self, role: Role) -> Self {
