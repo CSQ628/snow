@@ -1,0 +1,76 @@
+// Copyright (C) 2026 mg-chao
+// SPDX-License-Identifier: Apache-2.0
+
+#![doc = include_str!("../README.md")]
+
+pub mod behavior;
+pub mod button;
+pub mod checkbox;
+pub mod config;
+pub mod context_menu;
+pub mod divider;
+pub mod icons;
+pub mod input;
+pub mod input_number;
+pub use input_number::{
+    ExactDecimal, InputNumber, InputNumberEvent, InputNumberState, NumberOptions, NumericMode,
+    NumericValue,
+};
+pub mod locale;
+pub mod popconfirm;
+pub mod popover;
+pub mod popup;
+pub mod radio;
+pub mod root;
+pub mod scroll_area;
+pub mod segmented;
+pub mod select;
+pub use select::{
+    Select, SelectEvent, SelectMode, SelectOption, SelectOptions, SelectSettings, SelectState,
+    SelectValue,
+};
+#[cfg(test)]
+mod select_slider_reference_tests;
+pub mod slider;
+pub mod switch;
+pub mod tag;
+pub mod theme;
+pub mod tooltip;
+
+pub use button::Button;
+pub use checkbox::{Checkbox, CheckboxChange, CheckboxGroup, CheckboxOption};
+pub use config::{
+    ConfigPatch, ConfigScope, Direction, ResolvedConfig, Size, ValidationStatus, Variant,
+};
+pub use context_menu::{
+    ContextMenu, ContextMenuState, MenuActivation, MenuActivationSource, MenuCheck, MenuEntry,
+    MenuEvent, MenuItem, MenuItems, MenuItemsError,
+};
+pub use divider::Divider;
+pub use input::{
+    CountConfig, CountInfo, Input, InputChange, InputCommit, InputEvent, InputGroup,
+    InputGroupContext, InputGroupItem, InputGroupOrientation, InputSearch, InputState, OtpEvent,
+    OtpInput, OtpOptions, OtpState, PasswordInput, SearchInput, SearchSource, TextArea,
+};
+pub use popconfirm::Popconfirm;
+pub use popover::Popover;
+pub use popup::{Popup, PopupHandle, PopupHost};
+pub use radio::{Radio, RadioChange, RadioGroup, RadioOption};
+pub use root::UiRoot;
+pub use scroll_area::{
+    ScrollArea, ScrollAreaEvent, ScrollAreaState, ScrollAxis, ScrollbarVisibility,
+};
+pub use segmented::{Segmented, SegmentedOption};
+pub use slider::{Slider, SliderChange, SliderEvent, SliderOptions, SliderState, SliderValue};
+pub use switch::{Switch, SwitchChange};
+pub use tag::{CheckableTag, CheckableTagGroup, Tag, TagChange, TagClose, TagOption};
+pub use tooltip::Tooltip;
+
+/// Install application defaults and namespaced keyboard bindings once per GPUI app.
+///
+/// Existing application keymaps and assets are preserved. Native backends remain
+/// the responsibility of the application.
+pub fn init(cx: &mut gpui::App) {
+    config::initialize(cx);
+    behavior::initialize(cx);
+}
